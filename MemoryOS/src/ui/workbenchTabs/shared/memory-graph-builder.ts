@@ -295,16 +295,30 @@ function collectEntityCards(
     consolidation: MemoryTakeoverConsolidationResult | null,
     batchResults: MemoryTakeoverBatchResult[],
 ): MemoryTakeoverEntityCardCandidate[] {
-    const entityMap = new Map<string, MemoryTakeoverEntityCardCandidate>();
+    const compareKeyMap = new Map<string, MemoryTakeoverEntityCardCandidate>();
+    const fallbackNodeKeyMap = new Map<string, MemoryTakeoverEntityCardCandidate>();
+    const appendEntity = (entity: MemoryTakeoverEntityCardCandidate): void => {
+        const compareKey = String(entity.compareKey ?? '').trim();
+        if (compareKey) {
+            compareKeyMap.set(compareKey, mergeEntityCards(compareKeyMap.get(compareKey), entity));
+            return;
+        }
+        const nodeKey = resolveEntityNodeKey(entity);
+        fallbackNodeKeyMap.set(nodeKey, mergeEntityCards(fallbackNodeKeyMap.get(nodeKey), entity));
+    };
     for (const entity of consolidation?.entityCards ?? []) {
-        entityMap.set(resolveEntityNodeKey(entity), entity);
+        appendEntity(entity);
     }
     for (const batch of batchResults) {
         for (const entity of batch.entityCards ?? []) {
-            const nodeKey = resolveEntityNodeKey(entity);
-            entityMap.set(nodeKey, mergeEntityCards(entityMap.get(nodeKey), entity));
+            appendEntity(entity);
         }
     }
+    const entityMap = new Map<string, MemoryTakeoverEntityCardCandidate>();
+    [...compareKeyMap.values(), ...fallbackNodeKeyMap.values()].forEach((entity: MemoryTakeoverEntityCardCandidate): void => {
+        const nodeKey = resolveEntityNodeKey(entity);
+        entityMap.set(nodeKey, mergeEntityCards(entityMap.get(nodeKey), entity));
+    });
     return [...entityMap.values()];
 }
 
@@ -332,8 +346,13 @@ function collectTaskStates(
             summary: task.summary,
             description: task.description,
             goal: task.goal,
+            entityKey: task.entityKey,
             status: task.state,
             compareKey,
+            schemaVersion: task.schemaVersion,
+            canonicalName: task.canonicalName,
+            matchKeys: task.matchKeys,
+            legacyCompareKeys: task.legacyCompareKeys,
             bindings: task.bindings,
             reasonCodes: task.reasonCodes,
         });
@@ -402,6 +421,10 @@ function collectWorldStates(
     batchResults: MemoryTakeoverBatchResult[],
 ): MemoryTakeoverWorldStateChange[] {
     const stateMap = new Map<string, MemoryTakeoverWorldStateChange>();
+    for (const item of consolidation?.worldStateDetails ?? []) {
+        const nodeKey = resolveWorldStateNodeKey(item);
+        stateMap.set(nodeKey, mergeWorldStates(stateMap.get(nodeKey), item));
+    }
     for (const batch of batchResults) {
         for (const item of batch.worldStateChanges ?? []) {
             const nodeKey = resolveWorldStateNodeKey(item);
@@ -639,12 +662,7 @@ function upsertWorldStateNodes(
         upsertNode(nodeMap, {
             id: nodeKey,
             key: nodeKey,
-            label: normalizeMemoryCardTitle(worldState.key, {
-                mode: 'semantic',
-                context: labelContext,
-                typeHint: 'world_state',
-                fallbackRef: compareKey,
-            }),
+            label: buildWorldStateDisplayLabel(worldState, labelContext),
             type: 'world_state',
             summary: String(worldState.summary ?? '').trim() || `${worldState.key}：${worldState.value}`,
             semanticSummary: String(worldState.summary ?? '').trim() || `${worldState.key}：${worldState.value}`,
@@ -700,6 +718,28 @@ function resolveWorldStateNodeKey(worldState: MemoryTakeoverWorldStateChange): s
     }
     const canonicalName = String(worldState.canonicalName ?? worldState.key ?? '').trim();
     return `worldstate:${normalizeLookupKey(canonicalName || worldState.compareKey || worldState.key)}`;
+}
+
+/**
+ * 功能：构建世界状态节点的显示标题，避免与同名地点节点混淆。
+ * @param worldState 世界状态记录。
+ * @param labelContext 显示名上下文。
+ * @returns 带语义区分的标题。
+ */
+function buildWorldStateDisplayLabel(
+    worldState: MemoryTakeoverWorldStateChange,
+    labelContext: DisplayLabelResolverContext,
+): string {
+    const baseLabel = normalizeMemoryCardTitle(worldState.key, {
+        mode: 'semantic',
+        context: labelContext,
+        typeHint: 'world_state',
+        fallbackRef: String(worldState.compareKey ?? '').trim() || buildWorldStateCompareKey(String(worldState.key ?? '').trim()),
+    });
+    if (!baseLabel) {
+        return '未命名状态';
+    }
+    return /（状态）$/.test(baseLabel) ? baseLabel : `${baseLabel}（状态）`;
 }
 
 function registerEntityNodeRefs(

@@ -70,6 +70,9 @@ function tryResolveBucketByRule(
     if (bucket.domain === 'world' && bucket.conflictType === 'value_divergence') {
         return tryResolveWorldValueDivergence(bucket);
     }
+    if (bucket.domain === 'fact' && bucket.conflictType === 'value_divergence') {
+        return tryResolveFactValueDivergence(bucket);
+    }
     if (bucket.domain === 'entity' && bucket.conflictType === 'title_collision') {
         return tryResolveEntityTitleCollision(bucket);
     }
@@ -215,6 +218,49 @@ function tryResolveWorldValueDivergence(bucket: PipelineConflictBucketRecord): C
 }
 
 /**
+ * 功能：按规则裁决长期事实值冲突。
+ * @param bucket 冲突桶
+ * @returns 裁决补丁
+ */
+function tryResolveFactValueDivergence(bucket: PipelineConflictBucketRecord): ConflictResolutionPatch | null {
+    const records = bucket.records.map(toRecord);
+    const latestRecord = records[records.length - 1];
+    const latestKey = resolveRecordKey(latestRecord);
+    if (!latestKey) {
+        return null;
+    }
+    const baseFactKey = normalizeText(latestRecord.compareKey ?? `${latestRecord.type ?? ''}::${latestRecord.subject ?? ''}::${latestRecord.predicate ?? ''}`);
+    const allSameFactKey = records.every((record: Record<string, unknown>): boolean => {
+        return normalizeText(record.compareKey ?? `${record.type ?? ''}::${record.subject ?? ''}::${record.predicate ?? ''}`) === baseFactKey;
+    });
+    if (!allSameFactKey || !baseFactKey) {
+        return null;
+    }
+
+    return {
+        bucketId: bucket.bucketId,
+        domain: bucket.domain,
+        resolutions: [
+            {
+                action: 'merge',
+                primaryKey: latestKey,
+                secondaryKeys: records
+                    .slice(0, -1)
+                    .map(resolveRecordKey)
+                    .filter((key: string): boolean => Boolean(key) && key !== latestKey),
+                fieldOverrides: {},
+                selectedPrimaryKey: latestKey,
+                selectedSnapshot: buildSelectedSnapshot('fact', latestRecord),
+                selectionReason: 'fact_latest_complete',
+                appliedFieldNames: [],
+                resolverSource: 'rule_resolver',
+                reasonCodes: ['rule_same_compare_key_merge', 'rule_latest_more_complete'],
+            },
+        ],
+    };
+}
+
+/**
  * 功能：按规则裁决实体标题碰撞冲突。
  * @param bucket 冲突桶
  * @returns 裁决补丁
@@ -294,12 +340,14 @@ function normalizeText(value: unknown): string {
  * @returns 主键文本
  */
 function resolveRecordKey(record: Record<string, unknown>): string {
+    const factKey = `${normalizeText(record.type)}::${normalizeText(record.subject)}::${normalizeText(record.predicate)}`;
     return String(
         record.actorKey
         ?? record.compareKey
         ?? record.entityKey
         ?? record.task
         ?? record.key
+        ?? (factKey !== '::::' ? factKey : '')
         ?? `${normalizeText(record.sourceActorKey)}::${normalizeText(record.targetActorKey)}`,
     ).trim();
 }
@@ -358,6 +406,19 @@ function buildSelectedSnapshot(domain: string, primaryRecord: Record<string, unk
             'state',
             'status',
             'compareKey',
+            'bindings',
+        ]);
+    }
+    if (domain === 'fact') {
+        return pickRecordFields(primaryRecord, [
+            'type',
+            'subject',
+            'predicate',
+            'value',
+            'confidence',
+            'compareKey',
+            'canonicalName',
+            'summary',
             'bindings',
         ]);
     }

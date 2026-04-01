@@ -63,6 +63,7 @@ export function renderNarrativeReferenceText(
         .replace(/主角/g, userDisplayName)
         .replace(/用户(?!名)/g, userDisplayName)
         .replace(/\{\{\s*userDisplayName\s*\}\}/gi, userDisplayName)
+        .replace(/\{\{\s*user\s*\}\}/gi, userDisplayName)
         .replace(/\{\{\s*([a-zA-Z]+)\s*:\s*([^{}]+?)\s*\}\}/g, (_matched: string, type: string, rawValue: string): string => {
             const ref = `${String(type ?? '').trim().toLowerCase()}:${String(rawValue ?? '').trim()}`;
             const stripped = stripNarrativeReferencePrefix(ref);

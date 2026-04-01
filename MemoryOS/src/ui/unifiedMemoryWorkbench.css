@@ -189,6 +189,26 @@
   z-index: 2;
 }
 
+.stx-memory-workbench__checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.stx-memory-workbench__checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--mw-text);
+}
+
+.stx-memory-workbench__checkbox-row span {
+  line-height: 1.5;
+}
+
 .stx-memory-workbench__toolbar--wrap {
   min-width: 0;
   flex-wrap: wrap;
@@ -472,6 +492,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .stx-memory-workbench__info-row {
@@ -586,6 +607,148 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.stx-content-lab {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stx-content-lab__split {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.stx-content-lab__column {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.stx-content-lab__column--editor {
+  flex-basis: 420px;
+  min-width: 340px;
+}
+
+.stx-content-lab__column--preview {
+  flex-basis: 520px;
+  min-width: 360px;
+}
+
+.stx-content-lab__toolbar-scroll,
+.stx-content-lab__table-scroll,
+.stx-content-lab__metrics-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding-bottom: 4px;
+}
+
+.stx-content-lab__toolbar-line {
+  flex-wrap: nowrap;
+  width: max-content;
+  min-width: 100%;
+}
+
+.stx-content-lab__table {
+  width: max-content;
+  min-width: 100%;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.stx-content-lab__table td,
+.stx-content-lab__table th {
+  vertical-align: middle;
+}
+
+.stx-content-lab__table-cell {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  width: 100%;
+  min-width: 0;
+}
+
+.stx-content-lab__table-cell--toggle {
+  justify-content: center;
+}
+
+.stx-content-lab__table-input,
+.stx-content-lab__table-select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.stx-content-lab__table-text {
+  display: block;
+  width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.stx-content-lab__table-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.stx-content-lab__table-checkbox {
+  justify-content: center;
+  width: 100%;
+}
+
+.stx-content-lab__table-actions {
+  gap: 8px;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+}
+
+.stx-content-lab__metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 10px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.stx-content-lab__metrics-grid--blocks {
+  grid-template-columns: repeat(6, minmax(170px, 1fr));
+}
+
+.stx-content-lab__metric-card {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items:center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+
+.stx-content-lab__metric-label {
+  font-size: 11px;
+  color: var(--mw-muted);
+}
+
+.stx-content-lab__metric-value {
+  color: var(--mw-text);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .stx-vector-lab__hero {
@@ -942,8 +1105,80 @@
   cursor: pointer;
 }
 
-.stx-vector-lab__switch input {
-  accent-color: #22c55e;
+.stx-vector-lab__switch label {
+  cursor: pointer;
+}
+
+.stx-vector-lab__test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.stx-vector-lab__progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148,163,184,0.14);
+  background: rgba(15,23,42,0.56);
+}
+
+.stx-vector-lab__progress-card.is-running {
+  border-color: rgba(59,130,246,0.34);
+  box-shadow: inset 0 0 0 1px rgba(59,130,246,0.12);
+}
+
+.stx-vector-lab__progress-card.is-failed {
+  border-color: rgba(239,68,68,0.34);
+  box-shadow: inset 0 0 0 1px rgba(239,68,68,0.12);
+}
+
+.stx-vector-lab__progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stx-vector-lab__progress-head span {
+  font-size: 11px;
+  color: rgba(148,163,184,0.92);
+}
+
+.stx-vector-lab__progress-head strong {
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.stx-vector-lab__progress-message {
+  font-size: 12px;
+  line-height: 1.7;
+  color: rgba(226,232,240,0.92);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stx-vector-lab__progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(30,41,59,0.92);
+  overflow: hidden;
+}
+
+.stx-vector-lab__progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #22c55e);
+  transition: width 180ms ease;
 }
 
 .stx-vector-lab__result-grid {
@@ -1016,8 +1251,7 @@
 
 .stx-vector-lab__hero,
 .stx-vector-lab__filters,
-.stx-vector-lab__test-form,
-.stx-vector-lab__test-result {
+.stx-vector-lab__test-form {
   min-width: 0;
   min-height: 0;
   overflow: hidden;

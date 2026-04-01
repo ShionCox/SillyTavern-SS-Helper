@@ -3,6 +3,7 @@ import {
     loadMemoryTakeoverBatchResults,
     loadMemoryTakeoverPreview,
     readMemoryTakeoverPlan,
+    saveCandidateActorMentions,
     saveMemoryTakeoverBatchMeta,
     saveMemoryTakeoverBatchResult,
     saveMemoryTakeoverPreview,
@@ -18,14 +19,13 @@ import type {
 } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
 import { readMemoryOSSettings } from '../settings/store';
-import { MemoryScoringService } from '../services/memory-scoring-service';
 import { appendTakeoverDiagnostics } from './takeover-diagnostics';
 import { runTakeoverActiveSnapshot } from './takeover-active-snapshot';
 import { admitTakeoverBatchResult } from './takeover-batch-admission';
 import { runTakeoverBaseline } from './takeover-baseline';
-import { runTakeoverBatch } from './takeover-batch-runner';
+import { assembleTakeoverBatchPromptAssembly, runTakeoverBatch } from './takeover-batch-runner';
 import { runTakeoverConsolidation } from './takeover-consolidator';
-import { buildTakeoverBatches } from './takeover-planner';
+import { buildTakeoverBatches, validateTakeoverBatchCoverage } from './takeover-planner';
 import { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
 
 /**
@@ -38,6 +38,7 @@ export async function runTakeoverScheduler(input: {
     plan: MemoryTakeoverPlan;
     llm: MemoryLLMApi | null;
     pluginId: string;
+    skipInitialWait?: boolean;
     existingKnownEntities?: {
         actors: Array<{ actorKey: string; displayName: string }>;
         organizations: Array<{ entityKey: string; displayName: string }>;
@@ -51,7 +52,7 @@ export async function runTakeoverScheduler(input: {
 }): Promise<MemoryTakeoverProgressSnapshot> {
     const settings = readMemoryOSSettings();
     const requestIntervalMs = Math.max(0, Math.trunc(Number(settings.takeoverRequestIntervalSeconds) || 0)) * 1000;
-    const scoringService = settings.scoringServiceEnabled ? new MemoryScoringService() : null;
+    let shouldSkipNextWait: boolean = input.skipInitialWait === true;
     const sourceBundle = collectTakeoverSourceBundle();
     const batches = buildTakeoverBatches({
         takeoverId: input.plan.takeoverId,
@@ -59,6 +60,11 @@ export async function runTakeoverScheduler(input: {
         activeWindow: input.plan.activeWindow,
         batchSize: input.plan.batchSize,
     });
+    const coverage = validateTakeoverBatchCoverage(input.plan.range, batches);
+    if (!coverage.covered) {
+        const uncoveredText = coverage.uncoveredRanges.map((item: MemoryTakeoverPlan['range']): string => `${item.startFloor}-${item.endFloor}`).join('、');
+        throw new Error(`takeover_batch_range_uncovered:${uncoveredText}`);
+    }
     let plan: MemoryTakeoverPlan = {
         ...input.plan,
         status: 'running',
@@ -76,34 +82,58 @@ export async function runTakeoverScheduler(input: {
         detail: {
             totalFloors: sourceBundle.totalFloors,
             totalBatches: batches.length,
+            coverage: `${input.plan.range.startFloor}-${input.plan.range.endFloor}`,
         },
     });
 
-    const baseline: MemoryTakeoverBaseline = await runTakeoverBaseline({
+    const preview = await loadMemoryTakeoverPreview(input.chatKey);
+    const baseline: MemoryTakeoverBaseline = preview.baseline ?? await runTakeoverBaseline({
         llm: input.llm,
         pluginId: input.pluginId,
         sourceBundle,
     });
-    await saveMemoryTakeoverPreview(input.chatKey, 'baseline', baseline);
-
-    let activeSnapshot: MemoryTakeoverActiveSnapshot | null = null;
-    if (plan.useActiveSnapshot && plan.activeWindow) {
-        await waitTakeoverRequestInterval(input.chatKey, plan.takeoverId, requestIntervalMs, 'active_snapshot_wait');
-        const activeMessages = sliceTakeoverMessages(sourceBundle, plan.activeWindow);
-        activeSnapshot = await runTakeoverActiveSnapshot({
-            llm: input.llm,
-            pluginId: input.pluginId,
-            range: plan.activeWindow,
-            messages: activeMessages,
-        });
-        await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot);
+    if (!preview.baseline) {
+        await saveMemoryTakeoverPreview(input.chatKey, 'baseline', baseline);
     }
 
-    const completedBatchIds = new Set<string>();
-    const failedBatchIds = new Set<string>();
-    const isolatedBatchIds = new Set<string>();
+    let activeSnapshot: MemoryTakeoverActiveSnapshot | null = preview.activeSnapshot ?? null;
+    if (plan.useActiveSnapshot && plan.activeWindow) {
+        if (!activeSnapshot) {
+            shouldSkipNextWait = await waitTakeoverRequestInterval(
+                input.chatKey,
+                plan.takeoverId,
+                requestIntervalMs,
+                'active_snapshot_wait',
+                undefined,
+                shouldSkipNextWait,
+            );
+            const activeMessages = sliceTakeoverMessages(sourceBundle, plan.activeWindow);
+            const activeAssembly = await assembleTakeoverBatchPromptAssembly({
+                llm: input.llm,
+                pluginId: input.pluginId,
+                messages: activeMessages,
+            });
+            activeSnapshot = await runTakeoverActiveSnapshot({
+                llm: input.llm,
+                pluginId: input.pluginId,
+                range: plan.activeWindow,
+                messages: activeAssembly.extractionMessages,
+                hintContext: activeAssembly.channels.hintText || undefined,
+            });
+            await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot);
+        }
+    }
+
+    const completedBatchIds = new Set<string>(input.plan.completedBatchIds ?? []);
+    const failedBatchIds = new Set<string>(input.plan.failedBatchIds ?? []);
+    const isolatedBatchIds = new Set<string>(input.plan.isolatedBatchIds ?? []);
+    const requestedRetryBatchId = String(input.plan.requestedRetryBatchId ?? '').trim();
     const allBatchResults = await loadMemoryTakeoverBatchResults(input.chatKey);
     const batchResultMap = new Map(allBatchResults.map((item) => [item.batchId, item]));
+    for (const batchId of batchResultMap.keys()) {
+        completedBatchIds.add(batchId);
+        failedBatchIds.delete(batchId);
+    }
     const historyBatches = batches.filter((item: MemoryTakeoverBatch): boolean => item.category === 'history');
 
     for (const batch of batches) {
@@ -114,6 +144,13 @@ export async function runTakeoverScheduler(input: {
         if (latestPlan && latestPlan.status === 'failed') {
             return buildProgressSnapshot(input.chatKey, latestPlan);
         }
+        if (completedBatchIds.has(batch.batchId) || isolatedBatchIds.has(batch.batchId)) {
+            failedBatchIds.delete(batch.batchId);
+            continue;
+        }
+        if (requestedRetryBatchId && failedBatchIds.has(batch.batchId) && batch.batchId !== requestedRetryBatchId) {
+            continue;
+        }
 
         const runningBatch: MemoryTakeoverBatch = {
             ...batch,
@@ -123,20 +160,15 @@ export async function runTakeoverScheduler(input: {
         };
         await saveMemoryTakeoverBatchMeta(input.chatKey, runningBatch);
         try {
-            await waitTakeoverRequestInterval(input.chatKey, plan.takeoverId, requestIntervalMs, 'batch_wait', batch.batchId);
-            let messages = sliceTakeoverMessages(sourceBundle, batch.range);
-            if (scoringService && messages.length > 0) {
-                const scoringResult = scoringService.process({
-                    messages: messages.map((msg) => ({ role: msg.role, content: msg.content })),
-                    source: 'takeover_batch',
-                });
-                if (scoringResult.subBatches.length > 0) {
-                    messages = scoringResult.subBatches[0].messages.map((msg, idx) => ({
-                        ...messages[idx] ?? { role: msg.role ?? 'user', content: msg.content ?? '', name: '', turnIndex: 0, messageId: '' },
-                        content: msg.content ?? '',
-                    }));
-                }
-            }
+            shouldSkipNextWait = await waitTakeoverRequestInterval(
+                input.chatKey,
+                plan.takeoverId,
+                requestIntervalMs,
+                'batch_wait',
+                batch.batchId,
+                shouldSkipNextWait,
+            );
+            const messages = sliceTakeoverMessages(sourceBundle, batch.range);
             const previousBatchResults = Array.from(batchResultMap.values())
                 .filter((item) => item.sourceRange.endFloor < batch.range.startFloor)
                 .sort((left, right) => left.sourceRange.startFloor - right.sourceRange.startFloor);
@@ -178,6 +210,7 @@ export async function runTakeoverScheduler(input: {
                 failedBatchIds.delete(admission.result.batchId);
                 isolatedBatchIds.delete(admission.result.batchId);
                 await saveMemoryTakeoverBatchResult(input.chatKey, admission.result);
+                await saveCandidateActorMentions(input.chatKey, admission.result.candidateActors ?? []);
                 await saveMemoryTakeoverBatchMeta(input.chatKey, {
                     ...runningBatch,
                     status: 'completed',
@@ -220,6 +253,9 @@ export async function runTakeoverScheduler(input: {
                 completedBatchIds: Array.from(completedBatchIds),
                 failedBatchIds: Array.from(failedBatchIds),
                 isolatedBatchIds: Array.from(isolatedBatchIds),
+                requestedRetryBatchId: requestedRetryBatchId && admission.result.batchId === requestedRetryBatchId
+                    ? undefined
+                    : requestedRetryBatchId || undefined,
                 lastError: admission.accepted ? undefined : `admission_isolated:${admission.validationErrors.join('；')}`,
                 lastCheckpointAt: Date.now(),
                 updatedAt: Date.now(),
@@ -241,6 +277,7 @@ export async function runTakeoverScheduler(input: {
                 completedBatchIds: Array.from(completedBatchIds),
                 failedBatchIds: Array.from(failedBatchIds),
                 isolatedBatchIds: Array.from(isolatedBatchIds),
+                requestedRetryBatchId: requestedRetryBatchId || undefined,
                 lastError: errorMessage,
                 lastCheckpointAt: Date.now(),
                 updatedAt: Date.now(),
@@ -262,6 +299,21 @@ export async function runTakeoverScheduler(input: {
         }
     }
 
+    if (failedBatchIds.size > 0) {
+        plan = {
+            ...plan,
+            status: 'paused',
+            completedBatchIds: Array.from(completedBatchIds),
+            failedBatchIds: Array.from(failedBatchIds),
+            isolatedBatchIds: Array.from(isolatedBatchIds),
+            requestedRetryBatchId: undefined,
+            updatedAt: Date.now(),
+            pausedAt: Date.now(),
+        };
+        await writeMemoryTakeoverPlan(input.chatKey, plan);
+        return buildProgressSnapshot(input.chatKey, plan);
+    }
+
     const consolidation = await runTakeoverConsolidation({
         llm: input.llm,
         pluginId: input.pluginId,
@@ -278,6 +330,7 @@ export async function runTakeoverScheduler(input: {
         completedBatchIds: Array.from(completedBatchIds),
         failedBatchIds: Array.from(failedBatchIds),
         isolatedBatchIds: Array.from(isolatedBatchIds),
+        requestedRetryBatchId: undefined,
         lastCheckpointAt: Date.now(),
         completedAt: Date.now(),
         updatedAt: Date.now(),
@@ -319,9 +372,27 @@ async function waitTakeoverRequestInterval(
     intervalMs: number,
     stage: string,
     batchId?: string,
-): Promise<void> {
+    skipWait: boolean = false,
+): Promise<boolean> {
+    if (skipWait) {
+        await appendTakeoverDiagnostics({
+            chatKey,
+            takeoverId,
+            level: 'info',
+            stage,
+            message: batchId
+                ? `批次 ${batchId} 已跳过本次开始前等待，立即重试。`
+                : '已跳过本次请求前等待，立即重试。',
+            detail: {
+                batchId,
+                waitMs: intervalMs,
+                skipped: true,
+            },
+        });
+        return false;
+    }
     if (intervalMs <= 0) {
-        return;
+        return false;
     }
     await appendTakeoverDiagnostics({
         chatKey,
@@ -339,4 +410,5 @@ async function waitTakeoverRequestInterval(
     await new Promise<void>((resolve: () => void): void => {
         setTimeout((): void => resolve(), intervalMs);
     });
+    return false;
 }

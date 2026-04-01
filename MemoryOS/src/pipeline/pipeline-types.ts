@@ -16,7 +16,7 @@ export type PipelinePhase = 'extract' | 'reduce' | 'resolve' | 'apply';
 /**
  * 功能：定义流水线领域类型。
  */
-export type PipelineDomain = 'actor' | 'entity' | 'relationship' | 'task' | 'world' | 'digest';
+export type PipelineDomain = 'actor' | 'entity' | 'relationship' | 'task' | 'world' | 'fact' | 'digest';
 
 /**
  * 功能：定义流水线冲突状态。

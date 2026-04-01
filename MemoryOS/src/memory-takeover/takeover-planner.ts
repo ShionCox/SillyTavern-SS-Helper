@@ -167,3 +167,53 @@ export function buildTakeoverBatches(input: {
 
     return batches;
 }
+
+/**
+ * 功能：校验批次集合是否完整覆盖目标楼层范围。
+ * @param range 目标范围。
+ * @param batches 批次列表。
+ * @returns 校验结果。
+ */
+export function validateTakeoverBatchCoverage(
+    range: MemoryTakeoverRange,
+    batches: Array<{ range: MemoryTakeoverRange }>,
+): { covered: boolean; uncoveredRanges: MemoryTakeoverRange[] } {
+    const uncoveredRanges: MemoryTakeoverRange[] = [];
+    const sortedRanges = batches
+        .map((item: { range: MemoryTakeoverRange }): MemoryTakeoverRange => ({
+            startFloor: item.range.startFloor,
+            endFloor: item.range.endFloor,
+        }))
+        .sort((left: MemoryTakeoverRange, right: MemoryTakeoverRange): number => left.startFloor - right.startFloor);
+
+    let cursor = Math.max(1, Math.trunc(Number(range.startFloor) || 1));
+    const endFloor = Math.max(cursor, Math.trunc(Number(range.endFloor) || cursor));
+
+    for (const current of sortedRanges) {
+        if (current.endFloor < cursor) {
+            continue;
+        }
+        if (current.startFloor > cursor) {
+            uncoveredRanges.push({
+                startFloor: cursor,
+                endFloor: current.startFloor - 1,
+            });
+        }
+        cursor = Math.max(cursor, current.endFloor + 1);
+        if (cursor > endFloor) {
+            break;
+        }
+    }
+
+    if (cursor <= endFloor) {
+        uncoveredRanges.push({
+            startFloor: cursor,
+            endFloor,
+        });
+    }
+
+    return {
+        covered: uncoveredRanges.length === 0,
+        uncoveredRanges,
+    };
+}

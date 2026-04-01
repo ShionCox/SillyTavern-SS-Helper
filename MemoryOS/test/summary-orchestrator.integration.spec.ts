@@ -203,4 +203,114 @@ describe('runSummaryOrchestrator integration', () => {
         expect(applySnapshot).not.toHaveBeenCalled();
         expect(historyActions).toContain('summary_failed');
     });
+
+    it('第二阶段批次失败后，再次执行会直接从失败批次继续而不重跑 planner', async () => {
+        const { runSummaryOrchestrator } = await loadSummaryOrchestrator('林远');
+        const applySnapshot = vi.fn(async (input): Promise<SummarySnapshot> => {
+            return {
+                summaryId: 'summary-2',
+                chatKey: 'chat',
+                title: input.title || '',
+                content: input.content,
+                actorKeys: input.actorKeys,
+                entryUpserts: input.entryUpserts || [],
+                refreshBindings: input.refreshBindings || [],
+                createdAt: 1,
+                updatedAt: 1,
+            };
+        });
+        const llmRunTask = vi
+            .fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    should_update: true,
+                    focus_types: ['relationship'],
+                    entities: ['char_erin', 'user'],
+                    topics: ['关系变化'],
+                    reasons: ['需要更新关系状态'],
+                },
+            })
+            .mockResolvedValueOnce({
+                ok: false,
+                reasonCode: 'summary_llm_failed',
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    schemaVersion: '1.0.0',
+                    window: { fromTurn: 1, toTurn: 2 },
+                    actions: [
+                        {
+                            action: 'UPDATE',
+                            targetKind: 'relationship',
+                            candidateId: 'cand_1',
+                            payload: {
+                                title: '你与艾琳的关系',
+                                summary: '艾琳依旧对你保持观察。',
+                                trust: 0.42,
+                                fields: {
+                                    relationTag: '陌生人',
+                                },
+                            },
+                            reasonCodes: ['resume_success'],
+                        },
+                    ],
+                },
+            });
+
+        const firstResult = await runSummaryOrchestrator({
+            dependencies: {
+                listEntries: async () => [buildEntry()],
+                listRoleMemories: async () => [buildRoleMemory()],
+                listSummarySnapshots: async () => [],
+                getWorldProfileBinding: async () => buildBinding(),
+                appendMutationHistory: async () => undefined,
+                getEntry: async () => buildEntry(),
+                applySummarySnapshot: applySnapshot,
+                deleteEntry: async () => {},
+            },
+            llm: {
+                registerConsumer: () => {},
+                runTask: llmRunTask,
+            },
+            pluginId: 'MemoryOS',
+            chatKey: 'chat',
+            messages: [
+                { role: 'user', content: '林远看向艾琳。' },
+                { role: 'assistant', content: '艾琳没有放下戒心。' },
+            ],
+            enableEmbedding: false,
+            retrievalRulePack: 'hybrid',
+        });
+        const secondResult = await runSummaryOrchestrator({
+            dependencies: {
+                listEntries: async () => [buildEntry()],
+                listRoleMemories: async () => [buildRoleMemory()],
+                listSummarySnapshots: async () => [],
+                getWorldProfileBinding: async () => buildBinding(),
+                appendMutationHistory: async () => undefined,
+                getEntry: async () => buildEntry(),
+                applySummarySnapshot: applySnapshot,
+                deleteEntry: async () => {},
+            },
+            llm: {
+                registerConsumer: () => {},
+                runTask: llmRunTask,
+            },
+            pluginId: 'MemoryOS',
+            chatKey: 'chat',
+            messages: [
+                { role: 'user', content: '林远看向艾琳。' },
+                { role: 'assistant', content: '艾琳没有放下戒心。' },
+            ],
+            enableEmbedding: false,
+            retrievalRulePack: 'hybrid',
+        });
+
+        expect(firstResult.snapshot).toBeNull();
+        expect(secondResult.snapshot?.summaryId).toBe('summary-2');
+        expect(llmRunTask).toHaveBeenCalledTimes(3);
+        expect(applySnapshot).toHaveBeenCalledTimes(1);
+    });
 });

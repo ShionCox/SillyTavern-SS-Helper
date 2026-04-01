@@ -8,6 +8,7 @@ import {
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 
 /**
  * 功能：构建向量实验室视图。
@@ -75,6 +76,7 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
         ? vectorSnapshot.indexRecords.some((item) => item.vectorDocId === selectedDoc.vectorDocId)
         : false;
     const testResult = state.vectorTestResult;
+    const testProgress = state.vectorTestProgress;
 
     return `
         <section class="stx-memory-workbench__view"${state.currentView !== 'vectors' ? ' hidden' : ''}>
@@ -226,6 +228,20 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                     </div>
                                 </div>
                                 <div class="stx-vector-lab__test-result">
+                                    ${state.vectorTestRunning || testProgress ? `
+                                        <div class="stx-vector-lab__progress-card${state.vectorTestRunning ? ' is-running' : ''}${testProgress?.stage === 'failed' ? ' is-failed' : ''}">
+                                            <div class="stx-vector-lab__progress-head">
+                                                <span>当前步骤</span>
+                                                <strong>${escapeHtml(testProgress?.title || (state.vectorTestRunning ? '测试进行中' : '最近步骤'))}</strong>
+                                            </div>
+                                            <div class="stx-vector-lab__progress-message">${escapeHtml(testProgress?.message || '正在执行召回测试。')}</div>
+                                            ${typeof testProgress?.progress === 'number' ? `
+                                                <div class="stx-vector-lab__progress-bar">
+                                                    <span style="width:${escapeAttr(String(Math.max(0, Math.min(100, Math.round(testProgress.progress * 100)))))}%"></span>
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    ` : ''}
                                     ${testResult ? `
                                         <div class="stx-vector-lab__result-block">
                                             <div class="stx-vector-lab__detail-title">链路诊断</div>
@@ -329,10 +345,16 @@ function buildTagBlock(label: string, values: string[]): string {
  */
 function buildSwitch(id: string, label: string, checked: boolean): string {
     return `
-        <label class="stx-vector-lab__switch" for="${escapeAttr(id)}">
-            <input id="${escapeAttr(id)}" type="checkbox"${checked ? ' checked' : ''}>
-            <span>${escapeHtml(label)}</span>
-        </label>
+        <div class="stx-vector-lab__switch">
+            ${buildSharedBoxCheckbox({
+                id,
+                appearance: 'check',
+                inputAttributes: {
+                    checked,
+                },
+            })}
+            <label for="${escapeAttr(id)}">${escapeHtml(label)}</label>
+        </div>
     `;
 }
 

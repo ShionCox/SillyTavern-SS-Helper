@@ -4,6 +4,20 @@ import type { RetrievalCandidate, RetrievalRulePackMode } from './types';
 import type { ActorProfileForDictionary, RecentContextBias } from './context-router';
 
 /**
+ * 功能：定义检索执行过程中的进度提示。
+ */
+export interface MemoryRetrievalProgress {
+    /** 阶段键 */
+    stage: string;
+    /** 阶段标题 */
+    title: string;
+    /** 阶段说明 */
+    message: string;
+    /** 可选进度值 */
+    progress?: number;
+}
+
+/**
  * 功能：统一检索输入。
  * 说明：Prompt、Takeover、Workbench 等场景都通过这个结构进入统一召回主链。
  */
@@ -24,6 +38,8 @@ export interface MemoryRetrievalInput {
     recentContext?: RecentContextBias;
     /** 最大字符预算 */
     maxChars?: number;
+    /** 进度回调 */
+    onProgress?: (progress: MemoryRetrievalProgress) => void;
 }
 
 /**

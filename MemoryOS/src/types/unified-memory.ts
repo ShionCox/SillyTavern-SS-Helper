@@ -97,6 +97,21 @@ export interface ActorMemoryProfile {
     updatedAt: number;
 }
 
+export type ActorDisplayNameSource =
+    | 'manual'
+    | 'bootstrap'
+    | 'takeover_actor_card'
+    | 'takeover_relation'
+    | 'summary_hint'
+    | 'fallback';
+
+export interface EnsureActorProfileInput {
+    actorKey: string;
+    displayName?: string;
+    memoryStat?: number;
+    displayNameSource?: ActorDisplayNameSource;
+}
+
 export interface RoleEntryMemory {
     roleMemoryId: string;
     chatKey: string;

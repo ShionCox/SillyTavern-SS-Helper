@@ -70,10 +70,12 @@ interface GraphCameraState {
 interface GraphNodeSprite {
     node: WorkbenchMemoryGraphNode;
     root: Container;
+    content: Container;
     pulseRing: Graphics;
     glow: Graphics;
     body: Graphics;
     label: Text;
+    depthFactor: number;
 }
 
 interface GraphEdgeSprite {
@@ -100,6 +102,7 @@ interface GraphBackgroundStar {
     root: Container;
     baseX: number;
     baseY: number;
+    depthFactor: number;
     phase: number;
     speed: number;
     driftRadius: number;
@@ -117,6 +120,8 @@ const FLOW_TAIL_LENGTH = 0.26;
 const MEMORY_GRAPH_NODE_SCALE = 0.78;
 const COSMIC_PARALLAX_STRENGTH = 0.032;
 const COSMIC_SCALE_STRENGTH = 0.05;
+const EDGE_HOVER_DELAY_MS = 720;
+const NODE_DEPTH_SCALE_STRENGTH = 0.08;
 
 gsap.registerPlugin(PixiPlugin);
 PixiPlugin.registerPIXI(PIXI);
@@ -218,6 +223,7 @@ export async function createMemoryGraphPixiRenderer(
     let selectedNodeId = options.selectedNodeId ?? '';
     let selectedEdgeId = options.selectedEdgeId ?? '';
     let hoveredEdgeId = '';
+    let hoveredEdgeCandidateId = '';
     let dragState: DragState | null = null;
     let suppressTapUntil = 0;
     let destroyed = false;
@@ -227,12 +233,20 @@ export async function createMemoryGraphPixiRenderer(
     let pulsingSprite: GraphNodeSprite | null = null;
     let cosmicStars: GraphBackgroundStar[] = [];
     let cosmicTime = 0;
+    const cosmicDepthState = {
+        offsetX: 0,
+        offsetY: 0,
+        zoom: 1,
+    };
+    const hoverVisualState = { intensity: 0 };
     const selectionRippleState = {
         progress: 0,
         intensity: 0,
         x: 0,
         y: 0,
     };
+    let hoverArmTimer: number | null = null;
+    let hoverVisualTween: gsap.core.Tween | null = null;
     let selectionRippleTween: gsap.core.Timeline | null = null;
 
     stage.eventMode = 'static';
@@ -255,7 +269,7 @@ export async function createMemoryGraphPixiRenderer(
 
     redrawBackground(background, app.screen.width, app.screen.height);
     cosmicStars = buildCosmicBackground(cosmicLayer, app.screen.width, app.screen.height);
-    applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+    applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
     syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
 
     filtered.edges.forEach((edge: WorkbenchMemoryGraphEdge): void => {
@@ -279,6 +293,7 @@ export async function createMemoryGraphPixiRenderer(
 
     filtered.nodes.forEach((node: WorkbenchMemoryGraphNode): void => {
         const root = new Container();
+        const content = new Container();
         const pulseRing = new Graphics();
         const glow = new Graphics();
         const body = new Graphics();
@@ -299,10 +314,11 @@ export async function createMemoryGraphPixiRenderer(
         pulseRing.blendMode = 'add';
         glow.blendMode = 'add';
         root.addChild(pulseRing);
-        root.addChild(glow);
-        root.addChild(body);
+        root.addChild(content);
+        content.addChild(glow);
+        content.addChild(body);
         label.position.set(0, getRenderedNodeRadius(node) + 8);
-        root.addChild(label);
+        content.addChild(label);
         root.on('pointerdown', (event: FederatedPointerEvent): void => {
             event.stopPropagation();
         });
@@ -311,7 +327,7 @@ export async function createMemoryGraphPixiRenderer(
             if (performance.now() < suppressTapUntil) {
                 return;
             }
-            hoveredEdgeId = '';
+            resetHoveredEdge(true);
             selectedNodeId = node.id;
             selectedEdgeId = '';
             focusNode(node.id, true);
@@ -324,6 +340,7 @@ export async function createMemoryGraphPixiRenderer(
                 selectedNodeId,
                 selectedEdgeId,
                 hoveredEdgeId,
+                hoverVisualState.intensity,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -333,8 +350,191 @@ export async function createMemoryGraphPixiRenderer(
             options.onSelectNode?.(node.id);
         });
         nodeLayer.addChild(root);
-        nodeSprites.set(node.id, { node, root, pulseRing, glow, body, label });
+        nodeSprites.set(node.id, {
+            node,
+            root,
+            content,
+            pulseRing,
+            glow,
+            body,
+            label,
+            depthFactor: resolveNodeDepthFactor(node),
+        });
     });
+
+    /**
+     * 功能：清理线条悬浮延迟计时器。
+     * @returns 无返回值。
+     */
+    function clearHoverArmTimer(): void {
+        if (hoverArmTimer !== null) {
+            window.clearTimeout(hoverArmTimer);
+            hoverArmTimer = null;
+        }
+    }
+
+    /**
+     * 功能：同步当前悬浮高亮的渲染状态。
+     * @param isDragging 是否正在拖拽。
+     * @returns 无返回值。
+     */
+    function syncHoverVisuals(isDragging: boolean = false): void {
+        syncSelectionVisuals(
+            nodeSprites,
+            edgeSprites,
+            edgeGraphics,
+            flowGraphics,
+            connectedNodeIds,
+            selectedNodeId,
+            selectedEdgeId,
+            hoveredEdgeId,
+            hoverVisualState.intensity,
+            camera.scale,
+            isDragging,
+            flowState.progress,
+            flowState.intensity,
+        );
+    }
+
+    /**
+     * 功能：以缓动方式切换线条悬浮高亮状态。
+     * @param nextEdgeId 下一条需要高亮的边。
+     * @returns 无返回值。
+     */
+    function animateHoveredEdge(nextEdgeId: string): void {
+        hoverVisualTween?.kill();
+        if (!hoveredEdgeId) {
+            hoveredEdgeId = nextEdgeId;
+            if (!hoveredEdgeId) {
+                background.cursor = 'grab';
+                container.style.cursor = 'grab';
+                hoverVisualState.intensity = 0;
+                syncHoverVisuals(false);
+                return;
+            }
+            hoverVisualState.intensity = 0;
+            syncHoverVisuals(false);
+            hoverVisualTween = gsap.to(hoverVisualState, {
+                intensity: 1,
+                duration: 0.36,
+                ease: 'sine.out',
+                onUpdate: (): void => {
+                    syncHoverVisuals(false);
+                },
+            });
+            return;
+        }
+        if (!nextEdgeId) {
+            hoverVisualTween = gsap.to(hoverVisualState, {
+                intensity: 0,
+                duration: 0.26,
+                ease: 'sine.inOut',
+                onUpdate: (): void => {
+                    syncHoverVisuals(false);
+                },
+                onComplete: (): void => {
+                    hoveredEdgeId = '';
+                    background.cursor = 'grab';
+                    container.style.cursor = 'grab';
+                    syncHoverVisuals(false);
+                },
+            });
+            return;
+        }
+        if (nextEdgeId === hoveredEdgeId) {
+            background.cursor = 'pointer';
+            container.style.cursor = 'pointer';
+            hoverVisualTween = gsap.to(hoverVisualState, {
+                intensity: 1,
+                duration: 0.22,
+                ease: 'sine.out',
+                onUpdate: (): void => {
+                    syncHoverVisuals(false);
+                },
+            });
+            return;
+        }
+        hoverVisualTween = gsap.to(hoverVisualState, {
+            intensity: 0,
+            duration: 0.18,
+            ease: 'sine.inOut',
+            onUpdate: (): void => {
+                syncHoverVisuals(false);
+            },
+            onComplete: (): void => {
+                hoveredEdgeId = nextEdgeId;
+                background.cursor = 'pointer';
+                container.style.cursor = 'pointer';
+                hoverVisualState.intensity = 0;
+                syncHoverVisuals(false);
+                hoverVisualTween = gsap.to(hoverVisualState, {
+                    intensity: 1,
+                    duration: 0.34,
+                    ease: 'sine.out',
+                    onUpdate: (): void => {
+                        syncHoverVisuals(false);
+                    },
+                });
+            },
+        });
+    }
+
+    /**
+     * 功能：重置线条悬浮状态。
+     * @param immediate 是否立刻清空。
+     * @returns 无返回值。
+     */
+    function resetHoveredEdge(immediate: boolean): void {
+        clearHoverArmTimer();
+        hoveredEdgeCandidateId = '';
+        if (immediate) {
+            hoverVisualTween?.kill();
+            hoveredEdgeId = '';
+            hoverVisualState.intensity = 0;
+            syncHoverVisuals(false);
+            return;
+        }
+        animateHoveredEdge('');
+    }
+
+    /**
+     * 功能：为线条悬浮高亮安排延迟触发。
+     * @param nextEdgeId 当前指针命中的边。
+     * @returns 无返回值。
+     */
+    function scheduleHoveredEdge(nextEdgeId: string): void {
+        if (selectedNodeId || selectedEdgeId) {
+            return;
+        }
+        if (nextEdgeId === hoveredEdgeCandidateId) {
+            return;
+        }
+        clearHoverArmTimer();
+        hoveredEdgeCandidateId = nextEdgeId;
+        if (!nextEdgeId) {
+            background.cursor = 'grab';
+            container.style.cursor = 'grab';
+            resetHoveredEdge(false);
+            return;
+        }
+        background.cursor = 'crosshair';
+        container.style.cursor = 'crosshair';
+        if (hoveredEdgeId && hoveredEdgeId !== nextEdgeId) {
+            animateHoveredEdge('');
+        }
+        hoverArmTimer = window.setTimeout((): void => {
+            hoverArmTimer = null;
+            if (destroyed || selectedNodeId || selectedEdgeId) {
+                return;
+            }
+            if (hoveredEdgeCandidateId !== nextEdgeId) {
+                return;
+            }
+            background.cursor = 'pointer';
+            container.style.cursor = 'pointer';
+            animateHoveredEdge(nextEdgeId);
+        }, EDGE_HOVER_DELAY_MS);
+    }
 
     /**
      * 功能：处理画布拖拽开始。
@@ -347,7 +547,7 @@ export async function createMemoryGraphPixiRenderer(
         }
         cameraTween?.kill();
         cameraTween = null;
-        hoveredEdgeId = '';
+        resetHoveredEdge(true);
         dragState = {
             pointerId: event.pointerId,
             startX: event.global.x,
@@ -367,6 +567,7 @@ export async function createMemoryGraphPixiRenderer(
             selectedNodeId,
             selectedEdgeId,
             hoveredEdgeId,
+            hoverVisualState.intensity,
             camera.scale,
             true,
             flowState.progress,
@@ -389,27 +590,7 @@ export async function createMemoryGraphPixiRenderer(
             const edgeHit = !selectedNodeId && !selectedEdgeId
                 ? findClosestEdge(edgeSprites, worldPoint.x, worldPoint.y, camera.scale)
                 : null;
-            const nextHoveredEdgeId = edgeHit?.edge.id ?? '';
-            if (nextHoveredEdgeId === hoveredEdgeId) {
-                return;
-            }
-            hoveredEdgeId = nextHoveredEdgeId;
-            background.cursor = hoveredEdgeId ? 'pointer' : 'grab';
-            container.style.cursor = hoveredEdgeId ? 'pointer' : 'grab';
-            syncSelectionVisuals(
-                nodeSprites,
-                edgeSprites,
-                edgeGraphics,
-                flowGraphics,
-                connectedNodeIds,
-                selectedNodeId,
-                selectedEdgeId,
-                hoveredEdgeId,
-                camera.scale,
-                false,
-                flowState.progress,
-                flowState.intensity,
-            );
+            scheduleHoveredEdge(edgeHit?.edge.id ?? '');
             return;
         }
         const deltaX = event.global.x - dragState.startX;
@@ -419,7 +600,8 @@ export async function createMemoryGraphPixiRenderer(
         }
         camera.translateX = dragState.originX + deltaX;
         camera.translateY = dragState.originY + deltaY;
-        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+        syncNodeDepth(nodeSprites, camera.scale);
         syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, true);
     }
@@ -456,7 +638,7 @@ export async function createMemoryGraphPixiRenderer(
         const worldPoint = world.toLocal(event.global);
         const edgeHit = findClosestEdge(edgeSprites, worldPoint.x, worldPoint.y, camera.scale);
         if (edgeHit) {
-            hoveredEdgeId = '';
+            resetHoveredEdge(true);
             selectedNodeId = '';
             selectedEdgeId = edgeHit.edge.id;
             syncSelectionVisuals(
@@ -468,6 +650,7 @@ export async function createMemoryGraphPixiRenderer(
                 selectedNodeId,
                 selectedEdgeId,
                 hoveredEdgeId,
+                hoverVisualState.intensity,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -477,7 +660,7 @@ export async function createMemoryGraphPixiRenderer(
             options.onSelectEdge?.(edgeHit.edge.id);
             return;
         }
-        hoveredEdgeId = '';
+        resetHoveredEdge(true);
         selectedNodeId = '';
         selectedEdgeId = '';
         syncSelectionVisuals(
@@ -489,6 +672,7 @@ export async function createMemoryGraphPixiRenderer(
             selectedNodeId,
             selectedEdgeId,
             hoveredEdgeId,
+            hoverVisualState.intensity,
             camera.scale,
             false,
             flowState.progress,
@@ -517,7 +701,8 @@ export async function createMemoryGraphPixiRenderer(
         camera.translateX = mouseX - (mouseX - camera.translateX) * zoomFactor;
         camera.translateY = mouseY - (mouseY - camera.translateY) * zoomFactor;
         camera.scale = clamp(camera.scale * zoomFactor, 0.18, 5);
-        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+        syncNodeDepth(nodeSprites, camera.scale);
         syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, false);
     }
@@ -540,7 +725,8 @@ export async function createMemoryGraphPixiRenderer(
         if (!animate) {
             camera.translateX = targetX;
             camera.translateY = targetY;
-            applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height);
+            applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+            syncNodeDepth(nodeSprites, camera.scale);
             syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
             return;
         }
@@ -554,7 +740,8 @@ export async function createMemoryGraphPixiRenderer(
             },
             onUpdate: (): void => {
                 syncCameraStateFromWorld(world, camera);
-                syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height);
+                syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+                syncNodeDepth(nodeSprites, camera.scale);
                 syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
                 syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, false);
             },
@@ -575,7 +762,8 @@ export async function createMemoryGraphPixiRenderer(
     const resizeObserver = new ResizeObserver((): void => {
         redrawBackground(background, app.screen.width, app.screen.height);
         cosmicStars = buildCosmicBackground(cosmicLayer, app.screen.width, app.screen.height);
-        syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height);
+        syncCosmicParallax(cosmicLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+        syncNodeDepth(nodeSprites, camera.scale);
         syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
         app.stage.hitArea = app.screen;
     });
@@ -587,10 +775,19 @@ export async function createMemoryGraphPixiRenderer(
      */
     const handleCosmicTick = (): void => {
         cosmicTime += app.ticker.deltaMS * 0.001;
-        animateCosmicBackground(cosmicStars, cosmicTime);
+        animateCosmicBackground(cosmicStars, cosmicDepthState, cosmicTime);
         drawSelectionRipple(rippleLayer, selectionRippleState, cosmicTime);
         if (!selectedNodeId && !selectedEdgeId && hoveredEdgeId) {
-            redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, (cosmicTime * 0.72) % 1, 0.78);
+            redrawFlowLayer(
+                flowGraphics,
+                edgeSprites,
+                selectedNodeId,
+                selectedEdgeId,
+                hoveredEdgeId,
+                hoverVisualState.intensity,
+                (cosmicTime * 0.72) % 1,
+                0.78,
+            );
         }
     };
     app.ticker.add(handleCosmicTick);
@@ -598,6 +795,7 @@ export async function createMemoryGraphPixiRenderer(
     if (!persistedCameraState && selectedNodeId) {
         focusNode(selectedNodeId);
     }
+    syncNodeDepth(nodeSprites, camera.scale);
     syncSelectionVisuals(
         nodeSprites,
         edgeSprites,
@@ -607,6 +805,7 @@ export async function createMemoryGraphPixiRenderer(
         selectedNodeId,
         selectedEdgeId,
         hoveredEdgeId,
+        hoverVisualState.intensity,
         camera.scale,
         false,
         flowState.progress,
@@ -699,13 +898,13 @@ export async function createMemoryGraphPixiRenderer(
         });
         flowState.progress = 0;
         flowState.intensity = 1;
-        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
+        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
         flowTween = gsap.timeline({ repeat: -1 });
         flowTween.set(flowState, {
             progress: 0,
             intensity: 1,
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -713,7 +912,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 1.28,
             ease: 'none',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -721,7 +920,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 0.18,
             ease: 'power1.out',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowState.progress, flowState.intensity);
+                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
             },
         });
         flowTween.to(flowState, {
@@ -742,6 +941,7 @@ export async function createMemoryGraphPixiRenderer(
             return;
         }
         destroyed = true;
+        clearHoverArmTimer();
         resizeObserver.disconnect();
         app.ticker.remove(handleCosmicTick);
         app.canvas.removeEventListener('wheel', handleWheel);
@@ -753,6 +953,7 @@ export async function createMemoryGraphPixiRenderer(
         cameraTween?.kill();
         flowTween?.kill();
         pulseTween?.kill();
+        hoverVisualTween?.kill();
         selectionRippleTween?.kill();
         app.destroy({ removeView: true }, {
             children: true,
@@ -767,7 +968,7 @@ export async function createMemoryGraphPixiRenderer(
     return {
         destroy,
         setSelectedNode(nodeId?: string, setOptions?: { focus?: boolean }): void {
-            hoveredEdgeId = '';
+            resetHoveredEdge(true);
             selectedNodeId = nodeId ?? '';
             selectedEdgeId = '';
             if (setOptions?.focus && selectedNodeId) {
@@ -782,6 +983,7 @@ export async function createMemoryGraphPixiRenderer(
                 selectedNodeId,
                 selectedEdgeId,
                 hoveredEdgeId,
+                hoverVisualState.intensity,
                 camera.scale,
                 false,
                 flowState.progress,
@@ -838,10 +1040,11 @@ function applyCamera(
     camera: GraphCameraState,
     width: number,
     height: number,
+    cosmicDepthState: { offsetX: number; offsetY: number; zoom: number },
 ): void {
     world.position.set(camera.translateX, camera.translateY);
     world.scale.set(camera.scale);
-    syncCosmicParallax(cosmicLayer, camera, width, height);
+    syncCosmicParallax(cosmicLayer, camera, width, height, cosmicDepthState);
     rippleLayer.position.set(0, 0);
     persistedCameraState = { ...camera };
 }
@@ -866,13 +1069,36 @@ function syncCameraStateFromWorld(world: Container, camera: GraphCameraState): v
  * @param height 当前高度。
  * @returns 无返回值。
  */
-function syncCosmicParallax(cosmicLayer: Container, camera: GraphCameraState, width: number, height: number): void {
+function syncCosmicParallax(
+    cosmicLayer: Container,
+    camera: GraphCameraState,
+    width: number,
+    height: number,
+    cosmicDepthState: { offsetX: number; offsetY: number; zoom: number },
+): void {
     const offsetX = (camera.translateX - (width * 0.5)) * -COSMIC_PARALLAX_STRENGTH;
     const offsetY = (camera.translateY - (height * 0.5)) * -COSMIC_PARALLAX_STRENGTH;
     const scale = 1 + ((camera.scale - 1) * COSMIC_SCALE_STRENGTH);
+    cosmicDepthState.offsetX = offsetX;
+    cosmicDepthState.offsetY = offsetY;
+    cosmicDepthState.zoom = scale;
     cosmicLayer.pivot.set(width * 0.5, height * 0.5);
     cosmicLayer.position.set((width * 0.5) + offsetX, (height * 0.5) + offsetY);
     cosmicLayer.scale.set(scale, scale);
+}
+
+/**
+ * 功能：根据相机缩放同步节点自身的轻微纵深缩放。
+ * @param nodeSprites 节点精灵映射。
+ * @param cameraScale 当前相机缩放。
+ * @returns 无返回值。
+ */
+function syncNodeDepth(nodeSprites: Map<string, GraphNodeSprite>, cameraScale: number): void {
+    const zoomDelta = cameraScale - 1;
+    nodeSprites.forEach((sprite: GraphNodeSprite): void => {
+        const depthScale = 1 + (zoomDelta * sprite.depthFactor * NODE_DEPTH_SCALE_STRENGTH);
+        sprite.content.scale.set(depthScale, depthScale);
+    });
 }
 
 /**
@@ -905,6 +1131,7 @@ function syncSelectionVisuals(
     selectedNodeId: string,
     selectedEdgeId: string,
     hoveredEdgeId: string,
+    hoveredEdgeIntensity: number,
     scale: number,
     isDragging: boolean,
     flowProgress: number,
@@ -938,11 +1165,11 @@ function syncSelectionVisuals(
         const isHighlighted = !isSelected && isConnected;
         const dimmed = (Boolean(selectedNodeId) || Boolean(selectedEdgeId) || Boolean(hoveredEdgeId)) && !isSelected && !isConnected;
         const showLabel = !isDragging && (scale >= 0.62 || isSelected || isConnected);
-        drawNodeSprite(sprite, isSelected, isHighlighted, dimmed, showLabel);
+        drawNodeSprite(sprite, isSelected, isHighlighted, dimmed, showLabel, hoveredEdgeIntensity);
     });
 
-    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId);
-    redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, flowProgress, flowIntensity);
+    redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoveredEdgeIntensity);
+    redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoveredEdgeIntensity, flowProgress, flowIntensity);
 }
 
 /**
@@ -981,6 +1208,7 @@ function redrawEdgeLayer(
     selectedNodeId: string,
     selectedEdgeId: string,
     hoveredEdgeId: string,
+    hoveredEdgeIntensity: number,
 ): void {
     edgeGraphics.clear();
     edgeSprites.forEach((sprite: GraphEdgeSprite): void => {
@@ -991,7 +1219,7 @@ function redrawEdgeLayer(
             : active
                 ? Math.max(0.64, sprite.baseAlpha + 0.42)
                 : hovered
-                    ? Math.max(0.54, sprite.baseAlpha + 0.34)
+                    ? Math.max(0.24, sprite.baseAlpha + (0.34 * hoveredEdgeIntensity))
                     : 0.04;
         const width = !selectedNodeId && !selectedEdgeId && !hoveredEdgeId
             ? 1.6
@@ -1000,7 +1228,7 @@ function redrawEdgeLayer(
                 : active
                     ? 2.6
                     : hovered
-                        ? 2.8
+                        ? 1.8 + (1 * hoveredEdgeIntensity)
                         : 1.8;
         drawGradientEdge(
             edgeGraphics,
@@ -1029,12 +1257,13 @@ function redrawFlowLayer(
     selectedNodeId: string,
     selectedEdgeId: string,
     hoveredEdgeId: string,
+    hoveredEdgeIntensity: number,
     progress: number,
     intensity: number,
 ): void {
     flowGraphics.clear();
     const hasSelectedNode = Boolean(selectedNodeId) && intensity > 0.001;
-    const hasHoveredEdge = !selectedNodeId && !selectedEdgeId && Boolean(hoveredEdgeId);
+    const hasHoveredEdge = !selectedNodeId && !selectedEdgeId && Boolean(hoveredEdgeId) && hoveredEdgeIntensity > 0.01;
     if (!hasSelectedNode && !hasHoveredEdge) {
         return;
     }
@@ -1071,7 +1300,7 @@ function redrawFlowLayer(
             sprite.sourceColor,
             sprite.targetColor,
             progress,
-            0.78,
+            0.42 + (0.36 * hoveredEdgeIntensity),
             0.18,
             FLOW_SEGMENT_COUNT + 3,
         );
@@ -1091,12 +1320,14 @@ function drawNodeSprite(
     isHighlighted: boolean,
     dimmed: boolean,
     showLabel: boolean,
+    hoveredEdgeIntensity: number,
 ): void {
     const radius = getRenderedNodeRadius(sprite.node);
     const color = toPixiColor(getMemoryGraphNodeColor(sprite.node.type));
-    const fillAlpha = isSelected ? 0.4 : isHighlighted ? 0.28 : 0.16;
-    const glowAlpha = isSelected ? 0.66 : isHighlighted ? 0.34 : 0.12;
-    const borderWidth = isSelected ? 3 : isHighlighted ? 2 : 1.2;
+    const hoverBoost = isHighlighted ? hoveredEdgeIntensity : 0;
+    const fillAlpha = isSelected ? 0.4 : isHighlighted ? (0.16 + (0.12 * hoverBoost)) : 0.16;
+    const glowAlpha = isSelected ? 0.66 : isHighlighted ? (0.12 + (0.22 * hoverBoost)) : 0.12;
+    const borderWidth = isSelected ? 3 : isHighlighted ? (1.2 + (0.8 * hoverBoost)) : 1.2;
     const labelColor = isSelected
         ? 0xffffff
         : isHighlighted
@@ -1129,7 +1360,7 @@ function drawNodeSprite(
     if (sprite.node.type === 'actor') {
         if (isSelected || isHighlighted) {
             sprite.glow.poly([0, -radius - 16, radius + 16, 0, 0, radius + 16, -radius - 16, 0], true)
-                .fill({ color: 0xffffff, alpha: isSelected ? 0.18 : 0.08 });
+                .fill({ color: 0xffffff, alpha: isSelected ? 0.18 : (0.04 + (0.04 * hoverBoost)) });
         }
         sprite.glow.poly([0, -radius - 8, radius + 8, 0, 0, radius + 8, -radius - 8, 0], true)
             .fill({ color, alpha: glowAlpha });
@@ -1138,7 +1369,7 @@ function drawNodeSprite(
             .stroke({ color, alpha: 0.96, width: borderWidth });
         if (isSelected || isHighlighted) {
             sprite.body.poly([0, -radius - 3, radius + 3, 0, 0, radius + 3, -radius - 3, 0], true)
-                .stroke({ color: 0xffffff, alpha: isSelected ? 0.92 : 0.5, width: isSelected ? 1.6 : 1.1 });
+                .stroke({ color: 0xffffff, alpha: isSelected ? 0.92 : (0.2 + (0.3 * hoverBoost)), width: isSelected ? 1.6 : (0.8 + (0.3 * hoverBoost)) });
         }
         sprite.body.circle(0, 0, Math.max(6, radius * 0.42))
             .fill({ color: 0xffffff, alpha: isSelected ? 1 : 0.9 });
@@ -1146,7 +1377,7 @@ function drawNodeSprite(
     }
 
     if (isSelected || isHighlighted) {
-        sprite.glow.circle(0, 0, radius + 14).fill({ color: 0xffffff, alpha: isSelected ? 0.16 : 0.08 });
+        sprite.glow.circle(0, 0, radius + 14).fill({ color: 0xffffff, alpha: isSelected ? 0.16 : (0.04 + (0.04 * hoverBoost)) });
     }
     sprite.glow.circle(0, 0, radius + 8).fill({ color, alpha: glowAlpha });
     sprite.body.circle(0, 0, radius)
@@ -1154,7 +1385,7 @@ function drawNodeSprite(
         .stroke({ color, alpha: 0.96, width: borderWidth });
     if (isSelected || isHighlighted) {
         sprite.body.circle(0, 0, radius + 2.8)
-            .stroke({ color: 0xffffff, alpha: isSelected ? 0.94 : 0.5, width: isSelected ? 1.8 : 1.1 });
+            .stroke({ color: 0xffffff, alpha: isSelected ? 0.94 : (0.2 + (0.3 * hoverBoost)), width: isSelected ? 1.8 : (0.8 + (0.3 * hoverBoost)) });
     }
     sprite.body.circle(0, 0, Math.max(4, radius * 0.32))
         .fill({ color: isSelected ? 0xffffff : color, alpha: isSelected ? 1 : 0.96 });
@@ -1459,6 +1690,9 @@ function buildCosmicBackground(
         const core = new Graphics();
         const alongBand = starSeed() > 0.28;
         const brightStar = starSeed() > 0.82;
+        const depthFactor = alongBand
+            ? 0.6 + (starSeed() * 0.9)
+            : 0.25 + (starSeed() * 1.25);
         const radius = brightStar
             ? 1.2 + (starSeed() * 1.9)
             : 0.45 + (starSeed() * (alongBand ? 1.4 : 1.75));
@@ -1495,6 +1729,7 @@ function buildCosmicBackground(
             root,
             baseX,
             baseY,
+            depthFactor,
             phase: starSeed() * Math.PI * 2,
             speed: brightStar
                 ? 0.16 + (starSeed() * 1.2)
@@ -1516,7 +1751,11 @@ function buildCosmicBackground(
  * @param time 累积时间。
  * @returns 无返回值。
  */
-function animateCosmicBackground(stars: GraphBackgroundStar[], time: number): void {
+function animateCosmicBackground(
+    stars: GraphBackgroundStar[],
+    cosmicDepthState: { offsetX: number; offsetY: number; zoom: number },
+    time: number,
+): void {
     stars.forEach((star: GraphBackgroundStar): void => {
         const twinkle = (Math.sin((time * star.speed) + star.phase) + 1) * 0.5;
         const shimmer = (Math.sin((time * ((star.speed * 1.85) + 0.16)) + (star.phase * 1.7)) + 1) * 0.5;
@@ -1524,11 +1763,15 @@ function animateCosmicBackground(stars: GraphBackgroundStar[], time: number): vo
         const alphaRatio = Math.min(1, (twinkle * 0.55) + (shimmer * 0.3) + (sparkle * 0.15));
         const driftAngle = (time * star.driftSpeed) + star.phase;
         const scale = star.minScale + ((star.maxScale - star.minScale) * alphaRatio);
+        const depthDrift = 0.55 + (star.depthFactor * 0.7);
+        const depthOffsetX = cosmicDepthState.offsetX * star.depthFactor * 0.38;
+        const depthOffsetY = cosmicDepthState.offsetY * star.depthFactor * 0.38;
+        const depthZoom = 1 + ((cosmicDepthState.zoom - 1) * star.depthFactor * 0.5);
         star.root.alpha = star.minAlpha + ((star.maxAlpha - star.minAlpha) * alphaRatio);
-        star.root.scale.set(scale, scale);
+        star.root.scale.set(scale * depthZoom, scale * depthZoom);
         star.root.position.set(
-            star.baseX + (Math.cos(driftAngle) * star.driftRadius),
-            star.baseY + (Math.sin(driftAngle * 1.12) * star.driftRadius * 0.72),
+            star.baseX + depthOffsetX + (Math.cos(driftAngle) * star.driftRadius * depthDrift),
+            star.baseY + depthOffsetY + (Math.sin(driftAngle * 1.12) * star.driftRadius * 0.72 * depthDrift),
         );
     });
 }
@@ -1589,6 +1832,22 @@ function drawSelectionRipple(
         const radius = 0.9 + ((index % 3) * 0.4);
         rippleLayer.circle(x, y, radius).fill({ color: index % 4 === 0 ? 0xf8fafc : 0x93c5fd, alpha: sparkleAlpha });
     }
+}
+
+/**
+ * 功能：为节点计算轻微纵深系数，缩放时提供一点前后层次感。
+ * @param node 图节点。
+ * @returns 节点纵深系数。
+ */
+function resolveNodeDepthFactor(node: WorkbenchMemoryGraphNode): number {
+    const importance = Math.max(0, Math.min(1, Number(node.importance) || 0));
+    const memoryRatio = Math.max(0, Math.min(1, (Number(node.memoryPercent) || 0) / 100));
+    const typeBoost = node.type === 'actor'
+        ? 0.16
+        : node.type === 'event' || node.type === 'task'
+            ? 0.12
+            : 0.04;
+    return 0.45 + (importance * 0.3) + (memoryRatio * 0.15) + typeBoost;
 }
 
 /**

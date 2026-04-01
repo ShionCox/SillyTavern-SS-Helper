@@ -13,13 +13,14 @@ import type {
     MemoryTakeoverPreviewEstimate,
     WorldProfileBinding,
 } from '../../types';
+import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 import { listRelationTagPresets } from '../../constants/relationTags';
 import type { MemoryGraphMode } from './shared/memoryGraphTypes';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../../types/vector-document';
 import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'content-lab';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family' | 'romance';
 
@@ -124,6 +125,16 @@ export interface WorkbenchVectorTestResult {
     items: RetrievalResultItem[];
 }
 
+/**
+ * 功能：定义向量召回测试的当前进度提示。
+ */
+export interface WorkbenchVectorTestProgress {
+    stage: string;
+    title: string;
+    message: string;
+    progress?: number;
+}
+
 export interface WorkbenchState {
     currentView: WorkbenchView;
     currentActorTab: ActorSubView;
@@ -171,6 +182,23 @@ export interface WorkbenchState {
     vectorLoading: boolean;
     vectorTestRunning: boolean;
     vectorTestResult: WorkbenchVectorTestResult | null;
+    vectorTestProgress: WorkbenchVectorTestProgress | null;
+    contentLabStartFloor: string;
+    contentLabEndFloor: string;
+    contentLabSelectedFloor: string;
+    contentLabPreviewLoading: boolean;
+    contentLabRawText: string;
+    contentLabBlocks: import('../../memory-takeover/content-block-classifier').ClassifiedContentBlock[];
+    contentLabPrimaryPreview: string;
+    contentLabHintPreview: string;
+    contentLabExcludedPreview: string;
+    contentLabUnknownTagDefaultKind: string;
+    contentLabUnknownTagAllowHint: boolean;
+    contentLabEnableRuleClassifier: boolean;
+    contentLabEnableMetaKeywordDetection: boolean;
+    contentLabEnableToolArtifactDetection: boolean;
+    contentLabEnableAIClassifier: boolean;
+    contentLabEditingRuleIndex: number;
 }
 
 export interface WorkbenchSnapshot {
@@ -188,6 +216,11 @@ export interface WorkbenchSnapshot {
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
     takeoverProgress: MemoryTakeoverProgressSnapshot | null;
     vectorSnapshot: WorkbenchVectorSnapshot;
+    contentLabSnapshot: {
+        tagRegistry: import('../../config/content-tag-registry').ContentBlockPolicy[];
+        availableFloors: Array<{ floor: number; role: string; charCount: number }>;
+        previewFloor?: import('../../memory-takeover/content-block-pipeline').RawFloorRecord;
+    };
 }
 
 /**
@@ -421,7 +454,19 @@ export function buildDynamicFieldMarkup(
             return `
                 <div class="stx-memory-workbench__field-stack">
                     <label>${escapeHtml(field.label)}</label>
-                    <input class="stx-memory-workbench__input" style="width:auto;margin-top:4px;" type="checkbox" data-entry-field-key="${escapeAttr(field.key)}" data-entry-field-path="${escapeAttr(fieldPath)}" data-entry-field-kind="${escapeAttr(field.kind)}"${fieldValue === true ? ' checked' : ''}>
+                    <div class="stx-memory-workbench__checkbox-row" style="margin-top:4px;">
+                        ${buildSharedBoxCheckbox({
+                            id: `stx-memory-entry-bool-${escapeAttr(field.key)}`,
+                            appearance: 'check',
+                            inputAttributes: {
+                                'data-entry-field-key': field.key,
+                                'data-entry-field-path': fieldPath,
+                                'data-entry-field-kind': field.kind,
+                                checked: fieldValue === true,
+                            },
+                        })}
+                        <label for="stx-memory-entry-bool-${escapeAttr(field.key)}">${escapeHtml(field.placeholder ?? '启用')}</label>
+                    </div>
                 </div>
             `;
         }

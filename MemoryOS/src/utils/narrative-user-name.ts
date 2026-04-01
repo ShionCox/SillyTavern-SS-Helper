@@ -52,7 +52,9 @@ export function normalizeUserNarrativeText(text: string, userDisplayName: string
         .replace(/当前用户/g, displayName)
         .replace(/该用户/g, displayName)
         .replace(/主角/g, displayName)
-        .replace(/用户(?!名)/g, displayName);
+        .replace(/用户(?!名)/g, displayName)
+        .replace(/\{\{\s*userDisplayName\s*\}\}/gi, displayName)
+        .replace(/\{\{\s*user\s*\}\}/gi, displayName);
     return renderNarrativeReferenceText(normalized, buildNarrativeReferenceRendererContext(displayName));
 }
 

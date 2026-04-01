@@ -3,6 +3,7 @@ import type {
     MemoryTakeoverBatchResult,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverRelationshipCard,
+    MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
 } from '../types';
@@ -154,6 +155,40 @@ export function reduceTakeoverRelationships(batchResults: MemoryTakeoverBatchRes
 }
 
 /**
+ * 功能：归约长期稳定事实（主链核心 — 本地归约层）。
+ * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
+ * @param batchResults 批次结果。
+ * @returns 归约结果。
+ */
+export function reduceTakeoverFacts(batchResults: MemoryTakeoverBatchResult[]): DomainReduceResult<MemoryTakeoverStableFact> {
+    const factMap = new Map<string, MemoryTakeoverStableFact[]>();
+    for (const record of batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts ?? [])) {
+        const factKey = String(record.compareKey ?? '').trim() || buildStableFactKey(record);
+        if (!factKey) {
+            continue;
+        }
+        const current = factMap.get(factKey) ?? [];
+        current.push(record);
+        factMap.set(factKey, current);
+    }
+    const canonicalRecords: MemoryTakeoverStableFact[] = [];
+    const unresolvedConflicts: PipelineConflictRecord[] = [];
+    for (const [factKey, records] of factMap) {
+        canonicalRecords.push(mergeStableFacts(records));
+        const values = new Set(records.map((item: MemoryTakeoverStableFact): string => String(item.value ?? '').trim()).filter(Boolean));
+        if (values.size > 1) {
+            unresolvedConflicts.push({
+                bucketId: `fact/value_divergence/${sanitizeBucketKey(factKey)}`,
+                domain: 'fact',
+                conflictType: 'value_divergence',
+                records,
+            });
+        }
+    }
+    return createReduceResult(batchResults.length, canonicalRecords, unresolvedConflicts);
+}
+
+/**
  * 功能：归约任务状态（主链核心 — 本地归约层）。
  * 本函数在最终 LLM 裁决前执行，归约结果直接参与最终输出构建。
  * @param batchResults 批次结果。
@@ -166,19 +201,24 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
     summary?: string;
     description?: string;
     goal?: string;
+    entityKey?: string;
     compareKey?: string;
+    schemaVersion?: string;
+    canonicalName?: string;
+    matchKeys?: string[];
+    legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverTaskTransition['bindings'];
     reasonCodes?: string[];
 }> {
     const taskMap = new Map<string, MemoryTakeoverTaskTransition[]>();
     for (const record of batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions ?? [])) {
-        const task = String(record.task ?? '').trim();
-        if (!task) {
+        const compareKey = String(record.compareKey ?? '').trim();
+        if (!compareKey) {
             continue;
         }
-        const current = taskMap.get(task) ?? [];
+        const current = taskMap.get(compareKey) ?? [];
         current.push(record);
-        taskMap.set(task, current);
+        taskMap.set(compareKey, current);
     }
     const canonicalRecords: Array<{
         task: string;
@@ -187,13 +227,19 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
         summary?: string;
         description?: string;
         goal?: string;
+        entityKey?: string;
         compareKey?: string;
+        schemaVersion?: string;
+        canonicalName?: string;
+        matchKeys?: string[];
+        legacyCompareKeys?: string[];
         bindings?: MemoryTakeoverTaskTransition['bindings'];
         reasonCodes?: string[];
     }> = [];
     const unresolvedConflicts: PipelineConflictRecord[] = [];
-    for (const [taskKey, records] of taskMap) {
+    for (const [taskCompareKey, records] of taskMap) {
         const latest = records[records.length - 1];
+        const taskKey = String(latest?.task ?? '').trim() || String(latest?.title ?? '').trim();
         canonicalRecords.push({
             task: taskKey,
             state: String(latest?.status ?? latest?.to ?? '').trim(),
@@ -201,14 +247,19 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
             summary: String(latest?.summary ?? '').trim(),
             description: String(latest?.description ?? '').trim(),
             goal: String(latest?.goal ?? '').trim(),
+            entityKey: String(latest?.entityKey ?? '').trim() || undefined,
             compareKey: String(latest?.compareKey ?? '').trim(),
+            schemaVersion: String(latest?.schemaVersion ?? '').trim() || undefined,
+            canonicalName: String(latest?.canonicalName ?? '').trim() || undefined,
+            matchKeys: Array.isArray(latest?.matchKeys) ? dedupeStrings(latest.matchKeys) : [],
+            legacyCompareKeys: Array.isArray(latest?.legacyCompareKeys) ? dedupeStrings(latest.legacyCompareKeys) : [],
             bindings: latest?.bindings,
             reasonCodes: Array.isArray(latest?.reasonCodes) ? latest.reasonCodes : [],
         });
         const states = new Set(records.map((item: MemoryTakeoverTaskTransition): string => String(item.to ?? '').trim()).filter(Boolean));
         if (states.size > 1) {
             unresolvedConflicts.push({
-                bucketId: `task/stage_divergence/${sanitizeBucketKey(taskKey)}`,
+                bucketId: `task/stage_divergence/${sanitizeBucketKey(taskCompareKey)}`,
                 domain: 'task',
                 conflictType: 'stage_divergence',
                 records,
@@ -224,28 +275,38 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
  * @param batchResults 批次结果。
  * @returns 归约结果。
  */
-export function reduceTakeoverWorld(batchResults: MemoryTakeoverBatchResult[]): DomainReduceResult<{ key: string; value: string }> {
+export function reduceTakeoverWorld(batchResults: MemoryTakeoverBatchResult[]): DomainReduceResult<MemoryTakeoverWorldStateChange> {
     const worldMap = new Map<string, MemoryTakeoverWorldStateChange[]>();
     for (const record of batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverWorldStateChange[] => item.worldStateChanges ?? [])) {
-        const key = String(record.key ?? '').trim();
-        if (!key) {
+        const compareKey = String(record.compareKey ?? '').trim();
+        if (!compareKey) {
             continue;
         }
-        const current = worldMap.get(key) ?? [];
+        const current = worldMap.get(compareKey) ?? [];
         current.push(record);
-        worldMap.set(key, current);
+        worldMap.set(compareKey, current);
     }
-    const canonicalRecords: Array<{ key: string; value: string }> = [];
+    const canonicalRecords: MemoryTakeoverWorldStateChange[] = [];
     const unresolvedConflicts: PipelineConflictRecord[] = [];
-    for (const [worldKey, records] of worldMap) {
+    for (const [worldCompareKey, records] of worldMap) {
+        const latest = records[records.length - 1];
         canonicalRecords.push({
-            key: worldKey,
-            value: String(records[records.length - 1]?.value ?? '').trim(),
+            key: String(latest?.key ?? '').trim(),
+            value: String(latest?.value ?? '').trim(),
+            entityKey: String(latest?.entityKey ?? '').trim() || undefined,
+            summary: String(latest?.summary ?? '').trim() || undefined,
+            compareKey: worldCompareKey,
+            matchKeys: Array.isArray(latest?.matchKeys) ? dedupeStrings(latest.matchKeys) : [],
+            schemaVersion: String(latest?.schemaVersion ?? '').trim() || undefined,
+            canonicalName: String(latest?.canonicalName ?? '').trim() || undefined,
+            legacyCompareKeys: Array.isArray(latest?.legacyCompareKeys) ? dedupeStrings(latest.legacyCompareKeys) : [],
+            bindings: latest?.bindings,
+            reasonCodes: Array.isArray(latest?.reasonCodes) ? dedupeStrings(latest.reasonCodes) : [],
         });
         const values = new Set(records.map((item: MemoryTakeoverWorldStateChange): string => String(item.value ?? '').trim()).filter(Boolean));
         if (values.size > 1) {
             unresolvedConflicts.push({
-                bucketId: `world/value_divergence/${sanitizeBucketKey(worldKey)}`,
+                bucketId: `world/value_divergence/${sanitizeBucketKey(worldCompareKey)}`,
                 domain: 'world',
                 conflictType: 'value_divergence',
                 records,
@@ -323,15 +384,105 @@ function mergeEntityCards(records: MemoryTakeoverEntityCardCandidate[]): MemoryT
             ...(current.fields ?? {}),
         },
         confidence: Math.max(Number(merged.confidence) || 0, Number(current.confidence) || 0),
+        entityKey: choosePreferredEntityKey(merged.entityKey, current.entityKey),
+        schemaVersion: String(current.schemaVersion ?? '').trim() || String(merged.schemaVersion ?? '').trim() || undefined,
+        canonicalName: choosePreferredCanonicalName(merged.canonicalName, current.canonicalName, current.title, merged.title),
+        matchKeys: dedupeStrings([...(merged.matchKeys ?? []), ...(current.matchKeys ?? [])]),
+        legacyCompareKeys: dedupeStrings([...(merged.legacyCompareKeys ?? []), ...(current.legacyCompareKeys ?? [])]),
+        bindings: mergeTakeoverBindings(merged.bindings, current.bindings),
+        reasonCodes: dedupeStrings([...(merged.reasonCodes ?? []), ...(current.reasonCodes ?? [])]),
     }), {
         entityType: records[0]?.entityType ?? 'organization',
+        entityKey: String(records[0]?.entityKey ?? '').trim() || undefined,
         compareKey: String(records[0]?.compareKey ?? '').trim(),
+        schemaVersion: String(records[0]?.schemaVersion ?? '').trim() || undefined,
+        canonicalName: String(records[0]?.canonicalName ?? '').trim() || String(records[0]?.title ?? '').trim() || undefined,
+        matchKeys: [],
+        legacyCompareKeys: [],
         title: String(records[0]?.title ?? '').trim(),
         aliases: [],
         summary: '',
         fields: {},
         confidence: 0,
+        bindings: undefined,
+        reasonCodes: [],
     });
+}
+
+/**
+ * 功能：优先保留更稳定的实体主键。
+ * @param currentValue 当前实体主键。
+ * @param nextValue 新实体主键。
+ * @returns 选择后的实体主键。
+ */
+function choosePreferredEntityKey(currentValue: string | undefined, nextValue: string | undefined): string | undefined {
+    const current = String(currentValue ?? '').trim();
+    const next = String(nextValue ?? '').trim();
+    if (current && next) {
+        return current.length >= next.length ? current : next;
+    }
+    return current || next || undefined;
+}
+
+/**
+ * 功能：优先保留更完整的规范名。
+ * @param currentValue 当前规范名。
+ * @param nextValue 新规范名。
+ * @param nextTitle 新标题。
+ * @param currentTitle 当前标题。
+ * @returns 选择后的规范名。
+ */
+function choosePreferredCanonicalName(
+    currentValue: string | undefined,
+    nextValue: string | undefined,
+    nextTitle: string | undefined,
+    currentTitle: string | undefined,
+): string | undefined {
+    const current = String(currentValue ?? '').trim() || String(currentTitle ?? '').trim();
+    const next = String(nextValue ?? '').trim() || String(nextTitle ?? '').trim();
+    if (current && next) {
+        return current.length >= next.length ? current : next;
+    }
+    return current || next || undefined;
+}
+
+/**
+ * 功能：合并接管绑定信息并自动去重。
+ * @param currentBindings 当前绑定。
+ * @param nextBindings 新绑定。
+ * @returns 合并后的绑定。
+ */
+function mergeTakeoverBindings(
+    currentBindings: MemoryTakeoverEntityCardCandidate['bindings'],
+    nextBindings: MemoryTakeoverEntityCardCandidate['bindings'],
+): MemoryTakeoverEntityCardCandidate['bindings'] {
+    const current = currentBindings ?? {
+        actors: [],
+        organizations: [],
+        cities: [],
+        locations: [],
+        nations: [],
+        tasks: [],
+        events: [],
+    };
+    const next = nextBindings ?? {
+        actors: [],
+        organizations: [],
+        cities: [],
+        locations: [],
+        nations: [],
+        tasks: [],
+        events: [],
+    };
+    return {
+        actors: dedupeStrings([...(current.actors ?? []), ...(next.actors ?? [])]),
+        organizations: dedupeStrings([...(current.organizations ?? []), ...(next.organizations ?? [])]),
+        cities: dedupeStrings([...(current.cities ?? []), ...(next.cities ?? [])]),
+        locations: dedupeStrings([...(current.locations ?? []), ...(next.locations ?? [])]),
+        nations: dedupeStrings([...(current.nations ?? []), ...(next.nations ?? [])]),
+        tasks: dedupeStrings([...(current.tasks ?? []), ...(next.tasks ?? [])]),
+        events: dedupeStrings([...(current.events ?? []), ...(next.events ?? [])]),
+    };
 }
 
 /**
@@ -360,6 +511,51 @@ function mergeRelationshipCards(records: MemoryTakeoverRelationshipCard[]): Memo
         trust: 0,
         affection: 0,
         tension: 0,
+    });
+}
+
+/**
+ * 功能：合并长期稳定事实。
+ * @param records 原始记录。
+ * @returns 合并后的稳定事实。
+ */
+function mergeStableFacts(records: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact {
+    return records.reduce((merged: MemoryTakeoverStableFact, current: MemoryTakeoverStableFact): MemoryTakeoverStableFact => ({
+        type: String(current.type ?? merged.type ?? '').trim(),
+        subject: chooseLongerText(merged.subject, current.subject),
+        predicate: chooseLongerText(merged.predicate, current.predicate),
+        value: choosePreferredFactValue(merged, current),
+        confidence: Math.max(Number(merged.confidence) || 0, Number(current.confidence) || 0),
+        entityKey: chooseLongerOptionalText(merged.entityKey, current.entityKey),
+        title: chooseLongerOptionalText(merged.title, current.title),
+        summary: chooseLongerOptionalText(merged.summary, current.summary),
+        compareKey: chooseLongerOptionalText(merged.compareKey, current.compareKey),
+        matchKeys: dedupeStrings([...(merged.matchKeys ?? []), ...(current.matchKeys ?? [])]),
+        schemaVersion: chooseLongerOptionalText(merged.schemaVersion, current.schemaVersion),
+        canonicalName: chooseLongerOptionalText(merged.canonicalName, current.canonicalName),
+        legacyCompareKeys: dedupeStrings([...(merged.legacyCompareKeys ?? []), ...(current.legacyCompareKeys ?? [])]),
+        bindings: mergeTakeoverBindings(merged.bindings, current.bindings),
+        status: chooseLongerOptionalText(merged.status, current.status),
+        importance: Math.max(Number(merged.importance) || 0, Number(current.importance) || 0) || undefined,
+        reasonCodes: dedupeStrings([...(merged.reasonCodes ?? []), ...(current.reasonCodes ?? [])]),
+    }), {
+        type: String(records[0]?.type ?? '').trim(),
+        subject: String(records[0]?.subject ?? '').trim(),
+        predicate: String(records[0]?.predicate ?? '').trim(),
+        value: String(records[0]?.value ?? '').trim(),
+        confidence: Number(records[0]?.confidence) || 0,
+        entityKey: String(records[0]?.entityKey ?? '').trim() || undefined,
+        title: String(records[0]?.title ?? '').trim() || undefined,
+        summary: String(records[0]?.summary ?? '').trim() || undefined,
+        compareKey: String(records[0]?.compareKey ?? '').trim() || undefined,
+        matchKeys: [],
+        schemaVersion: String(records[0]?.schemaVersion ?? '').trim() || undefined,
+        canonicalName: String(records[0]?.canonicalName ?? '').trim() || undefined,
+        legacyCompareKeys: [],
+        bindings: undefined,
+        status: String(records[0]?.status ?? '').trim() || undefined,
+        importance: Number(records[0]?.importance) || undefined,
+        reasonCodes: [],
     });
 }
 
@@ -404,12 +600,75 @@ function resolveLedgerKey(domain: PipelineDomain, record: unknown): string {
         return `${String(row.sourceActorKey ?? '').trim()}::${String(row.targetActorKey ?? '').trim()}`;
     }
     if (domain === 'task') {
-        return String(row.task ?? '').trim();
+        return String(row.compareKey ?? '').trim() || String(row.task ?? '').trim();
     }
     if (domain === 'world') {
-        return String(row.key ?? '').trim();
+        return String(row.compareKey ?? '').trim() || String(row.key ?? '').trim();
+    }
+    if (domain === 'fact') {
+        return String(row.compareKey ?? '').trim() || buildStableFactKey(row as unknown as MemoryTakeoverStableFact);
     }
     return JSON.stringify(row);
+}
+
+/**
+ * 功能：构造稳定事实主键。
+ * @param record 稳定事实。
+ * @returns 稳定事实主键。
+ */
+function buildStableFactKey(record: MemoryTakeoverStableFact): string {
+    return [
+        String(record.type ?? '').trim(),
+        String(record.subject ?? '').trim(),
+        String(record.predicate ?? '').trim(),
+    ].join('::');
+}
+
+/**
+ * 功能：优先保留更可信或更长的事实值。
+ * @param current 当前事实。
+ * @param next 新事实。
+ * @returns 选择后的事实值。
+ */
+function choosePreferredFactValue(current: MemoryTakeoverStableFact, next: MemoryTakeoverStableFact): string {
+    const currentConfidence = Number(current.confidence) || 0;
+    const nextConfidence = Number(next.confidence) || 0;
+    if (nextConfidence > currentConfidence) {
+        return String(next.value ?? '').trim();
+    }
+    if (currentConfidence > nextConfidence) {
+        return String(current.value ?? '').trim();
+    }
+    return chooseLongerText(current.value, next.value);
+}
+
+/**
+ * 功能：优先保留更长的文本。
+ * @param currentValue 当前值。
+ * @param nextValue 新值。
+ * @returns 选择后的文本。
+ */
+function chooseLongerText(currentValue: unknown, nextValue: unknown): string {
+    const current = String(currentValue ?? '').trim();
+    const next = String(nextValue ?? '').trim();
+    if (!current) {
+        return next;
+    }
+    if (!next) {
+        return current;
+    }
+    return next.length >= current.length ? next : current;
+}
+
+/**
+ * 功能：优先保留更长的可选文本。
+ * @param currentValue 当前值。
+ * @param nextValue 新值。
+ * @returns 选择后的可选文本。
+ */
+function chooseLongerOptionalText(currentValue: unknown, nextValue: unknown): string | undefined {
+    const resolved = chooseLongerText(currentValue, nextValue);
+    return resolved || undefined;
 }
 
 /**

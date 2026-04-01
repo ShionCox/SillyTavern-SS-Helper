@@ -126,6 +126,21 @@ function confirmRebuildDatabase(): boolean {
 }
 
 /**
+ * 功能：询问用户是否立即重试旧聊天接管任务。
+ * @param errorMessage 原始错误信息。
+ * @param reasonCode 原因码。
+ * @returns 用户是否确认重试。
+ */
+function confirmTakeoverRetry(errorMessage?: string, reasonCode?: string): boolean {
+    const detail = formatLLMFailureReason(errorMessage, reasonCode);
+    return window.confirm(
+        `旧聊天接管失败：${detail}\n\n`
+        + '是否立即重试当前任务？\n\n'
+        + '选择“确定”会从当前暂停/失败的位置继续执行；选择“取消”则保留当前状态，稍后可手动恢复。',
+    );
+}
+
+/**
  * 功能：构建 prompt-ready 运行结果快照，供测试包严格一致性回放使用。
  * @param input 构建输入。
  * @returns 运行结果快照。
@@ -580,6 +595,9 @@ export class MemoryOS {
             previewEstimate: (config?: Parameters<typeof sdk.chatState.previewTakeoverEstimate>[0]) => {
                 return sdk.chatState.previewTakeoverEstimate(config);
             },
+            previewActualPayload: (config?: Parameters<typeof sdk.chatState.previewActualTakeoverPayload>[0]) => {
+                return sdk.chatState.previewActualTakeoverPayload(config);
+            },
         });
         if (!selection.confirmed) {
             return true;
@@ -598,13 +616,26 @@ export class MemoryOS {
             if (!selection.resumeExisting) {
                 await sdk.chatState.createTakeoverPlan(selection.config);
             }
-            const result = await sdk.chatState.startTakeover(
+            let result = await sdk.chatState.startTakeover(
                 selection.resumeExisting ? detection.recoverableTakeoverId : undefined,
             );
-            if (!result.ok) {
+            while (!result.ok) {
                 this.takeoverPromptedChats.delete(normalizedChatKey);
-                toast.error(`旧聊天接管失败：${formatLLMFailureReason(result.errorMessage, result.reasonCode)}`);
-                return true;
+                const canRetry = result.progress?.plan?.status === 'paused' || result.progress?.plan?.status === 'failed';
+                if (!canRetry || !confirmTakeoverRetry(result.errorMessage, result.reasonCode)) {
+                    toast.error(`旧聊天接管失败：${formatLLMFailureReason(result.errorMessage, result.reasonCode)}`);
+                    return true;
+                }
+                const latestActiveChatKey = String(
+                    ((window as unknown as { STX?: { memory?: { getChatKey?: () => string } } })?.STX?.memory?.getChatKey?.())
+                    ?? '',
+                ).trim();
+                if (latestActiveChatKey !== normalizedChatKey) {
+                    toast.warning('当前聊天已切换，已取消本次自动重试。');
+                    return true;
+                }
+                toast.info('正在重试旧聊天接管...');
+                result = await sdk.chatState.resumeTakeover();
             }
             toast.success('旧聊天接管任务已启动，可在统一工作台查看进度。');
             return true;

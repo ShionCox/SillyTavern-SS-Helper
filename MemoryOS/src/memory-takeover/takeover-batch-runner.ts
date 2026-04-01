@@ -11,11 +11,16 @@ import type {
     MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
     MemoryTakeoverWorldStateChange,
+    TakeoverSourceSegment,
 } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
 import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
+import { getContentLabSettings } from '../config/content-tag-registry';
+import { buildFloorRecords, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
+import { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
+import { runTakeoverRepairService } from './takeover-repair-service';
 import { logger } from '../runtime/runtime-services';
 import {
     COMPARE_KEY_SCHEMA_VERSION,
@@ -53,6 +58,16 @@ export interface MemoryTakeoverKnownContext {
 }
 
 /**
+ * 功能：定义批次送模组装结果。
+ */
+export interface MemoryTakeoverBatchPromptAssembly {
+    floorRecords: RawFloorRecord[];
+    channels: ReturnType<typeof assembleContentChannels>;
+    extractionMessages: MemoryTakeoverMessageSlice[];
+    sourceSegments: TakeoverSourceSegment[];
+}
+
+/**
  * 功能：统计批次消息的角色分布。
  * @param messages 消息列表。
  * @returns 角色统计对象。
@@ -63,6 +78,60 @@ function computeBatchRoleStats(messages: MemoryTakeoverMessageSlice[]): Record<s
         stats[message.role] = (stats[message.role] || 0) + 1;
     }
     return stats;
+}
+
+/**
+ * 功能：按正式批处理规则组装送模输入。
+ * @param input 组装输入。
+ * @returns 送模组装结果。
+ */
+export async function assembleTakeoverBatchPromptAssembly(input: {
+    llm: MemoryLLMApi | null;
+    pluginId: string;
+    messages: MemoryTakeoverMessageSlice[];
+}): Promise<MemoryTakeoverBatchPromptAssembly> {
+    let floorRecords: RawFloorRecord[] = buildFloorRecords(input.messages);
+    const contentLabSettings = getContentLabSettings();
+    if (contentLabSettings.enableAIClassifier) {
+        floorRecords = await classifyFloorRecordsWithAI({
+            llm: input.llm,
+            pluginId: input.pluginId,
+            floorRecords,
+        });
+    }
+    const channels = assembleContentChannels(floorRecords);
+    const extractionMessages: MemoryTakeoverMessageSlice[] = floorRecords.map((floor: RawFloorRecord) => ({
+        floor: floor.floor,
+        sourceFloor: floor.sourceFloor ?? floor.floor,
+        role: floor.originalRole as 'user' | 'assistant' | 'system',
+        name: input.messages.find((message: MemoryTakeoverMessageSlice) => message.floor === floor.floor)?.name ?? '',
+        content: (
+            floor.parsedBlocks
+                .filter((block) => block.includeInPrimaryExtraction)
+                .map((block) => block.rawText)
+                .join('\n\n')
+        ) || '（本层没有可纳入主正文的内容，详见 floorManifest 与 hintContext）',
+    }));
+    const sourceSegments = floorRecords.flatMap((floor: RawFloorRecord) =>
+        floor.parsedBlocks.map((block) => ({
+            kind: block.resolvedKind === 'story_primary' ? 'story_narrative' as const
+                : block.resolvedKind === 'story_secondary' ? 'story_dialogue' as const
+                : block.resolvedKind === 'thought' ? 'thought_like' as const
+                : block.resolvedKind === 'tool_artifact' ? 'tool_artifact' as const
+                : block.resolvedKind === 'meta_commentary' ? 'meta_analysis' as const
+                : block.resolvedKind === 'instruction' ? 'instructional' as const
+                : 'meta_analysis' as const,
+            text: block.rawText,
+            sourceFloor: floor.floor,
+            confidence: block.includeInPrimaryExtraction ? 0.95 : 0.5,
+        })),
+    );
+    return {
+        floorRecords,
+        channels,
+        extractionMessages,
+        sourceSegments,
+    };
 }
 
 /**
@@ -128,7 +197,7 @@ function normalizeBindings(value: unknown): MemoryTakeoverBindings {
  * @param transitions 原始任务变更列表。
  * @returns 归一化后的任务变更列表。
  */
-function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): MemoryTakeoverTaskTransition[] {
+export function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): MemoryTakeoverTaskTransition[] {
     const result: MemoryTakeoverTaskTransition[] = [];
     const seen = new Set<string>();
     for (const transition of transitions) {
@@ -169,7 +238,7 @@ function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): 
  * @param changes 原始世界状态变更列表。
  * @returns 归一化后的世界状态变更列表。
  */
-function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): MemoryTakeoverWorldStateChange[] {
+export function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): MemoryTakeoverWorldStateChange[] {
     const result: MemoryTakeoverWorldStateChange[] = [];
     const seen = new Set<string>();
     for (const change of changes) {
@@ -204,7 +273,7 @@ function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): 
  * @param facts 原始稳定事实列表。
  * @returns 归一化后的稳定事实列表。
  */
-function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact[] {
+export function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact[] {
     const result: MemoryTakeoverStableFact[] = [];
     const seen = new Set<string>();
     for (const fact of facts) {
@@ -249,7 +318,7 @@ function normalizeStableFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeover
  * @param transitions 原始关系变化列表。
  * @returns 归一化后的关系变化列表。
  */
-function normalizeRelationTransitions(transitions: MemoryTakeoverRelationTransition[]): MemoryTakeoverRelationTransition[] {
+export function normalizeRelationTransitions(transitions: MemoryTakeoverRelationTransition[]): MemoryTakeoverRelationTransition[] {
     const result: MemoryTakeoverRelationTransition[] = [];
     const seen = new Set<string>();
     for (const transition of transitions) {
@@ -322,6 +391,113 @@ function normalizeEntityRefs(
 }
 
 /**
+ * 功能：归一化角色引用列表，并优先保留高质量正式显示名。
+ * @param values 原始角色引用列表。
+ * @param limit 最多保留数量。
+ * @returns 去重后的角色引用列表。
+ */
+function normalizeActorRefs(
+    values: Array<{ actorKey: string; displayName: string }>,
+    limit: number,
+): Array<{ actorKey: string; displayName: string }> {
+    const actorMap = new Map<string, { actorKey: string; displayName: string }>();
+    for (const value of values) {
+        const actorKey = String(value.actorKey ?? '').trim();
+        const displayName = String(value.displayName ?? '').trim();
+        if (!actorKey || !displayName) {
+            continue;
+        }
+        const existing = actorMap.get(actorKey);
+        actorMap.set(actorKey, {
+            actorKey,
+            displayName: choosePreferredActorRefDisplayName(actorKey, existing?.displayName, displayName),
+        });
+        if (actorMap.size >= limit && !existing) {
+            break;
+        }
+    }
+    return [...actorMap.values()].slice(0, limit);
+}
+
+/**
+ * 功能：为后续批次提示选择更好的角色显示名。
+ * @param actorKey 角色键。
+ * @param currentDisplayName 当前显示名。
+ * @param nextDisplayName 新显示名。
+ * @returns 选择后的显示名。
+ */
+function choosePreferredActorRefDisplayName(actorKey: string, currentDisplayName: string | undefined, nextDisplayName: string): string {
+    const current = String(currentDisplayName ?? '').trim();
+    const next = String(nextDisplayName ?? '').trim();
+    if (!current) {
+        return next;
+    }
+    if (!next) {
+        return current;
+    }
+    const currentIsFallbackLike = isFallbackLikeActorRefDisplayName(actorKey, current);
+    const nextIsFallbackLike = isFallbackLikeActorRefDisplayName(actorKey, next);
+    if (currentIsFallbackLike && !nextIsFallbackLike) {
+        return next;
+    }
+    if (!currentIsFallbackLike && nextIsFallbackLike) {
+        return current;
+    }
+    return current;
+}
+
+/**
+ * 功能：判断角色提示名是否只是由 actorKey 派生的低质量兜底名。
+ * @param actorKey 角色键。
+ * @param displayName 显示名。
+ * @returns 是否为低质量显示名。
+ */
+function isFallbackLikeActorRefDisplayName(actorKey: string, displayName: string): boolean {
+    const normalizedDisplayName = String(displayName ?? '').trim();
+    if (!normalizedDisplayName) {
+        return true;
+    }
+    if (normalizedDisplayName.toLowerCase() === String(actorKey ?? '').trim().toLowerCase()) {
+        return true;
+    }
+    return simplifyActorRefDisplayName(normalizedDisplayName) === simplifyActorRefDisplayName(resolveActorRefFallbackDisplayName(actorKey));
+}
+
+/**
+ * 功能：生成角色引用的兜底显示名。
+ * @param actorKey 角色键。
+ * @returns 兜底显示名。
+ */
+function resolveActorRefFallbackDisplayName(actorKey: string): string {
+    return String(actorKey ?? '')
+        .trim()
+        .replace(/^(actor|char)[_:]+/i, '')
+        .replace(/[_-]+/g, ' ')
+        .trim();
+}
+
+/**
+ * 功能：简化角色显示名以便比较。
+ * @param value 原始文本。
+ * @returns 简化后的文本。
+ */
+function simplifyActorRefDisplayName(value: string): string {
+    return String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '');
+}
+
+/**
+ * 功能：判断文本是否是稳定角色键引用。
+ * @param value 原始文本。
+ * @returns 是否为角色键。
+ */
+function isActorRefKey(value: string): boolean {
+    return /^(actor|char)[_:]/i.test(String(value ?? '').trim()) || String(value ?? '').trim().toLowerCase() === 'user';
+}
+
+/**
  * 功能：根据分类与显示名生成批次内可复用的临时对象键。
  * @param category 分类名称。
  * @param displayName 显示名。
@@ -343,7 +519,7 @@ function buildBatchEntityKey(category: string, displayName: string): string {
  * @param limit 最多保留数量。
  * @returns 去重后的角色卡候选。
  */
-function normalizeActorCards(
+export function normalizeActorCards(
     actorCards: MemoryTakeoverActorCardCandidate[],
     limit: number,
 ): MemoryTakeoverActorCardCandidate[] {
@@ -376,7 +552,7 @@ function normalizeActorCards(
  * @param relationships 原始关系卡列表。
  * @returns 去重并校验后的关系卡列表。
  */
-function normalizeRelationshipCards(
+export function normalizeRelationshipCards(
     relationships: MemoryTakeoverRelationshipCard[],
 ): MemoryTakeoverRelationshipCard[] {
     const result: MemoryTakeoverRelationshipCard[] = [];
@@ -443,7 +619,7 @@ function buildTakeoverKnownEntities(
     existingKnownEntities: MemoryTakeoverKnownEntities,
 ): MemoryTakeoverKnownEntities {
     return {
-        actors: normalizeActorCards([
+        actors: normalizeActorRefs([
             ...existingKnownEntities.actors.map((item): MemoryTakeoverActorCardCandidate => ({
                 actorKey: item.actorKey,
                 displayName: item.displayName,
@@ -453,10 +629,10 @@ function buildTakeoverKnownEntities(
                 traits: [],
             })),
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverActorCardCandidate[] => item.actorCards ?? []),
-        ], 16).map((item: MemoryTakeoverActorCardCandidate) => ({
+        ].map((item: MemoryTakeoverActorCardCandidate) => ({
             actorKey: item.actorKey,
             displayName: item.displayName,
-        })),
+        })), 16),
         organizations: normalizeEntityRefs([
             ...existingKnownEntities.organizations,
             ...batchResults.flatMap((item: MemoryTakeoverBatchResult): Array<{ entityKey: string; displayName: string }> => {
@@ -573,13 +749,28 @@ export function buildTakeoverKnownContext(
     },
 ): MemoryTakeoverKnownContext {
     const knownEntities = buildTakeoverKnownEntities(batchResults, existingKnownEntities);
+    const actorLabelMap = new Map(knownEntities.actors.map((item: { actorKey: string; displayName: string }): [string, string] => [String(item.actorKey ?? '').trim(), String(item.displayName ?? '').trim()]));
     const actorHints = normalizeStringList([
         ...knownEntities.actors.map((item: { actorKey: string; displayName: string }): string => item.displayName),
         ...batchResults.flatMap((item: MemoryTakeoverBatchResult): string[] => {
             return item.stableFacts.map((fact) => fact.subject);
         }),
         ...batchResults.flatMap((item: MemoryTakeoverBatchResult): string[] => {
-            return item.relationTransitions.map((transition) => transition.target);
+            return item.relationTransitions
+                .map((transition) => {
+                    const target = String(transition.target ?? '').trim();
+                    if (!target) {
+                        return '';
+                    }
+                    if (actorLabelMap.has(target)) {
+                        return actorLabelMap.get(target) ?? '';
+                    }
+                    if (isActorRefKey(target)) {
+                        return '';
+                    }
+                    return target;
+                })
+                .filter(Boolean);
         }),
     ], 16);
     const stableFacts = normalizeStringList(
@@ -655,18 +846,45 @@ export async function runTakeoverBatch(input: {
     previousBatchResults?: MemoryTakeoverBatchResult[];
     existingKnownEntities?: MemoryTakeoverKnownEntities;
 }): Promise<MemoryTakeoverBatchResult> {
+    const assembly = await assembleTakeoverBatchPromptAssembly({
+        llm: input.llm,
+        pluginId: input.pluginId,
+        messages: input.messages,
+    });
+    const floorRecords = assembly.floorRecords;
+    const channels = assembly.channels;
+    const extractionMessages = assembly.extractionMessages;
+    const sourceSegments = assembly.sourceSegments;
     const roleStats = computeBatchRoleStats(input.messages);
     const userCount: number = roleStats.user || 0;
     const assistantCount: number = roleStats.assistant || 0;
 
-    logger.info(`[takeover][batch][${input.batch.batchId}] role校验：`, {
+    logger.info(`[takeover][batch][${input.batch.batchId}] block分块结果：`, {
         range: input.batch.range,
         total: input.messages.length,
+        floorCount: floorRecords.length,
+        sentFloors: extractionMessages.length,
+        primaryFloors: floorRecords.filter((f) => f.hasPrimaryStory).length,
+        hintOnlyFloors: floorRecords.filter((f) => f.hasHintOnly && !f.hasPrimaryStory).length,
+        excludedOnlyFloors: floorRecords.filter((f) => f.hasExcludedOnly).length,
+        primaryText: channels.primaryText.length,
+        hintText: channels.hintText.length,
         roleStats,
-        floors: input.messages.slice(0, 10).map((message) => ({
-            floor: message.floor,
-            role: message.role,
-            name: message.name,
+    });
+    logger.info(`[takeover][batch][${input.batch.batchId}] F12送模诊断：`, {
+        requestedRange: `${input.batch.range.startFloor}-${input.batch.range.endFloor}`,
+        sourceFloors: input.messages.map((message: MemoryTakeoverMessageSlice) => message.floor),
+        manifestFloors: floorRecords.map((floor: RawFloorRecord) => floor.floor),
+        sentMessageFloors: extractionMessages.map((message: MemoryTakeoverMessageSlice) => message.floor),
+        floorDecisions: floorRecords.map((floor: RawFloorRecord) => ({
+            floor: floor.floor,
+            sourceFloor: floor.sourceFloor ?? floor.floor,
+            hasPrimaryStory: floor.hasPrimaryStory,
+            hasHintOnly: floor.hasHintOnly,
+            hasExcludedOnly: floor.hasExcludedOnly,
+            primaryBlockCount: floor.parsedBlocks.filter((block) => block.includeInPrimaryExtraction).length,
+            hintBlockCount: floor.parsedBlocks.filter((block) => !block.includeInPrimaryExtraction && block.includeAsHint).length,
+            excludedBlockCount: floor.parsedBlocks.filter((block) => !block.includeInPrimaryExtraction && !block.includeAsHint).length,
         })),
     });
 
@@ -695,6 +913,8 @@ export async function runTakeoverBatch(input: {
         openThreads: [],
         chapterTags: [input.batch.category === 'active' ? '最近活跃' : '历史补建'],
         sourceRange: input.batch.range,
+        sourceSegments: sourceSegments,
+        floorManifest: floorRecords,
         generatedAt: Date.now(),
     };
     const displayProgress = input.batch.category === 'history'
@@ -720,14 +940,23 @@ export async function runTakeoverBatch(input: {
             batchCategory: input.batch.category,
             range: input.batch.range,
             knownContext,
-            messages: input.messages,
+            messages: extractionMessages,
+            hintContext: channels.hintText || undefined,
         },
         extraSystemInstruction: [
             '如果输入里提供了 knownContext，请把它视为当前批次可复用的分类对象提示。',
+            '你输出的是故事世界内部可读的记忆文本，不是系统日志、不是批处理说明、不是分析报告。',
+            '所有自然语言字段中，凡是指代主角、玩家或当前用户，一律使用 `{{user}}`，禁止使用“用户”“主角”“你”“主人公”“对方”等写法。',
+            '禁止在自然语言字段中出现“本批次”“本轮”“当前剧情”“当前场景”“当前设置地点”“当前设置”“首次识别到”“已触发”“已确认”“结构化”“绑定”“主链”“输出内容”“处理结果”“待补全”“需要进一步确认”等系统视角词。',
+            '所有给人看的自然语言字段都必须写成小说设定集、角色小传、世界观摘要或悬念档案风格，不要解释你在做什么，只描述故事事实、人物关系、情绪推进与悬念。',
+            '只有 story_narrative 与 story_dialogue 可作为正式抽取主源；meta 分析、说明、注释、tool 文本、think 风格文本不能直接产出正式角色与主链事实。',
             'knownContext.knownEntities.actors 代表当前聊天里已知且可更新的角色；knownContext.knownEntities.organizations 代表已知组织与势力；knownContext.knownEntities.cities 代表已知城市；knownContext.knownEntities.nations 代表已知国家；knownContext.knownEntities.locations 代表已知地点；knownContext.knownEntities.tasks 代表已知任务；knownContext.knownEntities.worldStates 代表已知世界状态。',
             '其中 actors 使用 actorKey 作为稳定标识；organizations、cities、nations、locations、tasks、worldStates 使用 entityKey 作为稳定标识。判断是不是同一个对象时，优先参考这些 key，再参考显示名。',
             '处理本批消息时，请优先判断当前信息应该归到哪一类对象上，而不是把所有新名词都当作角色。',
             '只有稳定、反复出现、并且明显是人物的对象，才允许写进 actorCards。',
+            '正式角色仅限：在故事正文中实际出场并参与行动、对话、关系推进的人物；与 `{{user}}` 或其他已确认角色形成明确关系的人物；在本批剧情因果链中起关键作用的人物。',
+            '只在分析说明、未来构思、注释、summary、details、tableEdit、think 文本里出现的人物，只能视为候选或忽略，不得直接升级为 actorCards。',
+            '群体词、身份 title、组织名、地点名、任务名不得误判成角色。',
             'relationships 字段用于输出角色与角色之间的结构化关系卡，必须完整填写 sourceActorKey、targetActorKey、participants、relationTag、state、summary、trust、affection、tension。',
             '只要某个非 user 角色出现在 relationships 中，就必须在 actorCards 中提供同 actorKey 的角色卡；关系双方必须使用稳定 actorKey，不要只写显示名。',
             '如果消息里出现“何盈（橙狗狗视角）”这类写法，relationships 里仍然要使用标准角色键，不要把视角说明塞进 actorKey。',
@@ -743,24 +972,32 @@ export async function runTakeoverBatch(input: {
             '如果对象已经出现在 knownContext.knownEntities 对应分类中，请优先按“更新已有对象”处理，而不是重复新增。',
         ].join(''),
     });
-    return structured
-        ? {
-            ...fallback,
-            ...structured,
-            actorCards: normalizeActorCards(structured.actorCards ?? [], 12),
-            relationships: normalizeRelationshipCards(structured.relationships ?? []),
-            entityCards: normalizeEntityCards(structured.entityCards ?? []),
-            entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
-            stableFacts: normalizeStableFacts(structured.stableFacts ?? []),
-            relationTransitions: normalizeRelationTransitions(structured.relationTransitions ?? []),
-            taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? []),
-            worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? []),
-            takeoverId: input.batch.takeoverId,
-            batchId: input.batch.batchId,
-            sourceRange: ensureRange(structured.sourceRange, input.batch.range),
-            generatedAt: Date.now(),
-        }
-        : fallback;
+    if (!structured) {
+        return fallback;
+    }
+    const normalized = normalizeTakeoverBatchResult({
+        fallback,
+        batch: input.batch,
+        range: input.batch.range,
+        result: structured,
+        sourceSegments,
+    });
+    return runTakeoverRepairService({
+        llm: input.llm,
+        pluginId: input.pluginId,
+        batch: input.batch,
+        knownContext,
+        messages: extractionMessages,
+        segments: sourceSegments,
+        result: normalized,
+        normalizeResult: (value: MemoryTakeoverBatchResult): MemoryTakeoverBatchResult => normalizeTakeoverBatchResult({
+            fallback,
+            batch: input.batch,
+            range: input.batch.range,
+            result: value,
+            sourceSegments,
+        }),
+    });
 }
 
 /**
@@ -790,7 +1027,7 @@ const VALID_ENTITY_ACTIONS = new Set(['ADD', 'UPDATE', 'MERGE', 'INVALIDATE', 'D
  * @param entityCards 原始实体卡候选。
  * @returns 去重归一化后的实体卡候选。
  */
-function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]): MemoryTakeoverEntityCardCandidate[] {
+export function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]): MemoryTakeoverEntityCardCandidate[] {
     const result: MemoryTakeoverEntityCardCandidate[] = [];
     const seen = new Set<string>();
     for (const card of entityCards) {
@@ -832,7 +1069,7 @@ function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandidate[]):
  * @param transitions 原始实体变更。
  * @returns 归一化后的实体变更。
  */
-function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[]): MemoryTakeoverEntityTransition[] {
+export function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[]): MemoryTakeoverEntityTransition[] {
     const result: MemoryTakeoverEntityTransition[] = [];
     for (const transition of transitions) {
         const entityType = String(transition.entityType ?? '').trim().toLowerCase();
@@ -907,4 +1144,38 @@ function normalizeId(value: string): string {
         .replace(/[^\p{L}\p{N}]+/gu, '_')
         .replace(/^_+|_+$/g, '')
         || 'unknown';
+}
+
+/**
+ * 功能：统一归一化接管批次结果。
+ * @param input 归一化输入。
+ * @returns 归一化后的批次结果。
+ */
+export function normalizeTakeoverBatchResult(input: {
+    fallback: MemoryTakeoverBatchResult;
+    batch: MemoryTakeoverBatch;
+    range: MemoryTakeoverRange;
+    result: MemoryTakeoverBatchResult;
+    sourceSegments?: MemoryTakeoverBatchResult['sourceSegments'];
+}): MemoryTakeoverBatchResult {
+    const structured = input.result;
+    return {
+        ...input.fallback,
+        ...structured,
+        actorCards: normalizeActorCards(structured.actorCards ?? [], 12),
+        candidateActors: structured.candidateActors ?? [],
+        rejectedMentions: structured.rejectedMentions ?? [],
+        relationships: normalizeRelationshipCards(structured.relationships ?? []),
+        entityCards: normalizeEntityCards(structured.entityCards ?? []),
+        entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
+        stableFacts: normalizeStableFacts(structured.stableFacts ?? []),
+        relationTransitions: normalizeRelationTransitions(structured.relationTransitions ?? []),
+        taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? []),
+        worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? []),
+        takeoverId: input.batch.takeoverId,
+        batchId: input.batch.batchId,
+        sourceRange: ensureRange(structured.sourceRange, input.range),
+        sourceSegments: input.sourceSegments ?? structured.sourceSegments ?? [],
+        generatedAt: Date.now(),
+    };
 }

@@ -329,6 +329,9 @@ function resolveConflictBatchTaskId(domain: string): string {
     if (domain === 'task') {
         return 'memory_takeover_task_conflict_resolve_batch';
     }
+    if (domain === 'fact') {
+        return 'memory_takeover_fact_conflict_resolve_batch';
+    }
     return 'memory_takeover_world_conflict_resolve_batch';
 }
 
@@ -338,12 +341,14 @@ function resolveConflictBatchTaskId(domain: string): string {
  * @returns 主键文本
  */
 function resolveRecordKey(record: Record<string, unknown>): string {
+    const factKey = `${String(record.type ?? '').trim()}::${String(record.subject ?? '').trim()}::${String(record.predicate ?? '').trim()}`;
     return String(
         record.actorKey
         ?? record.compareKey
         ?? record.entityKey
         ?? record.task
         ?? record.key
+        ?? (factKey !== '::::' ? factKey : '')
         ?? `${String(record.sourceActorKey ?? '').trim()}::${String(record.targetActorKey ?? '').trim()}`,
     ).trim();
 }
@@ -419,6 +424,19 @@ function buildSelectedSnapshot(domain: string, primaryRecord: Record<string, unk
             'compareKey',
             'schemaVersion',
             'canonicalName',
+        ]);
+    }
+    if (normalizedDomain === 'fact') {
+        return pickRecordFields(primaryRecord, [
+            'type',
+            'subject',
+            'predicate',
+            'value',
+            'confidence',
+            'compareKey',
+            'canonicalName',
+            'summary',
+            'bindings',
         ]);
     }
     return pickRecordFields(primaryRecord, [

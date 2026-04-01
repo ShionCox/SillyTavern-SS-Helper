@@ -1,15 +1,17 @@
 import { Tiktoken } from 'js-tiktoken/lite';
 import o200kBase from 'js-tiktoken/ranks/o200k_base';
+import type { MemoryLLMApi } from '../memory-summary';
 import type {
     MemoryTakeoverBatch,
     MemoryTakeoverCreateInput,
     MemoryTakeoverPreviewBatchEstimate,
     MemoryTakeoverPreviewEstimate,
 } from '../types';
-import { buildTakeoverBatches, buildTakeoverPlan } from './takeover-planner';
+import { buildTakeoverBatches, buildTakeoverPlan, validateTakeoverBatchCoverage } from './takeover-planner';
 import type { MemoryTakeoverSourceBundle } from './takeover-source';
 import { sliceTakeoverMessages } from './takeover-source';
 import { buildTakeoverStructuredTaskRequest } from './takeover-llm';
+import { assembleTakeoverBatchPromptAssembly } from './takeover-batch-runner';
 
 export const TAKEOVER_TOKEN_WARNING_THRESHOLD: number = 100000;
 
@@ -24,6 +26,8 @@ export async function buildTakeoverPreviewEstimate(input: {
     chatKey: string;
     chatId: string;
     totalFloors: number;
+    llm: MemoryLLMApi | null;
+    pluginId: string;
     defaults: {
         detectMinFloors: number;
         recentFloors: number;
@@ -53,9 +57,15 @@ export async function buildTakeoverPreviewEstimate(input: {
         batchSize: plan.batchSize,
     });
     const historyBatches = batches.filter((batch: MemoryTakeoverBatch): boolean => batch.category === 'history');
+    const coverage = validateTakeoverBatchCoverage(plan.range, batches);
     const batchEstimates: MemoryTakeoverPreviewBatchEstimate[] = await Promise.all(
         batches.map(async (batch: MemoryTakeoverBatch): Promise<MemoryTakeoverPreviewBatchEstimate> => {
-            const messages = sliceTakeoverMessages(input.sourceBundle, batch.range);
+            const sourceMessages = sliceTakeoverMessages(input.sourceBundle, batch.range);
+            const assembly = await assembleTakeoverBatchPromptAssembly({
+                llm: input.llm,
+                pluginId: input.pluginId,
+                messages: sourceMessages,
+            });
             const request = await buildTakeoverStructuredTaskRequest({
                 systemSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SYSTEM' : 'TAKEOVER_BATCH_SYSTEM',
                 schemaSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SCHEMA' : 'TAKEOVER_BATCH_SCHEMA',
@@ -63,13 +73,32 @@ export async function buildTakeoverPreviewEstimate(input: {
                 payload: batch.category === 'active'
                     ? {
                         range: batch.range,
-                        messages,
+                        messages: assembly.extractionMessages,
+                        hintContext: assembly.channels.hintText || undefined,
                     }
                     : {
                         batchId: batch.batchId,
                         batchCategory: batch.category,
                         range: batch.range,
-                        messages,
+                        knownContext: {
+                            actorHints: [],
+                            stableFacts: [],
+                            relationState: [],
+                            taskState: [],
+                            worldState: [],
+                            knownEntities: {
+                                actors: [],
+                                organizations: [],
+                                cities: [],
+                                nations: [],
+                                locations: [],
+                                tasks: [],
+                                worldStates: [],
+                            },
+                            updateHint: '',
+                        },
+                        messages: assembly.extractionMessages,
+                        hintContext: assembly.channels.hintText || undefined,
                     },
             });
             const estimatedPromptTokens: number = estimateChatMessageTokens(request.messages);
@@ -83,7 +112,7 @@ export async function buildTakeoverPreviewEstimate(input: {
                     historyBatches.length,
                 ),
                 range: batch.range,
-                messageCount: messages.length,
+                messageCount: assembly.extractionMessages.length,
                 estimatedPromptTokens,
                 overWarningThreshold: estimatedPromptTokens > threshold,
             };
@@ -95,6 +124,9 @@ export async function buildTakeoverPreviewEstimate(input: {
         totalFloors: plan.totalFloors,
         range: plan.range,
         activeWindow: plan.activeWindow,
+        coverageSummary: coverage.covered
+            ? `已计划覆盖：${plan.range.startFloor}-${plan.range.endFloor}，共 ${batches.length} 批。`
+            : `覆盖异常：缺少 ${coverage.uncoveredRanges.map((item) => `${item.startFloor}-${item.endFloor}`).join('、')}。`,
         batchSize: plan.batchSize,
         useActiveSnapshot: plan.useActiveSnapshot,
         activeSnapshotFloors: plan.activeSnapshotFloors,

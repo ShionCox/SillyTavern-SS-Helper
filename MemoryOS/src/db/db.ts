@@ -37,6 +37,7 @@ import type {
     MemoryTakeoverBaseline,
     MemoryTakeoverBatch,
     MemoryTakeoverBatchResult,
+    MemoryTakeoverCandidateActorMention,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverPlan,
 } from '../types';
@@ -158,6 +159,7 @@ export interface ImportMemoryPromptTestBundleResult {
 export type MemoryTakeoverRecordCollection =
     | 'takeover_batch_meta'
     | 'takeover_batch_result'
+    | 'candidate_actor_mentions'
     | 'takeover_logs'
     | 'takeover_preview'
     | 'comparekey_index';
@@ -278,6 +280,43 @@ export async function saveMemoryTakeoverBatchResult(chatKey: string, result: Mem
         payload: result as unknown as Record<string, unknown>,
         ts: result.generatedAt || Date.now(),
     });
+}
+
+/**
+ * 功能：写入候选角色提及记录。
+ * @param chatKey 聊天键。
+ * @param mentions 候选角色提及列表。
+ * @returns 异步完成。
+ */
+export async function saveCandidateActorMentions(
+    chatKey: string,
+    mentions: MemoryTakeoverCandidateActorMention[],
+): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    await Promise.all((mentions ?? []).map((mention: MemoryTakeoverCandidateActorMention): Promise<void> => {
+        const recordId = `${String(mention.sourceBatchId ?? '').trim()}::${String(mention.actorKey ?? mention.name ?? '').trim()}`;
+        return appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'candidate_actor_mentions', {
+            recordId,
+            payload: {
+                ...mention,
+                chatKey: normalizedChatKey,
+            } as unknown as Record<string, unknown>,
+            ts: Date.now(),
+        });
+    }));
+}
+
+/**
+ * 功能：读取候选角色提及记录。
+ * @param chatKey 聊天键。
+ * @returns 候选角色提及列表。
+ */
+export async function loadCandidateActorMentions(chatKey: string): Promise<MemoryTakeoverCandidateActorMention[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'candidate_actor_mentions', {
+        order: 'asc',
+        limit: 4000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverCandidateActorMention => row.payload as unknown as MemoryTakeoverCandidateActorMention);
 }
 
 /**

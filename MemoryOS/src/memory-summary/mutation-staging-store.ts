@@ -1,4 +1,6 @@
 import type { SummaryMutationDocument } from './mutation-types';
+import type { SummaryMutationBatchPlan } from './mutation-batch-planner';
+import type { SummaryPlannerOutput } from './mutation-types';
 
 /**
  * 功能：定义单个 mutation 批次暂存结果。
@@ -15,9 +17,42 @@ export interface SummaryMutationBatchResultRecord {
  */
 export interface SummaryMutationStagingSnapshot {
     summaryJobId: string;
+    plannerContext?: Record<string, unknown>;
+    plannerDiagnostics?: {
+        retrievalProviderId: string;
+        matchedEntryIds: string[];
+        worldProfile: string;
+        reasonCode: string;
+    };
+    plannerDecision?: SummaryPlannerOutput;
+    batchPlans?: SummaryMutationBatchPlan[];
     batchResults: SummaryMutationBatchResultRecord[];
 }
 const mutationStagingStore: Map<string, SummaryMutationStagingSnapshot> = new Map();
+
+/**
+ * 功能：追加 mutation 暂存快照元数据。
+ * @param summaryJobId 汇总任务标识。
+ * @param patch 暂存快照补丁。
+ * @returns 最新暂存快照。
+ */
+export function appendSummaryMutationStagingSnapshot(
+    summaryJobId: string,
+    patch: Partial<SummaryMutationStagingSnapshot>,
+): SummaryMutationStagingSnapshot {
+    const current = mutationStagingStore.get(summaryJobId) ?? {
+        summaryJobId,
+        batchResults: [],
+    };
+    const nextSnapshot: SummaryMutationStagingSnapshot = {
+        ...current,
+        ...patch,
+        summaryJobId,
+        batchResults: patch.batchResults ?? current.batchResults,
+    };
+    mutationStagingStore.set(summaryJobId, nextSnapshot);
+    return nextSnapshot;
+}
 
 /**
  * 功能：追加 mutation 批次结果。
@@ -25,12 +60,10 @@ const mutationStagingStore: Map<string, SummaryMutationStagingSnapshot> = new Ma
  * @returns 最新暂存快照。
  */
 export function appendSummaryMutationBatchResult(record: SummaryMutationBatchResultRecord): SummaryMutationStagingSnapshot {
-    const current = mutationStagingStore.get(record.summaryJobId) ?? {
-        summaryJobId: record.summaryJobId,
-        batchResults: [],
-    };
+    const current = appendSummaryMutationStagingSnapshot(record.summaryJobId, {});
     const filtered = current.batchResults.filter((item: SummaryMutationBatchResultRecord): boolean => item.batchId !== record.batchId);
     const nextSnapshot: SummaryMutationStagingSnapshot = {
+        ...current,
         summaryJobId: record.summaryJobId,
         batchResults: [...filtered, record],
     };

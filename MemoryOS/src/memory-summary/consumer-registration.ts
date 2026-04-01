@@ -10,7 +10,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 4,
+        registrationVersion: 5,
         tasks: [
             {
                 taskId: 'memory_embedding',
@@ -65,6 +65,30 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
                 description: '旧聊天处理批次分析',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_style_repair',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '旧聊天处理文案修复',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_takeover_actor_completion',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '旧聊天处理角色补全',
+                backgroundEligible: false,
+            },
+            {
+                taskId: 'memory_content_block_classifier',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 4096,
+                description: '旧聊天内容块兜底分类',
                 backgroundEligible: false,
             },
             {

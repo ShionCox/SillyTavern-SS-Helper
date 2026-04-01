@@ -47,3 +47,10 @@ export { resolveEntriesWorkbenchText } from './entriesLocale';
 export { resolveActorsWorkbenchText } from './actorsWorkbenchLocale';
 export { resolvePreviewWorkbenchText } from './previewWorkbenchLocale';
 export { resolveTakeoverWorkbenchText } from './takeoverWorkbenchLocale';
+export {
+    resolveContentLabKindLabel,
+    resolveContentLabReasonCodeLabel,
+    resolveContentLabRoleLabel,
+    resolveContentLabSourceLabel,
+    resolveContentLabText,
+} from './contentLabLocale';

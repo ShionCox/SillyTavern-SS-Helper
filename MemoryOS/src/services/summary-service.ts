@@ -2,7 +2,6 @@ import { readMemoryLLMApi, runSummaryOrchestrator } from '../memory-summary';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryOSSettings } from '../settings/store';
 import { EntryRepository } from '../repository/entry-repository';
-import { MemoryScoringService } from './memory-scoring-service';
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../types';
 
 /**
@@ -18,12 +17,12 @@ export interface CaptureSummaryFromChatInput {
  * 功能：统一承接总结捕获与总结编排链路。
  */
 export class SummaryService {
+    private readonly chatKey: string;
     private readonly repository: EntryRepository;
-    private readonly scoringService: MemoryScoringService;
 
-    constructor(repository: EntryRepository) {
+    constructor(chatKey: string, repository: EntryRepository) {
+        this.chatKey = String(chatKey ?? '').trim();
         this.repository = repository;
-        this.scoringService = new MemoryScoringService();
     }
 
     /**
@@ -39,22 +38,12 @@ export class SummaryService {
             return null;
         }
         for (const actorHint of Array.isArray(input.actorHints) ? input.actorHints : []) {
-            await this.repository.ensureActorProfile(actorHint);
+            await this.repository.ensureActorProfile({
+                ...actorHint,
+                displayNameSource: 'summary_hint',
+            });
         }
         const settings = readMemoryOSSettings();
-        let effectiveMessages = normalizedMessages;
-        if (settings.scoringServiceEnabled) {
-            const scoringResult = this.scoringService.process({
-                messages: normalizedMessages,
-                source: 'summary_pipeline',
-                knownActorKeys: (input.actorHints ?? []).map((hint) => hint.actorKey),
-            });
-            if (scoringResult.distillationText.length > 0) {
-                effectiveMessages = scoringResult.subBatches.length > 0
-                    ? scoringResult.subBatches[0].messages.map((msg) => ({ role: msg.role, content: msg.content }))
-                    : normalizedMessages;
-            }
-        }
         const llm = readMemoryLLMApi();
         const summaryResult = await runSummaryOrchestrator({
             dependencies: {
@@ -69,7 +58,8 @@ export class SummaryService {
             },
             llm,
             pluginId: MEMORY_OS_PLUGIN_ID,
-            messages: effectiveMessages,
+            chatKey: this.chatKey,
+            messages: normalizedMessages,
             retrievalRulePack: settings.retrievalRulePack,
         });
         return summaryResult.snapshot;

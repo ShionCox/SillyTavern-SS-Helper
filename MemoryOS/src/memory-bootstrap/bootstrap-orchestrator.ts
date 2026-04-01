@@ -1,4 +1,4 @@
-import type { ApplyLedgerMutationBatchResult, LedgerMutation, LedgerMutationBatchContext, MemoryEntry } from '../types';
+import type { ApplyLedgerMutationBatchResult, EnsureActorProfileInput, LedgerMutation, LedgerMutationBatchContext, MemoryEntry } from '../types';
 import type { MemoryLLMApi } from '../memory-summary';
 import type { ColdStartCandidate, ColdStartDocument, ColdStartSourceBundle } from './bootstrap-types';
 import { parseColdStartDocument } from './bootstrap-parser';
@@ -17,6 +17,7 @@ import { readMemoryOSSettings } from '../settings/store';
 import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
 import {
     appendBootstrapStagingSnapshot,
+    loadBootstrapStagingSnapshot,
     clearBootstrapStagingSnapshot,
     saveBootstrapStagingSnapshot,
 } from './bootstrap-staging-store';
@@ -25,11 +26,7 @@ import {
  * 功能：定义冷启动编排依赖。
  */
 export interface BootstrapOrchestratorDependencies {
-    ensureActorProfile(input: {
-        actorKey: string;
-        displayName?: string;
-        memoryStat?: number;
-    }): Promise<unknown>;
+    ensureActorProfile(input: EnsureActorProfileInput): Promise<unknown>;
     applyLedgerMutationBatch(mutations: LedgerMutation[], context: LedgerMutationBatchContext): Promise<ApplyLedgerMutationBatchResult>;
     putWorldProfileBinding(input: {
         primaryProfile: string;
@@ -52,12 +49,14 @@ export interface RunBootstrapOrchestratorInput {
     llm: MemoryLLMApi | null;
     pluginId: string;
     sourceBundle: ColdStartSourceBundle;
+    runId?: string;
 }
 
 /**
  * 功能：定义冷启动编排结果。
  */
 export interface RunBootstrapOrchestratorResult {
+    runId: string;
     ok: boolean;
     reasonCode: string;
     errorMessage?: string;
@@ -89,13 +88,16 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     const settings = readMemoryOSSettings();
     const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
-    const runId = `bootstrap:${Date.now()}`;
+    const runId = String(input.runId ?? '').trim() || `bootstrap:${Date.now()}`;
+    const existingSnapshot = await loadBootstrapStagingSnapshot(runId);
+    const isResuming = Boolean(existingSnapshot && existingSnapshot.status !== 'completed');
     await input.dependencies.appendMutationHistory({
-        action: 'cold_start_started',
+        action: isResuming ? 'cold_start_resumed' : 'cold_start_started',
         payload: {
             reason: input.sourceBundle.reason,
             sourceTextCount: sourceTexts.length,
             architecture: 'phase_4',
+            runId,
         },
     });
     upsertPipelineJobRecord({
@@ -110,21 +112,31 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         createdAt: Date.now(),
         updatedAt: Date.now(),
     });
-    await clearBootstrapStagingSnapshot(runId);
-    await saveBootstrapStagingSnapshot(runId, {
-        runId,
-        status: 'running',
-        coreDocument: null,
-        stateDocument: null,
-        reducedDocument: null,
-        finalizedDocument: null,
-    });
+    if (!isResuming) {
+        await clearBootstrapStagingSnapshot(runId);
+        await saveBootstrapStagingSnapshot(runId, {
+            runId,
+            status: 'running',
+            coreDocument: null,
+            stateDocument: null,
+            reducedDocument: null,
+            finalizedDocument: null,
+        });
+    } else {
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'running',
+        });
+    }
     if (!input.llm) {
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'failed',
+        });
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode: 'llm_unavailable' },
         });
         return {
+            runId,
             ok: false,
             reasonCode: 'llm_unavailable',
             errorMessage: '当前未连接可用的 LLMHub 服务。',
@@ -141,58 +153,72 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         payload: { phase: 'phase1', description: '核心实体与角色抽取' },
     });
     updatePipelineJobPhase(runId, 'extract');
-    const phase1Result = await runBootstrapPhase({
-        llm: input.llm,
-        pluginId: input.pluginId,
-        userDisplayName,
-        phaseName: 'phase1',
-        payload: {
-            sourceBundle: limitedPhase1Payload,
-            actorKeyHints,
+    const phase1Result = existingSnapshot?.coreDocument
+        ? { ok: true, data: existingSnapshot.coreDocument, reasonCode: 'resumed_from_phase1' }
+        : await runBootstrapPhase({
+            llm: input.llm,
+            pluginId: input.pluginId,
             userDisplayName,
-        },
-    });
+            phaseName: 'phase1',
+            payload: {
+                sourceBundle: limitedPhase1Payload,
+                actorKeyHints,
+                userDisplayName,
+            },
+        });
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: { phase: 'phase1', ok: phase1Result.ok, reasonCode: phase1Result.reasonCode },
     });
     const phase1Document = parseColdStartDocument(phase1Result.data);
-    await appendBootstrapStagingSnapshot(runId, {
-        coreDocument: phase1Document,
-    });
+    if (!existingSnapshot?.coreDocument) {
+        await appendBootstrapStagingSnapshot(runId, {
+            coreDocument: phase1Document,
+        });
+    }
 
     // ── Phase 2：关系与状态转移抽取 ──────────────────
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_started',
         payload: { phase: 'phase2', description: '关系与状态转移抽取' },
     });
-    const phase2Result = await runBootstrapPhase({
-        llm: input.llm,
-        pluginId: input.pluginId,
-        userDisplayName,
-        phaseName: 'phase2',
-        payload: {
-            sourceBundle: limitedPhase2Payload,
-            actorKeyHints,
+    const phase2Result = existingSnapshot?.stateDocument
+        ? { ok: true, data: existingSnapshot.stateDocument, reasonCode: 'resumed_from_phase2' }
+        : await runBootstrapPhase({
+            llm: input.llm,
+            pluginId: input.pluginId,
             userDisplayName,
-        },
-    });
+            phaseName: 'phase2',
+            payload: {
+                sourceBundle: limitedPhase2Payload,
+                actorKeyHints,
+                userDisplayName,
+            },
+        });
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: { phase: 'phase2', ok: phase2Result.ok, reasonCode: phase2Result.reasonCode },
     });
     const phase2Document = parseColdStartDocument(phase2Result.data);
-    await appendBootstrapStagingSnapshot(runId, {
-        stateDocument: phase2Document,
-    });
+    if (!existingSnapshot?.stateDocument) {
+        await appendBootstrapStagingSnapshot(runId, {
+            stateDocument: phase2Document,
+        });
+    }
 
     if (!phase1Result.ok || !phase2Result.ok) {
         const reasonCode = phase1Result.reasonCode || phase2Result.reasonCode || 'cold_start_failed';
+        const failedPhase = !phase1Result.ok ? 'phase1' : 'phase2';
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'failed',
+            failedPhase,
+        });
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
-            payload: { reasonCode, failedPhase: !phase1Result.ok ? 'phase1' : 'phase2' },
+            payload: { reasonCode, failedPhase },
         });
         return {
+            runId,
             ok: false,
             reasonCode,
             errorMessage: reasonCode,
@@ -205,26 +231,38 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
         payload: { phase: 'phase3', description: 'bootstrap candidates 去重、合并、校验' },
     });
     updatePipelineJobPhase(runId, 'reduce');
-    const reduced = reduceBootstrapDocuments([
-        phase1Document,
-        phase2Document,
-    ].filter(Boolean) as ColdStartDocument[]);
-    if (!reduced) {
+    const normalizedDocument = existingSnapshot?.reducedDocument
+        ?? (() => {
+            const reduced = reduceBootstrapDocuments([
+                phase1Document,
+                phase2Document,
+            ].filter(Boolean) as ColdStartDocument[]);
+            if (!reduced) {
+                return null;
+            }
+            return normalizeColdStartNarrativeDocument(resolveBootstrapConflicts(reduced), userDisplayName);
+        })();
+    if (!normalizedDocument) {
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'failed',
+            failedPhase: 'phase3',
+        });
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode: 'invalid_cold_start_document', failedPhase: 'phase3' },
         });
         return {
+            runId,
             ok: false,
             reasonCode: 'invalid_cold_start_document',
             errorMessage: '冷启动返回内容无法通过结构校验。',
         };
     }
-
-    const normalizedDocument = normalizeColdStartNarrativeDocument(resolveBootstrapConflicts(reduced), userDisplayName);
-    await appendBootstrapStagingSnapshot(runId, {
-        reducedDocument: normalizedDocument,
-    });
+    if (!existingSnapshot?.reducedDocument) {
+        await appendBootstrapStagingSnapshot(runId, {
+            reducedDocument: normalizedDocument,
+        });
+    }
     const finalized = finalizeBootstrapDocument(normalizedDocument, input.sourceBundle);
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
@@ -238,11 +276,16 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     });
 
     if (finalized.candidates.length <= 0) {
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'failed',
+            failedPhase: 'phase3',
+        });
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: { reasonCode: 'empty_cold_start_candidates', failedPhase: 'phase3' },
         });
         return {
+            runId,
             ok: false,
             reasonCode: 'empty_cold_start_candidates',
             errorMessage: '冷启动没有提取出可确认的候选记忆。',
@@ -256,10 +299,17 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     });
     updatePipelineJobPhase(runId, 'apply');
     const actorCardValidation = validateRelationshipActorCards(normalizedDocument, input.sourceBundle);
-    const reconcileResult = reconcileBootstrapDocument(normalizedDocument);
-    await appendBootstrapStagingSnapshot(runId, {
-        finalizedDocument: reconcileResult.document,
-    });
+    const reconcileResult = existingSnapshot?.finalizedDocument
+        ? {
+            document: existingSnapshot.finalizedDocument,
+            fixCount: 0,
+        }
+        : reconcileBootstrapDocument(normalizedDocument);
+    if (!existingSnapshot?.finalizedDocument) {
+        await appendBootstrapStagingSnapshot(runId, {
+            finalizedDocument: reconcileResult.document,
+        });
+    }
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
         payload: {
@@ -271,6 +321,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     });
 
     if (!actorCardValidation.ok) {
+        await appendBootstrapStagingSnapshot(runId, {
+            status: 'failed',
+            failedPhase: 'phase4',
+        });
         await input.dependencies.appendMutationHistory({
             action: 'cold_start_failed',
             payload: {
@@ -280,13 +334,20 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             },
         });
         return {
+            runId,
             ok: false,
             reasonCode: 'relationship_actor_card_missing',
             errorMessage: '冷启动关系中引用了未创建角色卡的对象。',
         };
     }
 
+    await appendBootstrapStagingSnapshot(runId, {
+        status: 'completed',
+        failedPhase: undefined,
+    });
+
     return {
+        runId,
         ok: true,
         reasonCode: 'ok',
         candidates: finalized.candidates,
@@ -323,6 +384,7 @@ export async function applyBootstrapCandidates(input: {
             await input.dependencies.ensureActorProfile({
                 actorKey,
                 displayName: resolveBootstrapActorDisplayName(actorKey, actorDisplayNameMap),
+                displayNameSource: 'bootstrap',
             });
         }
     }

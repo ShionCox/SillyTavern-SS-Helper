@@ -1,14 +1,15 @@
 export { detectTakeoverNeeded } from './takeover-detector';
-export { buildTakeoverPlan, buildTakeoverBatches, normalizeTakeoverRange } from './takeover-planner';
+export { buildTakeoverPlan, buildTakeoverBatches, normalizeTakeoverRange, validateTakeoverBatchCoverage } from './takeover-planner';
 export { runTakeoverBaseline } from './takeover-baseline';
 export { runTakeoverActiveSnapshot } from './takeover-active-snapshot';
-export { runTakeoverBatch } from './takeover-batch-runner';
+export { runTakeoverBatch, assembleTakeoverBatchPromptAssembly } from './takeover-batch-runner';
 export { admitTakeoverBatchResult } from './takeover-batch-admission';
 export { runTakeoverConsolidation } from './takeover-consolidator';
 export {
     buildTakeoverSectionDigests,
     reduceTakeoverActors,
     reduceTakeoverEntities,
+    reduceTakeoverFacts,
     reduceTakeoverRelationships,
     reduceTakeoverTasks,
     reduceTakeoverWorld,
@@ -21,3 +22,8 @@ export { appendTakeoverDiagnostics } from './takeover-diagnostics';
 export { runTakeoverScheduler, buildProgressSnapshot } from './takeover-scheduler';
 export { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
 export { buildTakeoverPreviewEstimate, estimateChatMessageTokens, TAKEOVER_TOKEN_WARNING_THRESHOLD } from './takeover-preview';
+export { buildTakeoverStructuredTaskRequest } from './takeover-llm';
+export { buildFloorRecord, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
+export { buildFloorRecords } from './content-block-pipeline';
+export { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
+export { runTakeoverRepairService } from './takeover-repair-service';

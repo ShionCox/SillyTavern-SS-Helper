@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const relationshipRows = new Map<string, Record<string, unknown>>();
+const actorProfileRows = new Map<string, Record<string, unknown>>();
 let bulkPutRows: Record<string, unknown>[] = [];
 
 vi.mock('../../SDK/tavern', (): Record<string, unknown> => {
@@ -34,6 +35,17 @@ vi.mock('../src/db/db', (): Record<string, unknown> => {
                     })),
                 })),
             },
+            actor_memory_profiles: {
+                get: vi.fn(async (key: [string, string]) => actorProfileRows.get(`${key[0]}::${key[1]}`)),
+                put: vi.fn(async (row: Record<string, unknown>) => {
+                    actorProfileRows.set(`${String(row.chatKey)}::${String(row.actorKey)}`, row);
+                }),
+                where: vi.fn(() => ({
+                    equals: vi.fn((chatKey: string) => ({
+                        toArray: vi.fn(async () => [...actorProfileRows.values()].filter((row: Record<string, unknown>): boolean => String(row.chatKey) === chatKey)),
+                    })),
+                })),
+            },
             transaction: vi.fn(async (_mode: string, _tables: unknown[], callback: () => Promise<void>) => {
                 await callback();
             }),
@@ -50,6 +62,7 @@ import { EntryRepository } from '../src/repository/entry-repository';
 describe('entry repository hardening', (): void => {
     beforeEach((): void => {
         relationshipRows.clear();
+        actorProfileRows.clear();
         bulkPutRows = [];
     });
 
@@ -88,5 +101,22 @@ describe('entry repository hardening', (): void => {
         const expectedId = buildRelationshipRecordId('chat-1', 'actor_alice', 'user', '朋友');
         expect(saved.relationshipId).toBe(expectedId);
         expect(String(bulkPutRows[0]?.relationshipId ?? '')).toBe(expectedId);
+    });
+
+    it('ensureActorProfile 不会让低质量兜底名覆盖已存在正式名', async (): Promise<void> => {
+        const repository = new EntryRepository('chat-1');
+
+        await repository.ensureActorProfile({
+            actorKey: 'actor_heying',
+            displayName: '何盈',
+            displayNameSource: 'takeover_actor_card',
+        });
+        await repository.ensureActorProfile({
+            actorKey: 'actor_heying',
+            displayName: 'heying',
+            displayNameSource: 'fallback',
+        });
+
+        expect(String(actorProfileRows.get('chat-1::actor_heying')?.displayName ?? '')).toBe('何盈');
     });
 });

@@ -81,6 +81,13 @@ export class MemoryRetrievalService {
             {
                 actorProfiles: input.actorProfiles,
                 recentContext: input.recentContext,
+                onTrace: (record): void => {
+                    input.onProgress?.({
+                        stage: `trace_${String(record.stage ?? '').trim() || 'unknown'}`,
+                        title: String(record.title ?? '').trim() || '检索处理中',
+                        message: String(record.message ?? '').trim() || '正在执行检索主链。',
+                    });
+                },
             },
         );
 
@@ -119,6 +126,7 @@ export class MemoryRetrievalService {
                 queryContext,
                 contextRoute: result.contextRoute,
                 overrideFinalTopK: settings.vectorFinalTopK,
+                onProgress: input.onProgress,
             });
 
             finalItems = hybridResult.items;

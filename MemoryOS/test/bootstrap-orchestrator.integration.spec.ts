@@ -231,4 +231,99 @@ describe('runBootstrapOrchestrator integration', () => {
         expect(result.ok).toBe(false);
         expect(result.reasonCode).toBe('relationship_actor_card_missing');
     });
+
+    it('第二阶段失败后会复用已完成的第一阶段结果继续执行', async () => {
+        const llmRunTask = vi
+            .fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    schemaVersion: '1.0.0',
+                    identity: {
+                        actorKey: 'char_erin',
+                        displayName: 'Erin',
+                        aliases: [],
+                        identityFacts: ['Agent'],
+                        originFacts: ['North'],
+                        traits: ['Calm'],
+                    },
+                    actorCards: [],
+                    worldBase: [],
+                    relationships: [],
+                    memoryRecords: [],
+                },
+            })
+            .mockResolvedValueOnce({
+                ok: false,
+                reasonCode: 'cold_start_failed',
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                data: {
+                    schemaVersion: '1.0.0',
+                    identity: {
+                        actorKey: 'char_erin',
+                        displayName: 'Erin',
+                        aliases: [],
+                        identityFacts: ['Agent'],
+                        originFacts: ['North'],
+                        traits: ['Calm'],
+                    },
+                    actorCards: [],
+                    worldBase: [],
+                    relationships: [
+                        {
+                            sourceActorKey: 'char_erin',
+                            targetActorKey: 'user',
+                            participants: ['char_erin', 'user'],
+                            relationTag: '陌生人',
+                            state: '对用户保持观察',
+                            summary: '艾琳持续观察主角。',
+                            trust: 0.2,
+                            affection: 0.1,
+                            tension: 0.3,
+                        },
+                    ],
+                    memoryRecords: [],
+                },
+            });
+        const dependencies = {
+            ensureActorProfile: vi.fn(async () => ({})),
+            applyLedgerMutationBatch: vi.fn(async () => ({
+                saved: [],
+                invalidated: [],
+                deleted: [],
+                skipped: [],
+            })),
+            putWorldProfileBinding: vi.fn(async () => ({})),
+            appendMutationHistory: vi.fn(async () => undefined),
+        };
+
+        const firstResult = await runBootstrapOrchestrator({
+            dependencies,
+            llm: {
+                registerConsumer: () => {},
+                unregisterConsumer: () => {},
+                runTask: llmRunTask,
+            },
+            pluginId: 'MemoryOS',
+            sourceBundle: buildBundle(),
+            runId: 'bootstrap:test:resume',
+        });
+        const secondResult = await runBootstrapOrchestrator({
+            dependencies,
+            llm: {
+                registerConsumer: () => {},
+                unregisterConsumer: () => {},
+                runTask: llmRunTask,
+            },
+            pluginId: 'MemoryOS',
+            sourceBundle: buildBundle(),
+            runId: 'bootstrap:test:resume',
+        });
+
+        expect(firstResult.ok).toBe(false);
+        expect(secondResult.ok).toBe(true);
+        expect(llmRunTask).toHaveBeenCalledTimes(3);
+    });
 });

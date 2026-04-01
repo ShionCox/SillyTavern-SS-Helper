@@ -1,29 +1,48 @@
 import {
+    buildTakeoverBatches,
     buildProgressSnapshot,
     buildTakeoverPlan,
     buildTakeoverPreviewEstimate,
+    buildTakeoverStructuredTaskRequest,
     collectTakeoverSourceBundle,
     detectTakeoverNeeded,
     runTakeoverConsolidation,
     runTakeoverScheduler,
+    assembleTakeoverBatchPromptAssembly,
 } from '../memory-takeover';
 import {
+    readMemoryOSChatState,
     loadMemoryTakeoverBatchResults,
     loadMemoryTakeoverPreview,
     readMemoryTakeoverPlan,
     saveMemoryTakeoverPreview,
+    writeMemoryOSChatState,
     writeMemoryTakeoverPlan,
 } from '../db/db';
 import { readMemoryLLMApi } from '../memory-summary';
 import { readMemoryOSSettings } from '../settings/store';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import type { MemoryLLMApi } from '../memory-summary';
+import {
+    applyContentLabSettings,
+    DEFAULT_CONTENT_LAB_SETTINGS,
+    normalizeContentLabSettings,
+    type ContentLabSettings,
+} from '../config/content-tag-registry';
+import {
+    buildFloorRecords,
+    classifyFloorRecordsWithAI,
+    sliceTakeoverMessages,
+    type RawFloorRecord,
+} from '../memory-takeover';
 import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBatchResult,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverCreateInput,
     MemoryTakeoverDetectionResult,
+    MemoryTakeoverPayloadPreview,
+    MemoryTakeoverPayloadPreviewBatch,
     MemoryTakeoverPlan,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
@@ -50,6 +69,7 @@ export interface TakeoverSchedulerExecutionInput {
     takeoverId?: string;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
+    skipInitialWait?: boolean;
     existingKnownEntities: TakeoverKnownEntities;
     applyConsolidation: (result: MemoryTakeoverConsolidationResult) => Promise<void>;
 }
@@ -64,6 +84,32 @@ export interface TakeoverConsolidationExecutionInput {
 }
 
 /**
+ * 功能：定义指定失败批次重试输入。
+ */
+export interface TakeoverRetryExecutionInput extends Omit<TakeoverSchedulerExecutionInput, 'takeoverId' | 'currentFloorCount'> {
+    batchId?: string;
+}
+
+/**
+ * 功能：定义内容实验室楼层预览输入。
+ */
+export interface ContentLabFloorPreviewInput {
+    floor: number;
+    llm?: MemoryLLMApi | null;
+    pluginId?: string;
+}
+
+/**
+ * 功能：定义内容实验室范围预览输入。
+ */
+export interface ContentLabRangePreviewInput {
+    startFloor: number;
+    endFloor: number;
+    llm?: MemoryLLMApi | null;
+    pluginId?: string;
+}
+
+/**
  * 功能：统一承接旧聊天接管链路的纯业务编排。
  */
 export class TakeoverService {
@@ -71,6 +117,92 @@ export class TakeoverService {
 
     constructor(chatKey: string) {
         this.chatKey = String(chatKey ?? '').trim();
+    }
+
+    /**
+     * 功能：读取内容实验室配置并同步到运行时。
+     * @returns 当前配置。
+     */
+    async readContentLabSettings(): Promise<ContentLabSettings> {
+        const stateRow = await readMemoryOSChatState(this.chatKey);
+        const state = stateRow?.state && typeof stateRow.state === 'object'
+            ? stateRow.state as Record<string, unknown>
+            : {};
+        const settings = normalizeContentLabSettings((state.contentLab ?? DEFAULT_CONTENT_LAB_SETTINGS) as Partial<ContentLabSettings>);
+        return applyContentLabSettings(settings);
+    }
+
+    /**
+     * 功能：保存内容实验室配置并同步到运行时。
+     * @param patch 配置补丁。
+     * @returns 保存后的配置。
+     */
+    async saveContentLabSettings(patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> {
+        const current = await this.readContentLabSettings();
+        const merged = normalizeContentLabSettings({
+            ...current,
+            ...patch,
+            tagRegistry: patch.tagRegistry ?? current.tagRegistry,
+            unknownTagPolicy: patch.unknownTagPolicy ?? current.unknownTagPolicy,
+            classifierToggles: patch.classifierToggles ?? current.classifierToggles,
+            enableAIClassifier: patch.enableAIClassifier ?? current.enableAIClassifier,
+        });
+        const stateRow = await readMemoryOSChatState(this.chatKey);
+        const state = stateRow?.state && typeof stateRow.state === 'object'
+            ? stateRow.state as Record<string, unknown>
+            : {};
+        await writeMemoryOSChatState(this.chatKey, {
+            ...state,
+            contentLab: merged,
+        });
+        return applyContentLabSettings(merged);
+    }
+
+    /**
+     * 功能：预览单层内容块拆分结果。
+     * @param input 预览输入。
+     * @returns 指定楼层的拆分结果。
+     */
+    async previewFloorContentBlocks(input: ContentLabFloorPreviewInput): Promise<RawFloorRecord> {
+        const floor = Math.max(1, Math.trunc(Number(input.floor) || 0));
+        if (!floor) {
+            throw new Error('invalid_floor');
+        }
+        const records = await this.previewFloorRangeContentBlocks({
+            startFloor: floor,
+            endFloor: floor,
+            llm: input.llm,
+            pluginId: input.pluginId,
+        });
+        const record = records[0];
+        if (!record) {
+            throw new Error(`floor_not_found:${floor}`);
+        }
+        return record;
+    }
+
+    /**
+     * 功能：预览指定范围的内容块拆分结果。
+     * @param input 范围输入。
+     * @returns 楼层记录列表。
+     */
+    async previewFloorRangeContentBlocks(input: ContentLabRangePreviewInput): Promise<RawFloorRecord[]> {
+        const settings = await this.readContentLabSettings();
+        const sourceBundle = collectTakeoverSourceBundle();
+        const range = {
+            startFloor: Math.max(1, Math.trunc(Number(input.startFloor) || 1)),
+            endFloor: Math.max(Math.trunc(Number(input.startFloor) || 1), Math.trunc(Number(input.endFloor) || Number(input.startFloor) || 1)),
+        };
+        const messages = sliceTakeoverMessages(sourceBundle, range);
+        let records = buildFloorRecords(messages);
+        if (settings.enableAIClassifier) {
+            records = await classifyFloorRecordsWithAI({
+                llm: input.llm ?? readMemoryLLMApi(),
+                pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
+                floorRecords: records,
+            });
+        }
+        return records;
     }
 
     /**
@@ -94,12 +226,15 @@ export class TakeoverService {
      * @returns 预估结果。
      */
     async previewEstimate(config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPreviewEstimate> {
+        await this.readContentLabSettings();
         const settings = readMemoryOSSettings();
         const sourceBundle = collectTakeoverSourceBundle();
         return buildTakeoverPreviewEstimate({
             chatKey: this.chatKey,
             chatId: this.chatKey,
             totalFloors: Math.max(1, sourceBundle.totalFloors),
+            llm: readMemoryLLMApi(),
+            pluginId: MEMORY_OS_PLUGIN_ID,
             defaults: {
                 detectMinFloors: settings.takeoverDetectMinFloors,
                 recentFloors: settings.takeoverDefaultRecentFloors,
@@ -112,6 +247,113 @@ export class TakeoverService {
             config,
             sourceBundle,
         });
+    }
+
+    /**
+     * 功能：预览按当前配置实际会发送给 AI 的旧聊天内容。
+     * @param config 接管配置。
+     * @returns 实际送模内容预览。
+     */
+    async previewActualTakeoverPayload(config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPayloadPreview> {
+        await this.readContentLabSettings();
+        const settings = readMemoryOSSettings();
+        const sourceBundle = collectTakeoverSourceBundle();
+        const plan = buildTakeoverPlan({
+            chatKey: this.chatKey,
+            chatId: this.chatKey,
+            takeoverId: `takeover:payload_preview:${this.chatKey}`,
+            totalFloors: Math.max(1, sourceBundle.totalFloors),
+            defaults: {
+                detectMinFloors: settings.takeoverDetectMinFloors,
+                recentFloors: settings.takeoverDefaultRecentFloors,
+                batchSize: settings.takeoverDefaultBatchSize,
+                prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
+                autoContinue: settings.takeoverDefaultAutoContinue,
+                autoConsolidate: settings.takeoverDefaultAutoConsolidate,
+                pauseOnError: settings.takeoverDefaultPauseOnError,
+            },
+            config,
+        });
+        const batches = buildTakeoverBatches({
+            takeoverId: plan.takeoverId,
+            range: plan.range,
+            activeWindow: plan.activeWindow,
+            batchSize: plan.batchSize,
+        });
+        const historyBatches = batches.filter((batch) => batch.category === 'history');
+        const previewBatches: MemoryTakeoverPayloadPreviewBatch[] = [];
+
+        for (const batch of batches) {
+            const sourceMessages = sliceTakeoverMessages(sourceBundle, batch.range);
+            const assembly = await assembleTakeoverBatchPromptAssembly({
+                llm: readMemoryLLMApi(),
+                pluginId: MEMORY_OS_PLUGIN_ID,
+                messages: sourceMessages,
+            });
+            const request = await buildTakeoverStructuredTaskRequest({
+                systemSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SYSTEM' : 'TAKEOVER_BATCH_SYSTEM',
+                schemaSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SCHEMA' : 'TAKEOVER_BATCH_SCHEMA',
+                sampleSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_OUTPUT_SAMPLE' : 'TAKEOVER_BATCH_OUTPUT_SAMPLE',
+                payload: batch.category === 'active'
+                    ? {
+                        range: batch.range,
+                        messages: assembly.extractionMessages,
+                        hintContext: assembly.channels.hintText || undefined,
+                    }
+                    : {
+                        batchId: batch.batchId,
+                        batchCategory: batch.category,
+                        range: batch.range,
+                        knownContext: {
+                            actorHints: [],
+                            stableFacts: [],
+                            relationState: [],
+                            taskState: [],
+                            worldState: [],
+                            knownEntities: {
+                                actors: [],
+                                organizations: [],
+                                cities: [],
+                                nations: [],
+                                locations: [],
+                                tasks: [],
+                                worldStates: [],
+                            },
+                            updateHint: '',
+                        },
+                        messages: assembly.extractionMessages,
+                        hintContext: assembly.channels.hintText || undefined,
+                    },
+            });
+            const historyIndex = historyBatches.findIndex((item) => item.batchId === batch.batchId);
+            previewBatches.push({
+                batchId: batch.batchId,
+                batchIndex: batch.batchIndex,
+                category: batch.category,
+                label: batch.category === 'active'
+                    ? '最近快照'
+                    : `第 ${Math.max(1, historyIndex + 1)} / ${Math.max(1, historyBatches.length || 1)} 批`,
+                range: batch.range,
+                sourceFloors: sourceMessages.map((message) => message.floor),
+                sentFloors: assembly.extractionMessages.map((message) => message.floor),
+                hintText: assembly.channels.hintText,
+                excludedSummary: assembly.channels.excludedSummary,
+                floorManifest: assembly.floorRecords,
+                requestMessages: request.messages,
+            });
+        }
+
+        return {
+            mode: plan.mode,
+            totalFloors: plan.totalFloors,
+            range: plan.range,
+            activeWindow: plan.activeWindow,
+            batchSize: plan.batchSize,
+            useActiveSnapshot: plan.useActiveSnapshot,
+            activeSnapshotFloors: plan.activeSnapshotFloors,
+            totalBatches: batches.length,
+            batches: previewBatches,
+        };
     }
 
     /**
@@ -204,6 +446,7 @@ export class TakeoverService {
      * @returns 最新进度快照。
      */
     async startTakeover(input: TakeoverSchedulerExecutionInput): Promise<MemoryTakeoverProgressSnapshot> {
+        await this.readContentLabSettings();
         const existingPlan = await this.readPlan();
         if (existingPlan && (!input.takeoverId || existingPlan.takeoverId === input.takeoverId)) {
             return this.runPlan(existingPlan, input);
@@ -240,6 +483,7 @@ export class TakeoverService {
      * @returns 最新进度快照；没有计划时返回空。
      */
     async resumeTakeover(input: Omit<TakeoverSchedulerExecutionInput, 'takeoverId' | 'currentFloorCount'>): Promise<MemoryTakeoverProgressSnapshot | null> {
+        await this.readContentLabSettings();
         const plan = await this.readPlan();
         if (!plan) {
             return null;
@@ -248,6 +492,32 @@ export class TakeoverService {
             ...plan,
             status: 'idle',
             pausedAt: undefined,
+            updatedAt: Date.now(),
+        };
+        await writeMemoryTakeoverPlan(this.chatKey, nextPlan);
+        return this.runPlan(nextPlan, input);
+    }
+
+    /**
+     * 功能：从指定失败批次继续执行。
+     * @param input 重试输入。
+     * @returns 最新进度快照；没有计划时返回空。
+     */
+    async retryFailedBatch(input: TakeoverRetryExecutionInput): Promise<MemoryTakeoverProgressSnapshot | null> {
+        await this.readContentLabSettings();
+        const plan = await this.readPlan();
+        if (!plan) {
+            return null;
+        }
+        const requestedBatchId = String(input.batchId ?? '').trim() || String(plan.failedBatchIds[0] ?? '').trim();
+        if (!requestedBatchId) {
+            return this.resumeTakeover(input);
+        }
+        const nextPlan: MemoryTakeoverPlan = {
+            ...plan,
+            status: 'idle',
+            pausedAt: undefined,
+            requestedRetryBatchId: requestedBatchId,
             updatedAt: Date.now(),
         };
         await writeMemoryTakeoverPlan(this.chatKey, nextPlan);
@@ -319,6 +589,7 @@ export class TakeoverService {
             plan,
             llm: input.llm ?? readMemoryLLMApi(),
             pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
+            skipInitialWait: input.skipInitialWait,
             existingKnownEntities: input.existingKnownEntities,
             applyConsolidation: input.applyConsolidation,
         });

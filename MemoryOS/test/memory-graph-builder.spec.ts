@@ -122,4 +122,142 @@ describe('buildTakeoverMemoryGraph', () => {
         expect(placeholderNode?.sourceKinds).toContain('unresolved_placeholder');
         expect(placeholderNode?.reasonCodes).toContain('unresolved_reference');
     });
+
+    it('同 compareKey 的整合实体卡与批次实体卡只生成一个节点', () => {
+        const graph = buildTakeoverMemoryGraph(buildProgressSnapshot({
+            consolidation: {
+                takeoverId: 'takeover-entity-merge',
+                chapterDigestIndex: [],
+                actorCards: [],
+                relationships: [],
+                entityCards: [{
+                    entityType: 'location',
+                    compareKey: 'ck:v2:location:半山腰旧庙:老岫村',
+                    title: '半山腰旧庙',
+                    aliases: ['旧庙'],
+                    summary: '整合结果里的旧庙',
+                    confidence: 0.8,
+                    canonicalName: '半山腰旧庙',
+                    fields: {
+                        region: '半山腰',
+                    },
+                }],
+                entityTransitions: [],
+                longTermFacts: [],
+                relationState: [],
+                taskState: [],
+                worldState: {},
+                activeSnapshot: null,
+                dedupeStats: {
+                    totalFacts: 0,
+                    dedupedFacts: 0,
+                    relationUpdates: 0,
+                    taskUpdates: 0,
+                    worldUpdates: 0,
+                },
+                conflictStats: {
+                    unresolvedFacts: 0,
+                    unresolvedRelations: 0,
+                    unresolvedTasks: 0,
+                    unresolvedWorldStates: 0,
+                    unresolvedEntities: 0,
+                },
+                generatedAt: 1,
+            },
+            batchResults: [{
+                takeoverId: 'takeover-entity-merge',
+                batchId: 'batch-entity-merge',
+                summary: '测试',
+                actorCards: [],
+                relationships: [],
+                entityCards: [
+                    {
+                        entityType: 'location',
+                        entityKey: 'entity:location:hillside_old_temple',
+                        compareKey: 'ck:v2:location:半山腰旧庙:老岫村',
+                        title: '半山腰旧庙',
+                        aliases: [],
+                        summary: '批次结果里的旧庙',
+                        confidence: 0.95,
+                        canonicalName: '半山腰旧庙',
+                        fields: {
+                            status: '空置',
+                        },
+                    },
+                ],
+                entityTransitions: [],
+                stableFacts: [],
+                relationTransitions: [],
+                taskTransitions: [],
+                worldStateChanges: [],
+                openThreads: [],
+                chapterTags: [],
+                sourceRange: { startFloor: 1, endFloor: 1 },
+                generatedAt: 1,
+            }],
+        }));
+
+        const duplicatedNodes = graph.nodes.filter((node) => node.type === 'location' && node.label === '半山腰旧庙');
+
+        expect(duplicatedNodes).toHaveLength(1);
+        expect(duplicatedNodes[0]?.id).toBe('entity:location:hillside_old_temple');
+    });
+
+    it('同名地点和世界状态仍保留两个节点，并给世界状态补语义后缀', () => {
+        const graph = buildTakeoverMemoryGraph(buildProgressSnapshot({
+            batchResults: [{
+                takeoverId: 'takeover-world-state',
+                batchId: 'batch-world-state',
+                summary: '测试',
+                actorCards: [],
+                relationships: [],
+                entityCards: [
+                    {
+                        entityType: 'location',
+                        entityKey: 'entity:location:hillside_old_temple',
+                        compareKey: 'ck:v2:location:半山腰旧庙:老岫村',
+                        title: '半山腰旧庙',
+                        aliases: [],
+                        summary: '地点节点',
+                        confidence: 0.9,
+                        fields: {},
+                    },
+                ],
+                entityTransitions: [],
+                stableFacts: [],
+                relationTransitions: [],
+                taskTransitions: [],
+                worldStateChanges: [
+                    {
+                        key: '半山腰旧庙',
+                        value: '守庙人已亡，只剩遗痕与空屋',
+                        entityKey: 'entity:world_state:old_temple_vacant',
+                        compareKey: 'ck:v2:world_global_state:半山腰旧庙空置:老岫村',
+                        summary: '状态节点',
+                        canonicalName: '半山腰旧庙空置',
+                        bindings: {
+                            actors: [],
+                            organizations: [],
+                            cities: [],
+                            locations: ['entity:location:hillside_old_temple'],
+                            nations: [],
+                            tasks: [],
+                            events: [],
+                        },
+                        reasonCodes: [],
+                    },
+                ],
+                openThreads: [],
+                chapterTags: [],
+                sourceRange: { startFloor: 1, endFloor: 1 },
+                generatedAt: 1,
+            }],
+        }));
+
+        const locationNode = graph.nodes.find((node) => node.id === 'entity:location:hillside_old_temple');
+        const worldStateNode = graph.nodes.find((node) => node.id === 'entity:world_state:old_temple_vacant');
+
+        expect(locationNode?.label).toBe('半山腰旧庙');
+        expect(worldStateNode?.label).toBe('半山腰旧庙（状态）');
+    });
 });

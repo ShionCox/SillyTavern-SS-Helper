@@ -9,6 +9,7 @@ import {
     type WorkbenchState,
 } from './shared';
 import type { MemoryTakeoverConsolidationResult } from '../../types';
+import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 
 /**
  * 功能：渲染旧聊天接管视图。
@@ -48,10 +49,16 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                         <input class="stx-memory-workbench__input" id="stx-memory-takeover-range-end" type="number" min="1" placeholder="结束楼层" value="${escapeAttr(state.takeoverRangeEnd)}" style="width: 110px;">
                     ` : ''}
                     <input class="stx-memory-workbench__input" id="stx-memory-takeover-batch-size" type="number" min="1" placeholder="每批楼层数" value="${escapeAttr(state.takeoverBatchSize)}" style="width: 120px;">
-                    <label class="stx-memory-workbench__checkbox" style="gap:8px;">
-                        <input id="stx-memory-takeover-use-active-snapshot" type="checkbox"${state.takeoverUseActiveSnapshot ? ' checked' : ''}>
-                        使用最近快照
-                    </label>
+                    <div class="stx-memory-workbench__checkbox-row">
+                        ${buildSharedBoxCheckbox({
+                            id: 'stx-memory-takeover-use-active-snapshot',
+                            appearance: 'check',
+                            inputAttributes: {
+                                checked: state.takeoverUseActiveSnapshot,
+                            },
+                        })}
+                        <label for="stx-memory-takeover-use-active-snapshot">使用最近快照</label>
+                    </div>
                     ${state.takeoverUseActiveSnapshot ? `
                         <input class="stx-memory-workbench__input" id="stx-memory-takeover-active-snapshot-floors" type="number" min="1" placeholder="快照层数" value="${escapeAttr(state.takeoverActiveSnapshotFloors)}" style="width: 120px;">
                     ` : ''}

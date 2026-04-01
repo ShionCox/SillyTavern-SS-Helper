@@ -17,6 +17,60 @@ export interface MemoryTakeoverRange {
 }
 
 /**
+ * 功能：定义接管源文本分段类型。
+ */
+export type TakeoverSourceSegmentKind =
+    | 'story_narrative'
+    | 'story_dialogue'
+    | 'meta_analysis'
+    | 'instructional'
+    | 'tool_artifact'
+    | 'thought_like';
+
+/**
+ * 功能：定义单段接管源文本。
+ */
+export interface TakeoverSourceSegment {
+    kind: TakeoverSourceSegmentKind;
+    text: string;
+    sourceFloor: number;
+    confidence: number;
+}
+
+/**
+ * 功能：定义批次楼层内容块记录。
+ */
+export interface MemoryTakeoverFloorBlockRecord {
+    blockId: string;
+    rawTagName?: string;
+    rawText: string;
+    startOffset: number;
+    endOffset: number;
+    resolvedKind: string;
+    includeInPrimaryExtraction: boolean;
+    includeAsHint: boolean;
+    allowActorPromotion: boolean;
+    allowRelationPromotion: boolean;
+    reasonCodes: string[];
+}
+
+/**
+ * 功能：定义批次楼层 manifest 记录。
+ */
+export interface MemoryTakeoverFloorManifestRecord {
+    floor: number;
+    sourceFloor?: number;
+    originalText: string;
+    originalTextSource?: string;
+    originalRole: 'user' | 'assistant' | 'system' | 'tool' | 'unknown';
+    includedInBatch: true;
+    parsedBlocks: MemoryTakeoverFloorBlockRecord[];
+    hasPrimaryStory: boolean;
+    hasHintOnly: boolean;
+    hasExcludedOnly: boolean;
+}
+
+/**
  * 功能：定义接管任务配置。
  */
 export interface MemoryTakeoverPlan {
@@ -41,6 +95,7 @@ export interface MemoryTakeoverPlan {
     completedBatchIds: string[];
     failedBatchIds: string[];
     isolatedBatchIds: string[];
+    requestedRetryBatchId?: string;
     lastError?: string;
     lastCheckpointAt?: number;
     completedAt?: number;
@@ -171,6 +226,55 @@ export interface MemoryTakeoverActorCardCandidate {
 }
 
 /**
+ * 功能：定义候选角色提及状态。
+ */
+export type MemoryTakeoverCandidateActorStatus = 'candidate' | 'promoted' | 'rejected';
+
+/**
+ * 功能：定义候选角色提及记录。
+ */
+export interface MemoryTakeoverCandidateActorMention {
+    chatKey?: string;
+    actorKey?: string;
+    name: string;
+    aliases: string[];
+    sourceBatchId: string;
+    sourceFloorStart: number;
+    sourceFloorEnd: number;
+    evidenceScore: number;
+    sourceKinds: TakeoverSourceSegmentKind[];
+    reasonCodes: string[];
+    status: MemoryTakeoverCandidateActorStatus;
+}
+
+/**
+ * 功能：定义拒绝角色提及记录。
+ */
+export interface MemoryTakeoverRejectedMention {
+    name: string;
+    actorKey?: string;
+    sourceBatchId: string;
+    sourceFloorStart: number;
+    sourceFloorEnd: number;
+    reasonCodes: string[];
+}
+
+/**
+ * 功能：定义批次审计报告。
+ */
+export interface MemoryTakeoverBatchAuditReport {
+    userPlaceholderReplacements: number;
+    bannedPatternHits: number;
+    narrativeValidatorPassed: boolean;
+    styleRepairTriggered: boolean;
+    actorCompletionTriggered: boolean;
+    confirmedActorCount: number;
+    candidateActorCount: number;
+    rejectedMentionCount: number;
+    invalidFieldPaths: string[];
+}
+
+/**
  * 功能：定义世界实体类型。
  */
 export type MemoryTakeoverEntityType = 'organization' | 'city' | 'nation' | 'location';
@@ -263,6 +367,8 @@ export interface MemoryTakeoverBatchResult {
     batchId: string;
     summary: string;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    candidateActors?: MemoryTakeoverCandidateActorMention[];
+    rejectedMentions?: MemoryTakeoverRejectedMention[];
     relationships: MemoryTakeoverRelationshipCard[];
     entityCards: MemoryTakeoverEntityCardCandidate[];
     entityTransitions: MemoryTakeoverEntityTransition[];
@@ -273,11 +379,14 @@ export interface MemoryTakeoverBatchResult {
     openThreads: string[];
     chapterTags: string[];
     sourceRange: MemoryTakeoverRange;
+    sourceSegments?: TakeoverSourceSegment[];
+    floorManifest?: MemoryTakeoverFloorManifestRecord[];
     validated?: boolean;
     repairedOnce?: boolean;
     isolated?: boolean;
     validationErrors?: string[];
     repairActions?: string[];
+    auditReport?: MemoryTakeoverBatchAuditReport;
     generatedAt: number;
 }
 
@@ -304,6 +413,7 @@ export interface MemoryTakeoverConsolidationResult {
         tags: string[];
     }>;
     actorCards: MemoryTakeoverActorCardCandidate[];
+    candidateActors?: MemoryTakeoverCandidateActorMention[];
     relationships: MemoryTakeoverRelationshipCard[];
     entityCards: MemoryTakeoverEntityCardCandidate[];
     entityTransitions: MemoryTakeoverEntityTransition[];
@@ -322,11 +432,17 @@ export interface MemoryTakeoverConsolidationResult {
         summary?: string;
         description?: string;
         goal?: string;
+        entityKey?: string;
         compareKey?: string;
+        schemaVersion?: string;
+        canonicalName?: string;
+        matchKeys?: string[];
+        legacyCompareKeys?: string[];
         bindings?: MemoryTakeoverBindings;
         reasonCodes?: string[];
     }>;
     worldState: Record<string, string>;
+    worldStateDetails?: MemoryTakeoverWorldStateChange[];
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     dedupeStats: MemoryTakeoverConsolidationStats;
     conflictStats: {
@@ -368,6 +484,7 @@ export interface MemoryTakeoverConsolidationResult {
         reasonCode: string;
     };
     applyDiagnostics?: ApplyLedgerMutationBatchResult;
+    batchAudits?: MemoryTakeoverBatchAuditReport[];
     generatedAt: number;
 }
 
@@ -399,6 +516,41 @@ export interface MemoryTakeoverPreviewBatchEstimate {
 }
 
 /**
+ * 功能：定义单个批次的实际送模内容预览。
+ */
+export interface MemoryTakeoverPayloadPreviewBatch {
+    batchId: string;
+    batchIndex: number;
+    category: 'active' | 'history';
+    label: string;
+    range: MemoryTakeoverRange;
+    sourceFloors: number[];
+    sentFloors: number[];
+    hintText: string;
+    excludedSummary: string[];
+    floorManifest: MemoryTakeoverFloorManifestRecord[];
+    requestMessages: Array<{
+        role: 'system' | 'user';
+        content: string;
+    }>;
+}
+
+/**
+ * 功能：定义旧聊天接管实际送模内容预览。
+ */
+export interface MemoryTakeoverPayloadPreview {
+    mode: MemoryTakeoverMode;
+    totalFloors: number;
+    range: MemoryTakeoverRange | null;
+    activeWindow: MemoryTakeoverRange | null;
+    batchSize: number;
+    useActiveSnapshot: boolean;
+    activeSnapshotFloors: number;
+    totalBatches: number;
+    batches: MemoryTakeoverPayloadPreviewBatch[];
+}
+
+/**
  * 功能：定义接管计划的 token 预估汇总。
  */
 export interface MemoryTakeoverPreviewEstimate {
@@ -406,6 +558,7 @@ export interface MemoryTakeoverPreviewEstimate {
     totalFloors: number;
     range: MemoryTakeoverRange | null;
     activeWindow: MemoryTakeoverRange | null;
+    coverageSummary?: string;
     batchSize: number;
     useActiveSnapshot: boolean;
     activeSnapshotFloors: number;

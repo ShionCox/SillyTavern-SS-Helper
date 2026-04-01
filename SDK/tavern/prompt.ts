@@ -220,6 +220,89 @@ export function getTavernMessageTextEvent(message: unknown): string {
 }
 
 /**
+ * 功能：读取消息的原始完整文本（含被 SillyTavern 剥离的 reasoning 块）。
+ *
+ * SillyTavern 的 reasoning 模块会在流式输出/保存时将 `<think>` 等推理块从
+ * `mes` / `swipes[swipeId]` 中剥离，存入 `extra.reasoning`（或
+ * `swipe_info[swipeId].extra.reasoning`）。直接读取 `mes` 拿到的是去掉
+ * reasoning 的文本，不是原始完整内容。
+ *
+ * 本函数会将 reasoning 文本还原并拼到正文前面，以得到真正的"原始楼层文本"。
+ * @param message 酒馆 chat 消息对象。
+ * @returns 包含原始文本及来源的结果。
+ */
+export function extractTavernMessageOriginalTextEvent(message: unknown): { text: string; source: string } {
+  if (!message || typeof message !== "object") {
+    return { text: '', source: 'message.invalid' };
+  }
+
+  const record = message as Record<string, unknown>;
+  const extra = record.extra && typeof record.extra === 'object'
+    ? record.extra as Record<string, unknown>
+    : null;
+
+  const swipeId = Number(record.swipe_id ?? record.swipeId);
+  const swipes = record.swipes;
+  const swipeInfo = record.swipe_info;
+
+  let visibleText = '';
+  let reasoning = '';
+  let source = '';
+
+  // 优先从当前激活 swipe 读取
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    visibleText = typeof swipes[swipeId] === 'string' ? swipes[swipeId] : '';
+    source = `swipes[${swipeId}]`;
+
+    // swipe 级别的 reasoning 存在 swipe_info[swipeId].extra.reasoning
+    if (Array.isArray(swipeInfo) && swipeId < swipeInfo.length) {
+      const swipeExtra = swipeInfo[swipeId] && typeof swipeInfo[swipeId] === 'object'
+        ? (swipeInfo[swipeId] as Record<string, unknown>).extra
+        : null;
+      if (swipeExtra && typeof swipeExtra === 'object') {
+        const swipeReasoning = (swipeExtra as Record<string, unknown>).reasoning;
+        if (typeof swipeReasoning === 'string' && swipeReasoning) {
+          reasoning = swipeReasoning;
+          source = `swipes[${swipeId}]+swipe_info[${swipeId}].extra.reasoning`;
+        }
+      }
+    }
+
+    // swipe 级别没找到 reasoning 时回退到 extra.reasoning
+    if (!reasoning && extra) {
+      const topReasoning = extra.reasoning;
+      if (typeof topReasoning === 'string' && topReasoning) {
+        reasoning = topReasoning;
+        source = `swipes[${swipeId}]+extra.reasoning`;
+      }
+    }
+  } else {
+    // 非 swipe 场景——直接读 mes
+    visibleText = typeof record.mes === 'string' ? record.mes : '';
+    source = 'mes';
+
+    if (extra) {
+      const topReasoning = extra.reasoning;
+      if (typeof topReasoning === 'string' && topReasoning) {
+        reasoning = topReasoning;
+        source = 'mes+extra.reasoning';
+      }
+    }
+  }
+
+  if (!visibleText && !reasoning) {
+    return { text: '', source: 'empty' };
+  }
+
+  // 还原原始文本：reasoning 在前，正文在后
+  const fullText = reasoning
+    ? reasoning + '\n' + visibleText
+    : visibleText;
+
+  return { text: fullText, source };
+}
+
+/**
  * 功能：按原有 `content` 结构构造新文本，避免把结构化消息写坏。
  * @param currentContent 当前 `content`
  * @param nextText 新文本

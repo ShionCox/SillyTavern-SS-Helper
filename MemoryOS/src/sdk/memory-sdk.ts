@@ -56,6 +56,7 @@ import {
 import { readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 import { detectWorldProfile } from '../memory-world-profile';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
@@ -67,8 +68,10 @@ import {
     stripNarrativeReferencePrefix,
     type NarrativeReferenceRendererContext,
 } from '../utils/narrative-reference-renderer';
+import type { RawFloorRecord } from '../memory-takeover/content-block-pipeline';
 import type {
     LedgerMutation,
+    ActorDisplayNameSource,
     ActorMemoryProfile,
     MemoryEntry,
     MemoryTakeoverActiveSnapshot,
@@ -80,6 +83,7 @@ import type {
     MemoryTakeoverEntityTransition,
     PromptAssemblySnapshot,
     ApplyLedgerMutationBatchResult,
+    MemoryTakeoverPayloadPreview,
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
     MemoryTakeoverRelationshipCard,
@@ -275,6 +279,12 @@ export interface MemoryVectorRetrievalTestInput {
         actorKey?: string;
         worldKey?: string;
     };
+    onProgress?: (progress: {
+        stage: string;
+        title: string;
+        message: string;
+        progress?: number;
+    }) => void;
 }
 
 /**
@@ -330,6 +340,7 @@ export class MemorySDKImpl {
         detectTakeoverNeeded: () => Promise<MemoryTakeoverDetectionResult>;
         getTakeoverStatus: () => Promise<MemoryTakeoverProgressSnapshot>;
         previewTakeoverEstimate: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverPreviewEstimate>;
+        previewActualTakeoverPayload: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverPayloadPreview>;
         createTakeoverPlan: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverProgressSnapshot>;
         startTakeover: (takeoverId?: string) => Promise<MemoryTakeoverExecutionResult>;
         pauseTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
@@ -338,6 +349,10 @@ export class MemorySDKImpl {
         runTakeoverConsolidation: () => Promise<MemoryTakeoverExecutionResult>;
         rebuildTakeoverRange: (startFloor: number, endFloor: number, batchSize?: number) => Promise<MemoryTakeoverExecutionResult>;
         abortTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
+        getContentLabSettings: () => Promise<ContentLabSettings>;
+        saveContentLabSettings: (patch: Partial<ContentLabSettings>) => Promise<ContentLabSettings>;
+        previewFloorContentBlocks: (input: { floor: number }) => Promise<RawFloorRecord>;
+        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number }) => Promise<RawFloorRecord[]>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -426,7 +441,7 @@ export class MemorySDKImpl {
         this.compareKeyService = new CompareKeyService();
         this.entryRepository = new EntryRepository(this.chatKey_, this.compareKeyService);
         this.promptAssemblyService = new PromptAssemblyService(this.chatKey_, this.entryRepository, this.compareKeyService);
-        this.summaryService = new SummaryService(this.entryRepository);
+        this.summaryService = new SummaryService(this.chatKey_, this.entryRepository);
         this.takeoverService = new TakeoverService(this.chatKey_);
         this.promptReadyCaptureSnapshot = null;
         this.promptReadyRunResultSnapshot = null;
@@ -562,6 +577,9 @@ export class MemorySDKImpl {
             previewTakeoverEstimate: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPreviewEstimate> => {
                 return this.takeoverService.previewEstimate(config);
             },
+            previewActualTakeoverPayload: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPayloadPreview> => {
+                return this.takeoverService.previewActualTakeoverPayload(config);
+            },
             createTakeoverPlan: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> => {
                 return this.takeoverService.createPlanSnapshot(await this.readCurrentSummaryFloorCount(), config);
             },
@@ -586,6 +604,7 @@ export class MemorySDKImpl {
                 const progress = await this.takeoverService.resumeTakeover({
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
+                    skipInitialWait: true,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
                         await this.applyTakeoverConsolidation(result);
@@ -601,8 +620,26 @@ export class MemorySDKImpl {
                 }
                 return this.toTakeoverExecutionResult(progress, 'ok');
             },
-            retryFailedBatch: async (_batchId?: string): Promise<MemoryTakeoverExecutionResult> => {
-                return this.chatState.resumeTakeover();
+            retryFailedBatch: async (batchId?: string): Promise<MemoryTakeoverExecutionResult> => {
+                const progress = await this.takeoverService.retryFailedBatch({
+                    batchId,
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                    skipInitialWait: true,
+                    existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
+                    applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
+                        await this.applyTakeoverConsolidation(result);
+                    },
+                });
+                if (!progress) {
+                    return {
+                        ok: false,
+                        reasonCode: 'takeover_plan_missing',
+                        errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
+                        progress: null,
+                    };
+                }
+                return this.toTakeoverExecutionResult(progress, 'ok');
             },
             runTakeoverConsolidation: async (): Promise<MemoryTakeoverExecutionResult> => {
                 const progress = await this.takeoverService.runStoredConsolidation({
@@ -653,6 +690,29 @@ export class MemorySDKImpl {
             },
             abortTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
                 return this.takeoverService.abortTakeover();
+            },
+            getContentLabSettings: async (): Promise<ContentLabSettings> => {
+                return this.takeoverService.readContentLabSettings();
+            },
+            saveContentLabSettings: async (patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> => {
+                return this.takeoverService.saveContentLabSettings(patch);
+            },
+            previewFloorContentBlocks: async (input: { floor: number }): Promise<RawFloorRecord> => {
+                this.tryRegisterLLMTasks();
+                return this.takeoverService.previewFloorContentBlocks({
+                    floor: input.floor,
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                });
+            },
+            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number }): Promise<RawFloorRecord[]> => {
+                this.tryRegisterLLMTasks();
+                return this.takeoverService.previewFloorRangeContentBlocks({
+                    startFloor: input.startFloor,
+                    endFloor: input.endFloor,
+                    llm: readMemoryLLMApi(),
+                    pluginId: MEMORY_OS_PLUGIN_ID,
+                });
             },
             setPromptReadyCaptureSnapshotForTest: async (snapshot: PromptReadyCaptureSnapshot): Promise<void> => {
                 this.promptReadyCaptureSnapshot = {
@@ -740,6 +800,10 @@ export class MemorySDKImpl {
             ): Promise<MemoryColdStartExecutionResult> => {
                 const triggerTs: number = Date.now();
                 const selectedLorebookEntryIds = (selection?.selectedEntries ?? []).map((item) => `${item.book}:${item.entryId}`);
+                const stateRow = await readMemoryOSChatState(this.chatKey_);
+                const state = this.toRecord(stateRow?.state);
+                const persistedResumeRunId = this.toOptionalText(state.coldStartResumeRunId);
+                const persistedResumeSourceBundle = this.readColdStartResumeSourceBundle(state.coldStartResumeSourceBundle);
                 await this.writeColdStartState({
                     coldStartHasStarted: true,
                     coldStartLastTriggeredAt: triggerTs,
@@ -758,7 +822,9 @@ export class MemorySDKImpl {
                         errorMessage: '当前未连接可用的 LLMHub 服务。',
                     };
                 }
-                const sourceBundle = await this.collectColdStartSourceBundle(_reason, selection);
+                const sourceBundle = persistedResumeRunId && persistedResumeSourceBundle
+                    ? persistedResumeSourceBundle
+                    : await this.collectColdStartSourceBundle(_reason, selection);
                 const result = await runBootstrapOrchestrator({
                     dependencies: {
                         ensureActorProfile: async (input): Promise<unknown> => this.entryRepository.ensureActorProfile(input),
@@ -772,12 +838,15 @@ export class MemorySDKImpl {
                     llm,
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     sourceBundle,
+                    runId: persistedResumeRunId || undefined,
                 });
                 if (!result.ok) {
                     this.pendingColdStartDraft = null;
                     await this.writeColdStartState({
                         coldStartLastFailedAt: Date.now(),
                         coldStartLastReasonCode: result.reasonCode,
+                        coldStartResumeRunId: result.runId,
+                        coldStartResumeSourceBundle: sourceBundle,
                     });
                     logger.warn(`[MemoryOS] 冷启动执行失败: ${result.reasonCode}`);
                     return {
@@ -797,6 +866,8 @@ export class MemorySDKImpl {
                     coldStartGeneratedAt: Date.now(),
                     coldStartLastFailedAt: undefined,
                     coldStartLastReasonCode: undefined,
+                    coldStartResumeRunId: undefined,
+                    coldStartResumeSourceBundle: undefined,
                 });
                 return {
                     ok: true,
@@ -849,6 +920,8 @@ export class MemorySDKImpl {
                     coldStartConfirmedAt: Date.now(),
                     coldStartDismissedAt: undefined,
                     coldStartSelectedCandidateIds: selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id),
+                    coldStartResumeRunId: undefined,
+                    coldStartResumeSourceBundle: undefined,
                 });
                 return {
                     ok: true,
@@ -860,6 +933,8 @@ export class MemorySDKImpl {
                 this.pendingColdStartDraft = null;
                 await this.writeColdStartState({
                     coldStartDismissedAt: Date.now(),
+                    coldStartResumeRunId: undefined,
+                    coldStartResumeSourceBundle: undefined,
                 });
             },
             flush: async (): Promise<void> => {
@@ -1155,7 +1230,19 @@ export class MemorySDKImpl {
         if (!query) {
             throw new Error('请输入要测试的查询文本。');
         }
+        input.onProgress?.({
+            stage: 'prepare',
+            title: '校验输入',
+            message: '正在校验查询文本与测试参数。',
+            progress: 0.08,
+        });
         const retrievalService = getSharedRetrievalService();
+        input.onProgress?.({
+            stage: 'candidate_build',
+            title: '构建候选',
+            message: '正在收集当前聊天的检索候选与角色档案。',
+            progress: 0.2,
+        });
         const [candidates, actorProfiles] = await Promise.all([
             this.buildWorkbenchRetrievalCandidates(),
             this.entryRepository.listActorProfiles(),
@@ -1172,6 +1259,12 @@ export class MemorySDKImpl {
         };
         writeMemoryOSSettings(nextSettings);
         try {
+            input.onProgress?.({
+                stage: 'retrieval_start',
+                title: '启动召回',
+                message: '正在进入检索主链并准备执行召回。',
+                progress: 0.35,
+            });
             const result = await retrievalService.searchHybrid({
                 query,
                 chatKey: this.chatKey_,
@@ -1191,6 +1284,13 @@ export class MemorySDKImpl {
                         ...(input.filters?.worldKey ? { worldKeys: [String(input.filters.worldKey).trim()] } : {}),
                     },
                 },
+                onProgress: input.onProgress,
+            });
+            input.onProgress?.({
+                stage: 'result_finalize',
+                title: '整理结果',
+                message: '正在汇总诊断信息与最终命中结果。',
+                progress: 0.96,
             });
             return {
                 diagnostics: result.diagnostics,
@@ -1732,9 +1832,15 @@ export class MemorySDKImpl {
         }
 
                 const worldStateMutations: LedgerMutation[] = [];
-        for (const [key, value] of Object.entries(result.worldState ?? {})) {
-            const normalizedKey = this.renderTakeoverNarrativeText(key, narrativeContext);
-            const normalizedValue = this.renderTakeoverNarrativeText(value, narrativeContext);
+        const worldStateRecords: Array<{ key: string; value: string; reasonCodes?: string[] }> = (result.worldStateDetails?.length ?? 0) > 0
+            ? result.worldStateDetails!
+            : Object.entries(result.worldState ?? {}).map(([key, value]) => ({
+                key,
+                value,
+            }));
+        for (const worldState of worldStateRecords) {
+            const normalizedKey = this.renderTakeoverNarrativeText(String(worldState.key ?? '').trim(), narrativeContext);
+            const normalizedValue = this.renderTakeoverNarrativeText(String(worldState.value ?? '').trim(), narrativeContext);
             const worldDecision = resolveLedgerUpdateDecision({
                 entryType: 'world_global_state',
                 title: normalizedKey,
@@ -1755,7 +1861,10 @@ export class MemorySDKImpl {
                 reasonCodes: ['takeover_world_state', ...worldDecision.reasonCodes],
                 detailPayload: {
                     compareKey: worldDecision.compareKey,
-                    reasonCodes: worldDecision.reasonCodes,
+                    reasonCodes: [
+                        ...worldDecision.reasonCodes,
+                        ...((worldState.reasonCodes ?? []).map((item) => String(item ?? '').trim()).filter(Boolean)),
+                    ],
                     sourceBatchIds: [result.takeoverId],
                     fields: {
                         compareKey: worldDecision.compareKey,
@@ -2035,6 +2144,7 @@ export class MemorySDKImpl {
         traits?: string[];
         takeoverId: string;
         hydrationState: 'partial' | 'full';
+        displayNameSource?: ActorDisplayNameSource;
     }): Promise<{ actorKey: string; displayName: string }> {
         const actorKey = this.resolveTakeoverActorKey(input.actorKey, input.displayName);
         const displayName = this.resolveTakeoverActorDisplayName(actorKey, input.displayName);
@@ -2044,6 +2154,7 @@ export class MemorySDKImpl {
         await this.entryRepository.ensureActorProfile({
             actorKey,
             displayName,
+            displayNameSource: input.displayNameSource ?? (input.hydrationState === 'full' ? 'takeover_actor_card' : 'takeover_relation'),
         });
         return { actorKey, displayName };
     }
@@ -2121,6 +2232,7 @@ export class MemorySDKImpl {
             }),
             takeoverId: input.takeoverId,
             hydrationState: 'partial',
+            displayNameSource: 'takeover_relation',
         });
         const targetActor = await this.ensureTakeoverActorReference({
             ...(this.resolveTakeoverActorByKey(
@@ -2133,6 +2245,7 @@ export class MemorySDKImpl {
             }),
             takeoverId: input.takeoverId,
             hydrationState: 'partial',
+            displayNameSource: 'takeover_relation',
         });
         if (!sourceActor || !targetActor || sourceActor.actorKey === targetActor.actorKey) {
             return null;
@@ -2386,6 +2499,7 @@ export class MemorySDKImpl {
             traits: actorCard.traits,
             takeoverId,
             hydrationState: 'full',
+            displayNameSource: 'takeover_actor_card',
         });
     }
 
@@ -2924,6 +3038,8 @@ export class MemorySDKImpl {
             coldStartConfirmedAt: now,
             coldStartDismissedAt: undefined,
             coldStartLastReasonCode: 'old_chat_takeover_completed',
+            coldStartResumeRunId: undefined,
+            coldStartResumeSourceBundle: undefined,
         });
     }
 
@@ -3106,6 +3222,10 @@ export class MemorySDKImpl {
         }>,
         existingActorCards: Array<{ actorKey: string; displayName: string }>,
     ): { actorKey: string; displayName: string } | null {
+        const normalizedRawTarget = String(targetName ?? '').trim();
+        if (this.isTakeoverActorReference(normalizedRawTarget)) {
+            return this.resolveTakeoverActorByKey(normalizedRawTarget, actorCards, existingActorCards);
+        }
         const normalizedTargetName = this.normalizeTakeoverRelationTargetName(targetName);
         if (!normalizedTargetName) {
             return null;
@@ -3138,7 +3258,6 @@ export class MemorySDKImpl {
                 displayName: String(matchedExistingActor.displayName ?? '').trim(),
             };
         }
-        const normalizedRawTarget = String(targetName ?? '').trim();
         if (!/^char[_:]/i.test(normalizedRawTarget) && !/^actor[_:]/i.test(normalizedRawTarget)) {
             return null;
         }
@@ -3221,6 +3340,12 @@ export class MemorySDKImpl {
         existingActorCards: Array<{ actorKey: string; displayName: string }>,
     ): { actorKey: string; displayName: string } | null {
         const resolvedActorKey = this.resolveTakeoverActorKey(actorKey, '');
+        if (resolvedActorKey === 'user') {
+            return {
+                actorKey: 'user',
+                displayName: resolveCurrentNarrativeUserName(),
+            };
+        }
         const normalizedActorName = this.normalizeTakeoverRelationTargetName(this.extractTakeoverActorName(actorKey));
         const matchedTakeoverActor = actorCards.find((actorCard): boolean => {
             if (resolvedActorKey && this.resolveTakeoverActorKey(actorCard.actorKey, actorCard.displayName) === resolvedActorKey) {
@@ -3261,6 +3386,16 @@ export class MemorySDKImpl {
             actorKey: resolvedActorKey,
             displayName: this.resolveTakeoverActorDisplayName(resolvedActorKey, normalizedActorName || actorKey),
         };
+    }
+
+    /**
+     * 功能：判断文本是否属于稳定角色键引用。
+     * @param value 原始文本。
+     * @returns 是否为角色键形式。
+     */
+    private isTakeoverActorReference(value: string): boolean {
+        const normalizedValue = String(value ?? '').trim().toLowerCase();
+        return normalizedValue === 'user' || /^char[_:]/i.test(normalizedValue) || /^actor[_:]/i.test(normalizedValue);
     }
 
     /**
@@ -3488,6 +3623,22 @@ export class MemorySDKImpl {
             lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
             lastReasonCode: this.toOptionalText(state.coldStartLastReasonCode),
         };
+    }
+
+    /**
+     * 功能：读取可用于冷启动续跑的 sourceBundle。
+     * @param value 原始值。
+     * @returns 续跑 sourceBundle；无效时返回 undefined。
+     */
+    private readColdStartResumeSourceBundle(value: unknown): ColdStartSourceBundle | undefined {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return undefined;
+        }
+        const sourceBundle = value as ColdStartSourceBundle;
+        if (!sourceBundle.characterCard || !sourceBundle.semantic || !sourceBundle.user || !sourceBundle.worldbooks) {
+            return undefined;
+        }
+        return sourceBundle;
     }
 
     /**

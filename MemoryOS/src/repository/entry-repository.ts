@@ -40,8 +40,10 @@ import { BindingResolutionService } from '../services/binding-resolution-service
 import {
     CORE_MEMORY_ENTRY_TYPES,
     DEFAULT_ACTOR_MEMORY_STAT,
+    type ActorDisplayNameSource,
     type ActorMemoryProfile,
     type ApplyLedgerMutationBatchResult,
+    type EnsureActorProfileInput,
     type MemoryEntry,
     type MemoryEntryAuditRecord,
     type MemoryEntryFieldDiff,
@@ -309,16 +311,21 @@ export class EntryRepository {
      * @param input 角色输入。
      * @returns 角色资料。
      */
-    async ensureActorProfile(input: { actorKey: string; displayName?: string; memoryStat?: number }): Promise<ActorMemoryProfile> {
+    async ensureActorProfile(input: EnsureActorProfileInput): Promise<ActorMemoryProfile> {
         const actorKey = this.assertActorKey(input.actorKey, 'ensureActorProfile.actorKey');
         const existing = await db.actor_memory_profiles.get([this.chatKey, actorKey]);
         const now = Date.now();
         const resolvedUserDisplayName = actorKey === 'user' ? this.resolveUserActorDisplayName() : '';
-        const fallbackDisplayName = resolvedUserDisplayName || actorKey;
+        const fallbackDisplayName = resolvedUserDisplayName || this.resolveActorFallbackDisplayName(actorKey);
         const row: DBActorMemoryProfile = {
             actorKey,
             chatKey: this.chatKey,
-            displayName: this.normalizeText(input.displayName) || resolvedUserDisplayName || existing?.displayName || fallbackDisplayName,
+            displayName: this.resolvePreferredActorDisplayName({
+                actorKey,
+                existingDisplayName: existing?.displayName,
+                inputDisplayName: input.displayName,
+                displayNameSource: input.displayNameSource ?? 'manual',
+            }) || fallbackDisplayName,
             memoryStat: this.clampPercent(input.memoryStat ?? existing?.memoryStat ?? DEFAULT_ACTOR_MEMORY_STAT),
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
@@ -1694,6 +1701,98 @@ export class EntryRepository {
      */
     private normalizeActorKey(value: unknown): string {
         return this.normalizeText(value).toLowerCase();
+    }
+
+    /**
+     * 功能：为角色档案选择更稳定的显示名，避免低质量兜底名覆盖正式角色名。
+     * @param input 角色显示名选择输入。
+     * @returns 最终显示名。
+     */
+    private resolvePreferredActorDisplayName(input: {
+        actorKey: string;
+        existingDisplayName?: string;
+        inputDisplayName?: string;
+        displayNameSource: ActorDisplayNameSource;
+    }): string {
+        const actorKey = this.normalizeText(input.actorKey);
+        const resolvedUserDisplayName = actorKey === 'user' ? this.resolveUserActorDisplayName() : '';
+        if (resolvedUserDisplayName) {
+            return resolvedUserDisplayName;
+        }
+        const existingDisplayName = this.normalizeText(input.existingDisplayName);
+        const inputDisplayName = this.normalizeText(input.inputDisplayName);
+        const fallbackDisplayName = this.resolveActorFallbackDisplayName(actorKey);
+        if (!existingDisplayName) {
+            return inputDisplayName || fallbackDisplayName;
+        }
+        if (!inputDisplayName) {
+            return existingDisplayName;
+        }
+        if (input.displayNameSource === 'manual') {
+            return inputDisplayName;
+        }
+        const existingIsFallbackLike = this.isFallbackLikeActorDisplayName(actorKey, existingDisplayName);
+        const inputIsFallbackLike = this.isFallbackLikeActorDisplayName(actorKey, inputDisplayName);
+        if ((input.displayNameSource === 'bootstrap' || input.displayNameSource === 'takeover_actor_card') && !inputIsFallbackLike) {
+            return inputDisplayName;
+        }
+        if (!existingIsFallbackLike && (
+            input.displayNameSource === 'summary_hint'
+            || input.displayNameSource === 'takeover_relation'
+            || input.displayNameSource === 'fallback'
+        )) {
+            return existingDisplayName;
+        }
+        if (existingIsFallbackLike && !inputIsFallbackLike) {
+            return inputDisplayName;
+        }
+        if (!existingIsFallbackLike && inputIsFallbackLike) {
+            return existingDisplayName;
+        }
+        return existingDisplayName || inputDisplayName || fallbackDisplayName;
+    }
+
+    /**
+     * 功能：判断显示名是否只是由 actorKey 派生出的低质量兜底名。
+     * @param actorKey 角色键。
+     * @param displayName 显示名。
+     * @returns 是否为低质量兜底名。
+     */
+    private isFallbackLikeActorDisplayName(actorKey: string, displayName: string): boolean {
+        const normalizedDisplayName = this.normalizeText(displayName);
+        if (!normalizedDisplayName) {
+            return true;
+        }
+        const normalizedActorKey = this.normalizeText(actorKey);
+        if (normalizedDisplayName.toLowerCase() === normalizedActorKey.toLowerCase()) {
+            return true;
+        }
+        return this.simplifyActorDisplayName(normalizedDisplayName) === this.simplifyActorDisplayName(this.resolveActorFallbackDisplayName(actorKey));
+    }
+
+    /**
+     * 功能：根据 actorKey 派生出最小可用显示名，仅用于兜底。
+     * @param actorKey 角色键。
+     * @returns 兜底显示名。
+     */
+    private resolveActorFallbackDisplayName(actorKey: string): string {
+        const normalizedActorKey = this.normalizeText(actorKey);
+        const strippedActorKey = normalizedActorKey
+            .replace(/^(actor|char)[_:]+/i, '')
+            .replace(/[_-]+/g, ' ')
+            .trim();
+        return strippedActorKey || normalizedActorKey || '未命名角色';
+    }
+
+    /**
+     * 功能：简化角色显示名，便于判断是否只是从 actorKey 推导出的形式。
+     * @param value 原始显示名。
+     * @returns 简化后的文本。
+     */
+    private simplifyActorDisplayName(value: string): string {
+        return this.normalizeText(value)
+            .toLowerCase()
+            .replace(/[\s_-]+/g, '');
     }
 
     /**

@@ -59,6 +59,7 @@ export function buildTakeoverPreviewMarkup(input: {
                 <span>批大小：<strong>${escapeHtml(String(input.estimate.batchSize))}</strong></span>
                 <span>预警阈值：<strong>${escapeHtml(formatTokenCount(input.estimate.threshold))}</strong></span>
             </div>
+            ${input.estimate.coverageSummary ? `<div class="stx-memory-takeover-preview__empty">${escapeHtml(input.estimate.coverageSummary)}</div>` : ''}
             <div class="stx-memory-takeover-preview__empty">${escapeHtml(snapshotHint)}</div>
             ${snapshotCoverAll ? '<div class="stx-memory-takeover-preview__empty">当前快照范围已覆盖全部所选楼层，这次只会处理这一轮快照。</div>' : ''}
             ${warningBlock}

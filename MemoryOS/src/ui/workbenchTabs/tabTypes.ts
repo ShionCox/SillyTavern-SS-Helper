@@ -2,6 +2,7 @@ import { escapeHtml } from '../editorShared';
 import { resolveTypesWorkbenchText } from '../workbenchLocale';
 import type { MemoryEntryType } from '../../types';
 import { escapeAttr, formatTypeFieldsJson, type WorkbenchSnapshot, type WorkbenchState } from './shared';
+import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 
 /**
  * 功能：构建类型工坊视图。
@@ -71,9 +72,27 @@ export function buildTypesViewMarkup(snapshot: WorkbenchSnapshot, state: Workben
                     </div>
                     <div class="stx-memory-workbench__card" style="margin-top:8px;">
                         <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTypesWorkbenchText('system_rule'))}</div>
-                        <div style="display:flex;gap:16px;font-size:12px;margin-top:8px;">
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="stx-memory-type-system"${selectedType?.injectToSystem ? ' checked' : ''}> ${escapeHtml(resolveTypesWorkbenchText('inject_to_system_prompt'))}</label>
-                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="stx-memory-type-bindable"${selectedType?.bindableToRole !== false ? ' checked' : ''}> ${escapeHtml(resolveTypesWorkbenchText('bind_to_actor'))}</label>
+                        <div class="stx-memory-workbench__checkbox-group" style="margin-top:8px;">
+                            <div class="stx-memory-workbench__checkbox-row">
+                                ${buildSharedBoxCheckbox({
+                                    id: 'stx-memory-type-system',
+                                    appearance: 'check',
+                                    inputAttributes: {
+                                        checked: selectedType?.injectToSystem === true,
+                                    },
+                                })}
+                                <label for="stx-memory-type-system">${escapeHtml(resolveTypesWorkbenchText('inject_to_system_prompt'))}</label>
+                            </div>
+                            <div class="stx-memory-workbench__checkbox-row">
+                                ${buildSharedBoxCheckbox({
+                                    id: 'stx-memory-type-bindable',
+                                    appearance: 'check',
+                                    inputAttributes: {
+                                        checked: selectedType?.bindableToRole !== false,
+                                    },
+                                })}
+                                <label for="stx-memory-type-bindable">${escapeHtml(resolveTypesWorkbenchText('bind_to_actor'))}</label>
+                            </div>
                         </div>
                     </div>
                     <div class="stx-memory-workbench__field-stack" style="margin-top:8px;">

@@ -38,11 +38,9 @@ export type MemoryOSSettings = {
     takeoverDefaultAutoContinue: boolean;
     takeoverDefaultAutoConsolidate: boolean;
     takeoverDefaultPauseOnError: boolean;
-    bootstrapUsePhasedExtraction: boolean;
     bootstrapCorePhaseMaxItems: number;
     bootstrapStatePhaseMaxItems: number;
     summaryMaxActionsPerMutationBatch: number;
-    summaryEnableSparsePatch: boolean;
     summarySplitByActionType: boolean;
     retrievalLogEnabled: boolean;
     retrievalLogLevel: 'info' | 'debug';
@@ -60,12 +58,6 @@ export type MemoryOSSettings = {
     retrievalEnableGraphPenalty: boolean;
     /** 是否启用 QueryContextBuilder */
     retrievalEnableQueryContextBuilder: boolean;
-    /** 是否启用维护层自动压缩 */
-    maintenanceAutoCompressEnabled: boolean;
-    /** 是否启用维护层重复检测 */
-    maintenanceDuplicateCheckEnabled: boolean;
-    /** 是否启用秘书层/蒸馏服务 */
-    scoringServiceEnabled: boolean;
     /** 向量检索 topK */
     vectorTopK: number;
     /** 向量深路径候选窗口 */
@@ -80,8 +72,6 @@ export type MemoryOSSettings = {
     vectorRerankWindow: number;
     /** 是否在写入时自动索引向量 */
     vectorAutoIndexOnWrite: boolean;
-    /** 是否启用向量召回统计 */
-    vectorEnableRecallStats: boolean;
     /** embedding 模型提示（可选） */
     vectorEmbeddingModel: string;
     /** embedding 版本标识 */
@@ -138,11 +128,9 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     takeoverDefaultAutoContinue: true,
     takeoverDefaultAutoConsolidate: true,
     takeoverDefaultPauseOnError: true,
-    bootstrapUsePhasedExtraction: true,
     bootstrapCorePhaseMaxItems: 24,
     bootstrapStatePhaseMaxItems: 24,
     summaryMaxActionsPerMutationBatch: 10,
-    summaryEnableSparsePatch: true,
     summarySplitByActionType: true,
     retrievalLogEnabled: true,
     retrievalLogLevel: 'info',
@@ -154,9 +142,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalEnablePayloadFilter: true,
     retrievalEnableGraphPenalty: true,
     retrievalEnableQueryContextBuilder: false,
-    maintenanceAutoCompressEnabled: false,
-    maintenanceDuplicateCheckEnabled: false,
-    scoringServiceEnabled: false,
     vectorTopK: 5,
     vectorDeepWindow: 25,
     vectorFinalTopK: 5,
@@ -164,7 +149,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     vectorEnableRerank: true,
     vectorRerankWindow: 25,
     vectorAutoIndexOnWrite: true,
-    vectorEnableRecallStats: true,
     vectorEmbeddingModel: '',
     vectorEmbeddingVersion: '1',
     vectorEnableLLMHubRerank: false,
@@ -350,11 +334,9 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         takeoverDefaultAutoContinue: candidate.takeoverDefaultAutoContinue !== false,
         takeoverDefaultAutoConsolidate: candidate.takeoverDefaultAutoConsolidate !== false,
         takeoverDefaultPauseOnError: candidate.takeoverDefaultPauseOnError !== false,
-        bootstrapUsePhasedExtraction: candidate.bootstrapUsePhasedExtraction !== false,
         bootstrapCorePhaseMaxItems,
         bootstrapStatePhaseMaxItems,
         summaryMaxActionsPerMutationBatch,
-        summaryEnableSparsePatch: candidate.summaryEnableSparsePatch !== false,
         summarySplitByActionType: candidate.summarySplitByActionType !== false,
         retrievalLogEnabled: candidate.retrievalLogEnabled !== false,
         retrievalLogLevel,
@@ -366,9 +348,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         retrievalEnablePayloadFilter: candidate.retrievalEnablePayloadFilter !== false,
         retrievalEnableGraphPenalty: candidate.retrievalEnableGraphPenalty !== false,
         retrievalEnableQueryContextBuilder: candidate.retrievalEnableQueryContextBuilder === true,
-        maintenanceAutoCompressEnabled: candidate.maintenanceAutoCompressEnabled === true,
-        maintenanceDuplicateCheckEnabled: candidate.maintenanceDuplicateCheckEnabled === true,
-        scoringServiceEnabled: candidate.scoringServiceEnabled === true,
         vectorTopK,
         vectorDeepWindow,
         vectorFinalTopK,
@@ -376,7 +355,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         vectorEnableRerank: candidate.vectorEnableRerank !== false,
         vectorRerankWindow,
         vectorAutoIndexOnWrite: candidate.vectorAutoIndexOnWrite !== false,
-        vectorEnableRecallStats: candidate.vectorEnableRecallStats !== false,
         vectorEmbeddingModel: String(candidate.vectorEmbeddingModel ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingModel),
         vectorEmbeddingVersion: String(candidate.vectorEmbeddingVersion ?? DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingVersion) || '1',
         vectorEnableLLMHubRerank: candidate.vectorEnableLLMHubRerank === true,

@@ -129,6 +129,7 @@ export {
 
 export {
   extractTavernMessageTextEvent,
+  extractTavernMessageOriginalTextEvent,
   extractTavernPromptMessagesEvent,
   findFirstTavernPromptSystemIndexEvent,
   findLastTavernPromptSystemIndexEvent,

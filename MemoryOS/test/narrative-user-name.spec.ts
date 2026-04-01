@@ -54,6 +54,11 @@ describe('narrative user name helpers', () => {
         expect(normalizeUserNarrativeText('主角提醒她不要再怀疑用户', '林远')).toBe('林远提醒她不要再怀疑林远');
     });
 
+    it('会把双花括号用户占位符替换成当前显示名', async () => {
+        const { normalizeUserNarrativeText } = await loadNarrativeUserNameModule('林远');
+        expect(normalizeUserNarrativeText('{{user}}在雨里回头看向{{ userDisplayName }}', '林远')).toBe('林远在雨里回头看向林远');
+    });
+
     it('会把 typed placeholder 渲染为自然语言引用', () => {
         const rendered = renderNarrativeReferenceText(
             '{{actor:char_heying}}在{{location:半山腰旧庙}}等待{{userDisplayName}}',
@@ -82,5 +87,19 @@ describe('narrative user name helpers', () => {
             },
         );
         expect(rendered).toBe('何盈仍在半山腰旧庙等林远');
+    });
+
+    it('会把自然语言中的{{user}}占位符渲染为当前用户名', () => {
+        const rendered = renderNarrativeReferenceText(
+            '{{user}}仍在{{location:半山腰旧庙}}等{{ user }}',
+            {
+                userDisplayName: '林远',
+                labelMap: new Map<string, string>([
+                    ['location:半山腰旧庙', '半山腰旧庙'],
+                ]),
+                aliasToLabelMap: new Map<string, string>(),
+            },
+        );
+        expect(rendered).toBe('林远仍在半山腰旧庙等林远');
     });
 });

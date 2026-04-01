@@ -15,6 +15,7 @@ import type {
     RoleEntryMemory,
 } from '../types';
 import unifiedMemoryWorkbenchCssText from './unifiedMemoryWorkbench.css?inline';
+import { buildSharedBoxCheckboxStyles } from '../../../_Components/sharedBoxCheckbox';
 import {
     type WorkbenchView,
     type ActorSubView,
@@ -47,7 +48,15 @@ import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { buildVectorsViewMarkup } from './workbenchTabs/tabVectors';
+import { buildContentLabViewMarkup } from './workbenchTabs/tabContentLab';
 import { parseTakeoverFormDraft } from './takeoverFormShared';
+import {
+    type ContentLabSettings,
+    type ContentBlockPolicy,
+} from '../config/content-tag-registry';
+import type { RawFloorRecord } from '../memory-takeover/content-block-pipeline';
+import { assembleContentChannels } from '../memory-takeover';
+import { collectTakeoverSourceBundle, type MemoryTakeoverMessageSlice } from '../memory-takeover/takeover-source';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import {
     buildMemoryGraphPageMarkup,
@@ -64,15 +73,19 @@ const graphService = new GraphService();
  */
 function ensureWorkbenchStyle(): void {
     const existing = document.getElementById(WORKBENCH_STYLE_ID) as HTMLStyleElement | null;
+    const nextStyleText = `
+${buildSharedBoxCheckboxStyles('.stx-memory-workbench')}
+${unifiedMemoryWorkbenchCssText}
+    `.trim();
     if (existing) {
-        if (existing.textContent !== unifiedMemoryWorkbenchCssText) {
-            existing.textContent = unifiedMemoryWorkbenchCssText;
+        if (existing.textContent !== nextStyleText) {
+            existing.textContent = nextStyleText;
         }
         return;
     }
     const style = document.createElement('style');
     style.id = WORKBENCH_STYLE_ID;
-    style.textContent = unifiedMemoryWorkbenchCssText;
+    style.textContent = nextStyleText;
     document.head.appendChild(style);
 }
 
@@ -181,6 +194,9 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'takeover' ? ' is-active' : ''}" data-workbench-view="takeover">
                         旧聊天接管
                     </button>
+                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'content-lab' ? ' is-active' : ''}" data-workbench-view="content-lab">
+                        内容拆分实验室
+                    </button>
                 </nav>
                 <div class="stx-memory-workbench__stats">
                     <span title="当前聊天中的记忆条目数量">条目 <strong>${snapshot.entries.length}</strong></span>
@@ -205,6 +221,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     })}
                 </section>
                 ${buildTakeoverViewMarkup(snapshot, state)}
+                ${buildContentLabViewMarkup(snapshot, state)}
             </main>
         </div>
     `;
@@ -307,11 +324,46 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         vectorLoading: false,
         vectorTestRunning: false,
         vectorTestResult: null,
+        vectorTestProgress: null,
+        contentLabStartFloor: '',
+        contentLabEndFloor: '',
+        contentLabSelectedFloor: '',
+        contentLabPreviewLoading: false,
+        contentLabRawText: '',
+        contentLabBlocks: [],
+        contentLabPrimaryPreview: '',
+        contentLabHintPreview: '',
+        contentLabExcludedPreview: '',
+        contentLabUnknownTagDefaultKind: 'unknown',
+        contentLabUnknownTagAllowHint: true,
+        contentLabEnableRuleClassifier: true,
+        contentLabEnableMetaKeywordDetection: true,
+        contentLabEnableToolArtifactDetection: true,
+        contentLabEnableAIClassifier: false,
+        contentLabEditingRuleIndex: -1,
     };
     let takeoverPreviewSequence = 0;
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
     let takeoverProgressSequence = 0;
     let previewCache: WorkbenchSnapshot['preview'] = null;
+    let contentLabSourceMessages: MemoryTakeoverMessageSlice[] = [];
+    let contentLabPreviewFloor: RawFloorRecord | undefined = undefined;
+
+    /**
+     * 功能：构建内容实验室快照。
+     */
+    const buildContentLabSnapshot = (): WorkbenchSnapshot['contentLabSnapshot'] => {
+        const availableFloors = contentLabSourceMessages.map((msg) => ({
+            floor: msg.floor,
+            role: msg.role,
+            charCount: msg.content.length,
+        }));
+        return {
+            tagRegistry: [],
+            availableFloors,
+            previewFloor: contentLabPreviewFloor,
+        };
+    };
 
     /**
      * 功能：读取工作台所需快照。
@@ -319,6 +371,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      */
     const loadSnapshot = async (): Promise<WorkbenchSnapshot> => {
         const previewPromise: Promise<WorkbenchSnapshot['preview']> = Promise.resolve(previewCache);
+        const contentLabSettings = await memory.chatState.getContentLabSettings();
+        state.contentLabUnknownTagDefaultKind = contentLabSettings.unknownTagPolicy.defaultKind;
+        state.contentLabUnknownTagAllowHint = contentLabSettings.unknownTagPolicy.allowAsHint;
+        state.contentLabEnableRuleClassifier = contentLabSettings.classifierToggles.enableRuleClassifier;
+        state.contentLabEnableMetaKeywordDetection = contentLabSettings.classifierToggles.enableMetaKeywordDetection;
+        state.contentLabEnableToolArtifactDetection = contentLabSettings.classifierToggles.enableToolArtifactDetection;
+        state.contentLabEnableAIClassifier = contentLabSettings.enableAIClassifier;
         const [
             entryTypes,
             entries,
@@ -381,6 +440,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 indexRecords: vectorIndexRecords,
                 recallStats: vectorRecallStats,
             },
+            contentLabSnapshot: {
+                ...buildContentLabSnapshot(),
+                tagRegistry: contentLabSettings.tagRegistry,
+            },
         };
     };
 
@@ -420,6 +483,38 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         if (state.vectorSelectedDocId && !snapshot.vectorSnapshot.documents.some((doc): boolean => doc.vectorDocId === state.vectorSelectedDocId)) {
             state.vectorSelectedDocId = snapshot.vectorSnapshot.documents[0]?.vectorDocId ?? '';
         }
+    };
+
+    /**
+     * 功能：读取并保存当前内容实验室配置。
+     * @param root 工作台根节点。
+     * @param registry 可选标签注册表。
+     * @returns 保存后的配置。
+     */
+    const persistContentLabSettings = async (
+        root: HTMLElement,
+        registry?: ContentBlockPolicy[],
+    ): Promise<ContentBlockPolicy[]> => {
+        const saved = await memory.chatState.saveContentLabSettings({
+            tagRegistry: registry,
+            unknownTagPolicy: {
+                defaultKind: readInputValue(root, '#stx-content-lab-unknown-kind') as ContentLabSettings['unknownTagPolicy']['defaultKind'],
+                allowAsHint: readCheckedValue(root, '#stx-content-lab-unknown-hint'),
+            },
+            classifierToggles: {
+                enableRuleClassifier: readCheckedValue(root, '#stx-content-lab-enable-rule'),
+                enableMetaKeywordDetection: readCheckedValue(root, '#stx-content-lab-enable-meta'),
+                enableToolArtifactDetection: readCheckedValue(root, '#stx-content-lab-enable-tool'),
+            },
+            enableAIClassifier: readCheckedValue(root, '#stx-content-lab-enable-ai'),
+        });
+        state.contentLabUnknownTagDefaultKind = saved.unknownTagPolicy.defaultKind;
+        state.contentLabUnknownTagAllowHint = saved.unknownTagPolicy.allowAsHint;
+        state.contentLabEnableRuleClassifier = saved.classifierToggles.enableRuleClassifier;
+        state.contentLabEnableMetaKeywordDetection = saved.classifierToggles.enableMetaKeywordDetection;
+        state.contentLabEnableToolArtifactDetection = saved.classifierToggles.enableToolArtifactDetection;
+        state.contentLabEnableAIClassifier = saved.enableAIClassifier;
+        return saved.tagRegistry;
     };
 
     /**
@@ -648,6 +743,12 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.vectorEnableLLMHubRerankTest = readCheckedValue(root, '#stx-vector-enable-llmhub-rerank');
                 state.vectorEnableGraphExpansionTest = readCheckedValue(root, '#stx-vector-enable-graph-expansion');
                 state.vectorTestRunning = true;
+                state.vectorTestProgress = {
+                    stage: 'prepare',
+                    title: '准备测试',
+                    message: '正在读取输入参数并准备启动召回测试。',
+                    progress: 0.02,
+                };
                 await render();
                 try {
                     const result = await memory.unifiedMemory.diagnostics.testVectorRetrieval({
@@ -664,6 +765,25 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                             schemaId: state.vectorSchemaFilter !== 'all' ? state.vectorSchemaFilter : undefined,
                             actorKey: state.vectorActorFilter !== 'all' ? state.vectorActorFilter : undefined,
                         },
+                        onProgress: (progress): void => {
+                            const nextTitle = String(progress.title ?? '').trim();
+                            const nextMessage = String(progress.message ?? '').trim();
+                            if (
+                                state.vectorTestProgress
+                                && state.vectorTestProgress.stage === progress.stage
+                                && state.vectorTestProgress.title === nextTitle
+                                && state.vectorTestProgress.message === nextMessage
+                            ) {
+                                return;
+                            }
+                            state.vectorTestProgress = {
+                                stage: String(progress.stage ?? '').trim() || 'running',
+                                title: nextTitle || '测试进行中',
+                                message: nextMessage || '正在执行召回测试。',
+                                progress: typeof progress.progress === 'number' ? progress.progress : undefined,
+                            };
+                            void render();
+                        },
                     });
                     state.vectorTestResult = {
                         generatedAt: Date.now(),
@@ -673,7 +793,20 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         diagnostics: result.diagnostics,
                         items: result.items,
                     };
+                    state.vectorTestProgress = {
+                        stage: 'completed',
+                        title: '测试完成',
+                        message: '召回测试已完成，结果与诊断已刷新。',
+                        progress: 1,
+                    };
                     toast.success('向量测试已完成。');
+                } catch (error) {
+                    state.vectorTestProgress = {
+                        stage: 'failed',
+                        title: '测试失败',
+                        message: String((error as Error)?.message ?? error ?? '向量召回测试执行失败。').trim() || '向量召回测试执行失败。',
+                    };
+                    toast.error(state.vectorTestProgress.message);
                 } finally {
                     state.vectorTestRunning = false;
                     await render();
@@ -744,6 +877,206 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await render();
                 return;
             }
+            if (action === 'content-lab-preview-floor') {
+                const selectedFloor = Number(readInputValue(root, '#stx-content-lab-selected-floor'));
+                if (!selectedFloor || selectedFloor < 1) {
+                    toast.error('请输入有效的楼层号。');
+                    return;
+                }
+                state.contentLabPreviewLoading = true;
+                state.contentLabSelectedFloor = String(selectedFloor);
+                await render();
+                try {
+                    if (contentLabSourceMessages.length === 0) {
+                        const sourceBundle = collectTakeoverSourceBundle();
+                        contentLabSourceMessages = sourceBundle.messages;
+                    }
+                    if (!contentLabSourceMessages.some((m) => m.floor === selectedFloor)) {
+                        toast.error(`未找到楼层 ${selectedFloor}，可用范围：${contentLabSourceMessages[0]?.floor ?? '?'} - ${contentLabSourceMessages[contentLabSourceMessages.length - 1]?.floor ?? '?'}`);
+                        state.contentLabPreviewLoading = false;
+                        await render();
+                        return;
+                    }
+                    await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
+                    const record = await memory.chatState.previewFloorContentBlocks({ floor: selectedFloor });
+                    contentLabPreviewFloor = record;
+                    state.contentLabBlocks = record.parsedBlocks;
+                    state.contentLabRawText = record.originalText;
+                    const channels = assembleContentChannels([record]);
+                    state.contentLabPrimaryPreview = channels.primaryText;
+                    state.contentLabHintPreview = channels.hintText;
+                    state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                } finally {
+                    state.contentLabPreviewLoading = false;
+                    await render();
+                }
+                return;
+            }
+            if (action === 'content-lab-preview-range') {
+                const startFloor = Number(readInputValue(root, '#stx-content-lab-start-floor'));
+                const endFloor = Number(readInputValue(root, '#stx-content-lab-end-floor'));
+                if (!startFloor || !endFloor || startFloor < 1 || endFloor < startFloor) {
+                    toast.error('请输入有效的楼层范围。');
+                    return;
+                }
+                state.contentLabPreviewLoading = true;
+                state.contentLabStartFloor = String(startFloor);
+                state.contentLabEndFloor = String(endFloor);
+                await render();
+                try {
+                    if (contentLabSourceMessages.length === 0) {
+                        const sourceBundle = collectTakeoverSourceBundle();
+                        contentLabSourceMessages = sourceBundle.messages;
+                    }
+                    await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
+                    const records = await memory.chatState.previewFloorRangeContentBlocks({ startFloor, endFloor });
+                    const channels = assembleContentChannels(records);
+                    contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor))
+                        ?? records[0];
+                    state.contentLabBlocks = contentLabPreviewFloor?.parsedBlocks ?? [];
+                    state.contentLabRawText = contentLabPreviewFloor?.originalText ?? '';
+                    state.contentLabPrimaryPreview = channels.primaryText;
+                    state.contentLabHintPreview = channels.hintText;
+                    state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                } finally {
+                    state.contentLabPreviewLoading = false;
+                    await render();
+                }
+                return;
+            }
+            if (action === 'content-lab-reset-rules') {
+                const saved = await memory.chatState.saveContentLabSettings({
+                    tagRegistry: [],
+                    unknownTagPolicy: { defaultKind: 'unknown', allowAsHint: true },
+                    classifierToggles: {
+                        enableRuleClassifier: true,
+                        enableMetaKeywordDetection: true,
+                        enableToolArtifactDetection: true,
+                    },
+                    enableAIClassifier: false,
+                });
+                state.contentLabUnknownTagDefaultKind = saved.unknownTagPolicy.defaultKind;
+                state.contentLabUnknownTagAllowHint = saved.unknownTagPolicy.allowAsHint;
+                state.contentLabEnableRuleClassifier = saved.classifierToggles.enableRuleClassifier;
+                state.contentLabEnableMetaKeywordDetection = saved.classifierToggles.enableMetaKeywordDetection;
+                state.contentLabEnableToolArtifactDetection = saved.classifierToggles.enableToolArtifactDetection;
+                state.contentLabEnableAIClassifier = saved.enableAIClassifier;
+                toast.success('标签规则已重置为默认值。');
+                await render();
+                return;
+            }
+            if (action === 'content-lab-add-rule') {
+                const tagName = prompt('请输入标签名（如 custom_tag）：');
+                if (!tagName || !tagName.trim()) return;
+                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
+                registry.push({
+                    tagName: tagName.trim(),
+                    aliases: [],
+                    kind: 'unknown',
+                    includeInPrimaryExtraction: false,
+                    includeAsHint: true,
+                    allowActorPromotion: false,
+                    allowRelationPromotion: false,
+                    notes: '用户自定义',
+                });
+                await persistContentLabSettings(root, registry);
+                toast.success('已添加新规则。');
+                await render();
+                return;
+            }
+            if (action === 'content-lab-delete-rule') {
+                const idx = Number(button.dataset.ruleIndex ?? -1);
+                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
+                if (idx >= 0 && idx < registry.length) {
+                    registry.splice(idx, 1);
+                    if (state.contentLabEditingRuleIndex === idx) {
+                        state.contentLabEditingRuleIndex = -1;
+                    } else if (state.contentLabEditingRuleIndex > idx) {
+                        state.contentLabEditingRuleIndex -= 1;
+                    }
+                    await persistContentLabSettings(root, registry);
+                    toast.success('规则已删除。');
+                    await render();
+                }
+                return;
+            }
+            if (action === 'content-lab-edit-rule') {
+                const idx = Number(button.dataset.ruleIndex ?? -1);
+                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
+                if (!registry[idx]) return;
+                state.contentLabEditingRuleIndex = idx;
+                await render();
+                return;
+            }
+            if (action === 'content-lab-save-rule') {
+                const idx = Number(button.dataset.ruleIndex ?? -1);
+                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
+                const rule = registry[idx];
+                if (!rule) return;
+                const kindValue = readInputValue(root, `[data-rule-kind="${idx}"]`);
+                const tagName = readInputValue(root, `[data-rule-tag-name="${idx}"]`);
+                const aliasesText = readInputValue(root, `[data-rule-aliases="${idx}"]`);
+                const notes = readInputValue(root, `[data-rule-notes="${idx}"]`);
+                const includeInPrimaryExtraction = readCheckedValue(root, `[data-rule-primary="${idx}"]`);
+                const includeAsHint = readCheckedValue(root, `[data-rule-hint="${idx}"]`);
+                if (!tagName) {
+                    toast.warning('标签名不能为空。');
+                    return;
+                }
+                const kindOptions: ContentBlockPolicy['kind'][] = ['story_primary', 'story_secondary', 'summary', 'tool_artifact', 'thought', 'meta_commentary', 'instruction', 'unknown'];
+                const nextKind = kindOptions.includes(kindValue as ContentBlockPolicy['kind'])
+                    ? kindValue as ContentBlockPolicy['kind']
+                    : 'unknown';
+                rule.tagName = tagName;
+                rule.aliases = parseTagText(aliasesText);
+                rule.kind = nextKind;
+                rule.includeInPrimaryExtraction = includeInPrimaryExtraction;
+                rule.includeAsHint = includeAsHint;
+                rule.allowActorPromotion = includeInPrimaryExtraction;
+                rule.allowRelationPromotion = includeInPrimaryExtraction || includeAsHint;
+                rule.notes = notes;
+                state.contentLabEditingRuleIndex = -1;
+                await persistContentLabSettings(root, registry);
+                toast.success('规则已保存。');
+                await render();
+                return;
+            }
+            if (action === 'content-lab-export-rules') {
+                const registry = snapshot.contentLabSnapshot.tagRegistry;
+                const blob = new Blob([JSON.stringify(registry, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'content-tag-registry.json';
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success('规则已导出。');
+                return;
+            }
+            if (action === 'content-lab-import-rules') {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.json';
+                input.onchange = async () => {
+                    const file = input.files?.[0];
+                    if (!file) return;
+                    try {
+                        const text = await file.text();
+                        const rules = JSON.parse(text);
+                        if (!Array.isArray(rules)) {
+                            toast.error('导入文件格式不正确。');
+                            return;
+                        }
+                        await persistContentLabSettings(root, rules as ContentBlockPolicy[]);
+                        toast.success('规则已导入。');
+                        await render();
+                    } catch {
+                        toast.error('导入失败，请检查文件格式。');
+                    }
+                };
+                input.click();
+                return;
+            }
         } catch (error) {
             logger.error(`工作台动作执行失败: ${action}`, error);
             toast.error(`操作失败：${String((error as Error)?.message ?? error)}`);
@@ -765,6 +1098,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     }
                     if (state.currentView === 'takeover') {
                         void refreshTakeoverProgress();
+                    }
+                    if (state.currentView === 'content-lab' && contentLabSourceMessages.length === 0) {
+                        void loadContentLabSource();
                     }
                 });
             });
@@ -1095,6 +1431,22 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * 功能：重新渲染整个工作台。
      * @returns 无返回值。
      */
+    /**
+     * 功能：加载内容实验室数据源（聊天楼层消息）。
+     * @returns 异步完成。
+     */
+    const loadContentLabSource = async (): Promise<void> => {
+        try {
+            const bundle = collectTakeoverSourceBundle();
+            contentLabSourceMessages = bundle.messages;
+            logger.info(`内容实验室加载了 ${bundle.messages.length} 层消息`);
+            await render();
+        } catch (error) {
+            logger.warn('内容实验室加载消息失败', error);
+            toast.error(`内容实验室加载失败：${String((error as Error)?.message ?? error)}`);
+        }
+    };
+
     /**
      * 功能：后台刷新旧聊天处理进度，避免切页时同步卡顿。
      * @returns 异步完成。

@@ -1,5 +1,5 @@
 import type { MemoryTakeoverActiveSnapshot, MemoryTakeoverBatchResult, MemoryTakeoverConsolidationResult } from '../types';
-import type { PipelineConflictRecord, PipelineSectionDigestRecord } from '../pipeline/pipeline-types';
+import type { ConflictResolutionPatch, PipelineConflictRecord, PipelineSectionDigestRecord } from '../pipeline/pipeline-types';
 import { createInMemoryStagingRepository } from '../pipeline/staging-repository';
 
 /**
@@ -7,6 +7,7 @@ import { createInMemoryStagingRepository } from '../pipeline/staging-repository'
  */
 export interface TakeoverSessionStaging {
     takeoverId: string;
+    admittedBatchSignature: string;
     status: 'running' | 'paused' | 'failed' | 'completed';
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     batchResults: MemoryTakeoverBatchResult[];
@@ -17,8 +18,10 @@ export interface TakeoverSessionStaging {
         relationships: unknown[];
         tasks: unknown[];
         world: unknown[];
+        facts: unknown[];
     } | null;
     unresolvedConflicts: PipelineConflictRecord[];
+    conflictPatches: ConflictResolutionPatch[];
     finalResult: MemoryTakeoverConsolidationResult | null;
 }
 

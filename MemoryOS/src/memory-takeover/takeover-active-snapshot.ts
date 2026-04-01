@@ -13,6 +13,7 @@ export async function runTakeoverActiveSnapshot(input: {
     pluginId: string;
     range: MemoryTakeoverRange;
     messages: MemoryTakeoverMessageSlice[];
+    hintContext?: string;
 }): Promise<MemoryTakeoverActiveSnapshot> {
     const recentDigest: string = input.messages
         .slice(-8)
@@ -39,6 +40,7 @@ export async function runTakeoverActiveSnapshot(input: {
         payload: {
             range: input.range,
             messages: input.messages,
+            hintContext: input.hintContext,
         },
     });
     return structured

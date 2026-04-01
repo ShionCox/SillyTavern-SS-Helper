@@ -24,6 +24,7 @@ import { buildDefaultRecallConfig } from './recall-config';
 export interface RetrievalOrchestratorOptions {
     actorProfiles?: ActorProfileForDictionary[];
     recentContext?: RecentContextBias;
+    onTrace?: (record: MemoryDebugLogRecord) => void;
 }
 
 /**
@@ -125,6 +126,7 @@ export class RetrievalOrchestrator {
         const writeTrace = (record: MemoryDebugLogRecord): void => {
             const normalized = recordMemoryDebug(chatKey, record);
             traceRecords.push(normalized);
+            options.onTrace?.(normalized);
         };
 
         if (chatKey) {

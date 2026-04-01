@@ -1,5 +1,5 @@
 import { openSharedDialog, type SharedDialogInstance } from '../../../_Components/sharedDialog';
-import type { MemoryTakeoverCreateInput, MemoryTakeoverPreviewEstimate } from '../types';
+import type { MemoryTakeoverCreateInput, MemoryTakeoverPayloadPreview, MemoryTakeoverPreviewEstimate } from '../types';
 import { buildTakeoverPreviewMarkup } from './takeoverPreviewMarkup';
 import {
     normalizeTakeoverMode,
@@ -11,7 +11,6 @@ import { waitForUiPaint } from './uiAsync';
 
 const MEMORY_TAKEOVER_DIALOG_ID = 'stx-memory-takeover-dialog';
 const MEMORY_TAKEOVER_DIALOG_STYLE_ID = 'stx-memory-takeover-dialog-style';
-const MEMORY_TAKEOVER_PREVIEW_DEBOUNCE_MS = 280;
 
 /**
  * 功能：定义旧聊天接管弹窗返回结果。
@@ -189,6 +188,45 @@ function ensureMemoryTakeoverDialogStyle(): void {
             align-items: center;
             gap: 10px;
         }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog__actual-preview {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog__actual-preview-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 360px;
+            overflow-y: auto;
+        }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog__actual-preview-item {
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 10px;
+            background: rgba(255,255,255,0.03);
+        }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog__actual-preview-meta {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            font-size: 12px;
+            opacity: 0.86;
+            margin-bottom: 8px;
+        }
+        #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-dialog__actual-preview pre {
+            margin: 6px 0 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.2);
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 220px;
+            overflow: auto;
+            font-size: 12px;
+            line-height: 1.6;
+        }
         #${MEMORY_TAKEOVER_DIALOG_ID} .stx-memory-takeover-preview__spinner {
             width: 16px;
             height: 16px;
@@ -222,6 +260,7 @@ export async function openMemoryTakeoverDialog(input: {
     defaultAutoConsolidate: boolean;
     defaultPauseOnError: boolean;
     previewEstimate?: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverPreviewEstimate>;
+    previewActualPayload?: (config?: MemoryTakeoverCreateInput) => Promise<MemoryTakeoverPayloadPreview>;
 }): Promise<MemoryTakeoverDialogResult> {
     ensureMemoryTakeoverDialogStyle();
     return new Promise<MemoryTakeoverDialogResult>((resolve: (result: MemoryTakeoverDialogResult) => void): void => {
@@ -289,8 +328,18 @@ export async function openMemoryTakeoverDialog(input: {
                         </div>
                     </div>
                     <div class="stx-memory-takeover-dialog__preview">
-                        <div class="stx-memory-takeover-dialog__preview-title">批次 Token 预估</div>
+                        <div class="stx-memory-takeover-dialog__preview-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                            <span>批次 Token 预估</span>
+                            <button type="button" class="stx-memory-takeover-dialog__button" data-memory-takeover-preview="true">计算预估</button>
+                        </div>
                         <div id="stx-memory-takeover-preview-container">${buildTakeoverPreviewMarkup({ estimate: null })}</div>
+                    </div>
+                    <div class="stx-memory-takeover-dialog__preview">
+                        <div class="stx-memory-takeover-dialog__preview-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                            <span>实际送模内容预览</span>
+                            <button type="button" class="stx-memory-takeover-dialog__button" data-memory-takeover-payload-preview="true">预览送模内容</button>
+                        </div>
+                        <div id="stx-memory-takeover-actual-preview-container">${buildTakeoverActualPreviewMarkup(null)}</div>
                     </div>
                     <div class="stx-memory-takeover-dialog__grid">
                         <label class="stx-memory-takeover-dialog__card stx-memory-takeover-dialog__checkbox">
@@ -336,14 +385,18 @@ export async function openMemoryTakeoverDialog(input: {
                 const autoContinueInput = root.querySelector('#stx-memory-takeover-auto-continue') as HTMLInputElement | null;
                 const autoConsolidateInput = root.querySelector('#stx-memory-takeover-auto-consolidate') as HTMLInputElement | null;
                 const pauseOnErrorInput = root.querySelector('#stx-memory-takeover-pause-on-error') as HTMLInputElement | null;
+                const previewButton = root.querySelector('[data-memory-takeover-preview="true"]') as HTMLButtonElement | null;
+                const actualPreviewButton = root.querySelector('[data-memory-takeover-payload-preview="true"]') as HTMLButtonElement | null;
                 const previewContainer = root.querySelector('#stx-memory-takeover-preview-container') as HTMLElement | null;
+                const actualPreviewContainer = root.querySelector('#stx-memory-takeover-actual-preview-container') as HTMLElement | null;
                 const recentFloorsCard = root.querySelector('[data-role="recent-floors-card"]') as HTMLElement | null;
                 const customRangeStartCard = root.querySelector('[data-role="custom-range-start-card"]') as HTMLElement | null;
                 const customRangeEndCard = root.querySelector('[data-role="custom-range-end-card"]') as HTMLElement | null;
                 const activeSnapshotFloorsCard = root.querySelector('[data-role="active-snapshot-floors-card"]') as HTMLElement | null;
                 let previewSequence = 0;
                 let previewLoading = false;
-                let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+                let actualPreviewSequence = 0;
+                let actualPreviewLoading = false;
 
                 /**
                  * 功能：读取当前表单草稿。
@@ -379,6 +432,29 @@ export async function openMemoryTakeoverDialog(input: {
                     if (activeSnapshotFloorsCard) {
                         activeSnapshotFloorsCard.hidden = !(visibility.showActiveSnapshotFloors && useActiveSnapshotInput?.checked === true);
                     }
+                };
+
+                /**
+                 * 功能：重置 token 预估展示，避免显示过期结果。
+                 */
+                const resetPreview = (): void => {
+                    if (!previewContainer || previewLoading) {
+                        return;
+                    }
+                    previewContainer.innerHTML = buildTakeoverPreviewMarkup({
+                        estimate: null,
+                        emptyText: '点击“计算预估”后，这里会显示每一轮的 token 预估。',
+                    });
+                };
+
+                /**
+                 * 功能：重置送模内容预览。
+                 */
+                const resetActualPreview = (): void => {
+                    if (!actualPreviewContainer || actualPreviewLoading) {
+                        return;
+                    }
+                    actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup(null);
                 };
 
                 /**
@@ -422,6 +498,9 @@ export async function openMemoryTakeoverDialog(input: {
                     if (confirmButton) {
                         confirmButton.disabled = true;
                     }
+                    if (previewButton) {
+                        previewButton.disabled = true;
+                    }
                     previewContainer.innerHTML = buildTakeoverPreviewMarkup({ estimate: null, loading: true });
                     await waitForUiPaint();
                     try {
@@ -457,6 +536,60 @@ export async function openMemoryTakeoverDialog(input: {
                             if (confirmButton) {
                                 confirmButton.disabled = false;
                             }
+                            if (previewButton) {
+                                previewButton.disabled = false;
+                            }
+                        }
+                    }
+                };
+
+                /**
+                 * 功能：刷新实际送模内容预览。
+                 */
+                const refreshActualPreview = async (): Promise<void> => {
+                    if (!actualPreviewContainer) {
+                        return;
+                    }
+                    const draft = readDraft();
+                    const parsed = parseTakeoverFormDraft(draft);
+                    const currentSequence = ++actualPreviewSequence;
+                    if (parsed.validationError) {
+                        actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup({
+                            errorText: parsed.validationError,
+                        });
+                        return;
+                    }
+                    if (!input.previewActualPayload) {
+                        actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup({
+                            errorText: '当前环境未接入实际送模内容预览能力。',
+                        });
+                        return;
+                    }
+                    actualPreviewLoading = true;
+                    if (actualPreviewButton) {
+                        actualPreviewButton.disabled = true;
+                    }
+                    actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup({ loading: true });
+                    await waitForUiPaint();
+                    try {
+                        const preview = await input.previewActualPayload(parsed.config);
+                        if (currentSequence !== actualPreviewSequence) {
+                            return;
+                        }
+                        actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup({ preview });
+                    } catch (error) {
+                        if (currentSequence !== actualPreviewSequence) {
+                            return;
+                        }
+                        actualPreviewContainer.innerHTML = buildTakeoverActualPreviewMarkup({
+                            errorText: `送模预览失败：${String((error as Error)?.message ?? error)}`,
+                        });
+                    } finally {
+                        if (currentSequence === actualPreviewSequence) {
+                            actualPreviewLoading = false;
+                            if (actualPreviewButton) {
+                                actualPreviewButton.disabled = false;
+                            }
                         }
                     }
                 };
@@ -464,21 +597,13 @@ export async function openMemoryTakeoverDialog(input: {
                 const bindPreviewInput = (element: HTMLInputElement | HTMLSelectElement | null): void => {
                     element?.addEventListener('input', (): void => {
                         syncVisibility();
-                        if (previewDebounceTimer) {
-                            clearTimeout(previewDebounceTimer);
-                        }
-                        previewDebounceTimer = setTimeout((): void => {
-                            previewDebounceTimer = null;
-                            void refreshPreview();
-                        }, MEMORY_TAKEOVER_PREVIEW_DEBOUNCE_MS);
+                        resetPreview();
+                        resetActualPreview();
                     });
                     element?.addEventListener('change', (): void => {
                         syncVisibility();
-                        if (previewDebounceTimer) {
-                            clearTimeout(previewDebounceTimer);
-                            previewDebounceTimer = null;
-                        }
-                        void refreshPreview();
+                        resetPreview();
+                        resetActualPreview();
                     });
                 };
 
@@ -490,7 +615,21 @@ export async function openMemoryTakeoverDialog(input: {
                 bindPreviewInput(useActiveSnapshotInput);
                 bindPreviewInput(activeSnapshotFloorsInput);
                 syncVisibility();
-                void refreshPreview();
+                resetPreview();
+                resetActualPreview();
+
+                previewButton?.addEventListener('click', (): void => {
+                    if (previewLoading) {
+                        return;
+                    }
+                    void refreshPreview();
+                });
+                actualPreviewButton?.addEventListener('click', (): void => {
+                    if (actualPreviewLoading) {
+                        return;
+                    }
+                    void refreshActualPreview();
+                });
 
                 confirmButton?.addEventListener('click', (): void => {
                     if (previewLoading) {
@@ -538,4 +677,73 @@ export async function openMemoryTakeoverDialog(input: {
             },
         });
     });
+}
+
+/**
+ * 功能：构建实际送模内容预览区域。
+ * @param input 预览输入。
+ * @returns HTML 片段。
+ */
+function buildTakeoverActualPreviewMarkup(input: {
+    preview?: MemoryTakeoverPayloadPreview;
+    loading?: boolean;
+    errorText?: string;
+} | null): string {
+    if (input?.loading) {
+        return `
+            <div class="stx-memory-takeover-dialog__actual-preview">
+                <div class="stx-memory-takeover-preview__loading">
+                    <span class="stx-memory-takeover-preview__spinner" aria-hidden="true"></span>
+                    <span>正在生成实际送模内容预览...</span>
+                </div>
+            </div>
+        `;
+    }
+    if (input?.errorText) {
+        return `
+            <div class="stx-memory-takeover-dialog__actual-preview">
+                <div class="stx-memory-takeover-preview__warning">${escapeHtml(input.errorText)}</div>
+            </div>
+        `;
+    }
+    if (!input?.preview) {
+        return `
+            <div class="stx-memory-takeover-dialog__actual-preview">
+                <div class="stx-memory-takeover-preview__empty">点击“预览送模内容”后，这里会显示每个批次实际发给 AI 的楼层与请求文本。</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="stx-memory-takeover-dialog__actual-preview">
+            <div class="stx-memory-takeover-preview__summary">
+                <span>总批次数：<strong>${escapeHtml(String(input.preview.totalBatches))}</strong></span>
+                <span>范围：<strong>${escapeHtml(input.preview.range ? `${input.preview.range.startFloor}-${input.preview.range.endFloor}` : '无')}</strong></span>
+                <span>批大小：<strong>${escapeHtml(String(input.preview.batchSize))}</strong></span>
+            </div>
+            <div class="stx-memory-takeover-dialog__actual-preview-list">
+                ${input.preview.batches.map((batch) => `
+                    <div class="stx-memory-takeover-dialog__actual-preview-item">
+                        <div class="stx-memory-takeover-dialog__actual-preview-meta">
+                            <strong>${escapeHtml(batch.label)}</strong>
+                            <span>范围：${escapeHtml(`${batch.range.startFloor}-${batch.range.endFloor}`)}</span>
+                            <span>原始楼层：${escapeHtml(batch.sourceFloors.join(', ') || '无')}</span>
+                            <span>送模楼层：${escapeHtml(batch.sentFloors.join(', ') || '无')}</span>
+                        </div>
+                        <details open>
+                            <summary>发送给 AI 的消息体</summary>
+                            <pre>${escapeHtml(batch.requestMessages.map((message) => `[${message.role}]\n${message.content}`).join('\n\n'))}</pre>
+                        </details>
+                        <details style="margin-top:8px;">
+                            <summary>辅助区文本</summary>
+                            <pre>${escapeHtml(batch.hintText || '（无）')}</pre>
+                        </details>
+                        <details style="margin-top:8px;">
+                            <summary>排除摘要</summary>
+                            <pre>${escapeHtml(batch.excludedSummary.join('\n') || '（无）')}</pre>
+                        </details>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
 }

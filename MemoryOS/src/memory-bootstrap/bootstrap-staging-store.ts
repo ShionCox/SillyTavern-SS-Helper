@@ -7,6 +7,7 @@ import { createInMemoryStagingRepository } from '../pipeline/staging-repository'
 export interface BootstrapStagingSnapshot {
     runId: string;
     status: 'running' | 'paused' | 'failed' | 'completed';
+    failedPhase?: 'phase1' | 'phase2' | 'phase3' | 'phase4';
     coreDocument: ColdStartDocument | null;
     stateDocument: ColdStartDocument | null;
     reducedDocument: ColdStartDocument | null;

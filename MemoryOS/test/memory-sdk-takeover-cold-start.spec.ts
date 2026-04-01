@@ -395,13 +395,14 @@ describe('memory sdk takeover cold start sync', () => {
             .applyTakeoverConsolidation(result);
 
         const actorEnsureCalls = ensureActorProfileMock.mock.calls
-            .map((call) => call[0] as { actorKey?: string; displayName?: string })
+            .map((call) => call[0] as { actorKey?: string; displayName?: string; displayNameSource?: string })
             .filter((item) => item.displayName === '橙狗狗' || item.displayName === '何盈');
 
         expect(actorEnsureCalls).toHaveLength(2);
         expect(actorEnsureCalls[0]?.actorKey).not.toBe(actorEnsureCalls[1]?.actorKey);
         expect(actorEnsureCalls[0]?.actorKey).toMatch(/^actor_/);
         expect(actorEnsureCalls[1]?.actorKey).toMatch(/^actor_/);
+        expect(actorEnsureCalls.every((item) => item.displayNameSource === 'takeover_actor_card')).toBe(true);
     });
 
     it('writes non-actor relation targets back onto entity entries instead of creating actor profiles', async () => {
@@ -624,17 +625,8 @@ describe('memory sdk takeover cold start sync', () => {
         expect(ensureActorProfileMock).toHaveBeenCalledWith(expect.objectContaining({
             actorKey: 'char_heying',
             displayName: 'heying',
+            displayNameSource: 'takeover_relation',
         }));
-        expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
-            entryType: 'actor_profile',
-            title: 'heying',
-            detailPayload: expect.objectContaining({
-                hydrationState: 'partial',
-                fields: expect.objectContaining({
-                    hydrationState: 'partial',
-                }),
-            }),
-        }), expect.anything());
         expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
             entryType: 'relationship',
             title: '你与heying的关系',
@@ -695,5 +687,72 @@ describe('memory sdk takeover cold start sync', () => {
             .applyTakeoverConsolidation(result);
 
         expect(bindRoleToEntryMock).toHaveBeenCalledWith(expect.stringMatching(/^he_ying|^actor_/), expect.any(String));
+    });
+
+    it('relationState 使用 actorKey 时应优先回填正式角色卡中文名', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+        listActorProfilesMock.mockResolvedValue([{ actorKey: 'user', displayName: '林远' }]);
+
+        const result: MemoryTakeoverConsolidationResult = {
+            takeoverId: 'takeover-7',
+            chapterDigestIndex: [],
+            actorCards: [{
+                actorKey: 'actor_heying',
+                displayName: '何盈',
+                aliases: [],
+                identityFacts: [],
+                originFacts: [],
+                traits: [],
+            }],
+            relationships: [],
+            entityCards: [],
+            entityTransitions: [],
+            longTermFacts: [],
+            relationState: [{
+                target: 'actor_heying',
+                targetType: 'actor',
+                relationTag: '暧昧',
+                state: '{{actor:actor_heying}}仍在等{{userDisplayName}}。',
+                reason: '{{actor:actor_heying}}与你旧情未断。',
+            }],
+            taskState: [],
+            worldState: {},
+            activeSnapshot: null,
+            dedupeStats: {
+                totalFacts: 0,
+                dedupedFacts: 0,
+                relationUpdates: 1,
+                taskUpdates: 0,
+                worldUpdates: 0,
+            },
+            conflictStats: {
+                unresolvedFacts: 0,
+                unresolvedRelations: 0,
+                unresolvedTasks: 0,
+                unresolvedWorldStates: 0,
+                unresolvedEntities: 0,
+            },
+            generatedAt: Date.now(),
+        };
+
+        await (sdk as unknown as { applyTakeoverConsolidation: (value: MemoryTakeoverConsolidationResult) => Promise<void> })
+            .applyTakeoverConsolidation(result);
+
+        expect(ensureActorProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+            actorKey: 'actor_heying',
+            displayName: '何盈',
+            displayNameSource: 'takeover_actor_card',
+        }));
+        expect(ensureActorProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+            actorKey: 'actor_heying',
+            displayName: '何盈',
+            displayNameSource: 'takeover_relation',
+        }));
+        expect(saveEntryMock).toHaveBeenCalledWith(expect.objectContaining({
+            entryType: 'relationship',
+            title: '你与何盈的关系',
+            summary: '何盈与你旧情未断。',
+            detail: '何盈仍在等你。',
+        }), expect.anything());
     });
 });

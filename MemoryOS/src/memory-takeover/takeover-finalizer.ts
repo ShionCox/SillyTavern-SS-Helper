@@ -1,12 +1,17 @@
 import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverActorCardCandidate,
+    MemoryTakeoverBatchAuditReport,
     MemoryTakeoverBatchResult,
+    MemoryTakeoverCandidateActorMention,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverEntityCardCandidate,
     MemoryTakeoverEntityTransition,
     MemoryTakeoverRelationshipCard,
+    MemoryTakeoverRelationTransition,
     MemoryTakeoverStableFact,
+    MemoryTakeoverTaskTransition,
+    MemoryTakeoverWorldStateChange,
 } from '../types';
 import type {
     ConflictResolutionPatch,
@@ -21,7 +26,7 @@ import type {
  * 此函数是新架构的核心 finalize 层：
  * - 应用冲突裁决补丁（applyPatches）
  * - 归并实体变更（collapseEntityTransitions）
- * - 去重稳定事实（dedupeFacts）
+ * - 输出 reducer 归并后的长期事实
  * - 补齐结构默认值与统计信息
  *
  * 最终输出主要由代码决定，而不是由 LLM 重新生成完整文档。
@@ -37,36 +42,39 @@ export function finalizeTakeoverConsolidation(input: {
     actorLedger: PipelineDomainLedgerRecord<MemoryTakeoverActorCardCandidate>[];
     entityLedger: PipelineDomainLedgerRecord<MemoryTakeoverEntityCardCandidate>[];
     relationshipLedger: PipelineDomainLedgerRecord<MemoryTakeoverRelationshipCard>[];
-    taskLedger: PipelineDomainLedgerRecord<{
-        task: string;
-        state: string;
-        title?: string;
-        summary?: string;
-        description?: string;
-        goal?: string;
-        compareKey?: string;
-        bindings?: MemoryTakeoverConsolidationResult['taskState'][number]['bindings'];
-        reasonCodes?: string[];
-    }>[];
-    worldLedger: PipelineDomainLedgerRecord<{ key: string; value: string }>[];
+    factLedger: PipelineDomainLedgerRecord<MemoryTakeoverStableFact>[];
+    taskLedger: PipelineDomainLedgerRecord<MemoryTakeoverConsolidationResult['taskState'][number]>[];
+    worldLedger: PipelineDomainLedgerRecord<MemoryTakeoverWorldStateChange>[];
     conflictPatches: ConflictResolutionPatch[];
     diagnostics: PipelineDiagnostics;
 }): MemoryTakeoverConsolidationResult {
     const actorCards = applyPatches(input.actorLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'actor'));
     const entityCards = applyPatches(input.entityLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'entity'));
     const relationships = applyPatches(input.relationshipLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'relationship'));
-    const taskState = input.taskLedger.map((item) => item.canonicalRecord);
-    const worldRecords = input.worldLedger.map((item) => item.canonicalRecord);
+    const longTermFacts = applyPatches(input.factLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'fact'));
+    const taskState = applyPatches(input.taskLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'task'));
+    const worldRecords = applyPatches(input.worldLedger, input.conflictPatches.filter((item: ConflictResolutionPatch): boolean => item.domain === 'world'));
     const worldState = Object.fromEntries(worldRecords.map((item) => [item.key, item.value]));
     const entityTransitions = collapseEntityTransitions(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverEntityTransition[] => item.entityTransitions ?? []));
-    const longTermFacts = dedupeFacts(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts ?? []));
-    const relationState = relationships.map((item: MemoryTakeoverRelationshipCard) => ({
+    const candidateActors = dedupeCandidateActors(input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverCandidateActorMention[] => item.candidateActors ?? []));
+    const relationState = dedupeRelationState([
+        ...relationships.map((item: MemoryTakeoverRelationshipCard) => ({
         target: item.targetActorKey,
         state: item.state,
         reason: item.summary,
         relationTag: item.relationTag,
         targetType: 'actor' as const,
-    }));
+        })),
+        ...input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationTransition[] => item.relationTransitions ?? [])
+            .filter((item: MemoryTakeoverRelationTransition): boolean => String(item.targetType ?? 'unknown').trim().toLowerCase() !== 'actor')
+            .map((item: MemoryTakeoverRelationTransition) => ({
+                target: item.target,
+                state: item.to,
+                reason: item.reason,
+                relationTag: item.relationTag,
+                targetType: item.targetType ?? 'unknown',
+            })),
+    ]);
 
     return {
         takeoverId: input.takeoverId,
@@ -77,6 +85,7 @@ export function finalizeTakeoverConsolidation(input: {
             tags: item.batchIds,
         })),
         actorCards,
+        candidateActors,
         relationships,
         entityCards,
         entityTransitions,
@@ -84,6 +93,7 @@ export function finalizeTakeoverConsolidation(input: {
         relationState,
         taskState,
         worldState,
+        worldStateDetails: worldRecords,
         activeSnapshot: input.activeSnapshot,
         dedupeStats: {
             totalFacts: input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverStableFact[] => item.stableFacts ?? []).length,
@@ -93,10 +103,10 @@ export function finalizeTakeoverConsolidation(input: {
             worldUpdates: worldRecords.length,
         },
         conflictStats: {
-            unresolvedFacts: 0,
-            unresolvedRelations: input.diagnostics.unresolvedConflictCount,
-            unresolvedTasks: 0,
-            unresolvedWorldStates: 0,
+            unresolvedFacts: input.factLedger.filter((item) => item.conflictState === 'unresolved').length,
+            unresolvedRelations: input.relationshipLedger.filter((item) => item.conflictState === 'unresolved').length,
+            unresolvedTasks: input.taskLedger.filter((item) => item.conflictState === 'unresolved').length,
+            unresolvedWorldStates: input.worldLedger.filter((item) => item.conflictState === 'unresolved').length,
             unresolvedEntities: input.entityLedger.filter((item) => item.conflictState === 'unresolved').length,
         },
         conflictResolutions: input.conflictPatches.map((patch: ConflictResolutionPatch) => ({
@@ -130,8 +140,34 @@ export function finalizeTakeoverConsolidation(input: {
             usedLLM: input.diagnostics.usedLLM,
             reasonCode: input.diagnostics.reasonCode,
         },
+        batchAudits: input.batchResults
+            .map((item: MemoryTakeoverBatchResult): MemoryTakeoverBatchAuditReport | undefined => item.auditReport)
+            .filter((item: MemoryTakeoverBatchAuditReport | undefined): item is MemoryTakeoverBatchAuditReport => Boolean(item)),
         generatedAt: Date.now(),
     };
+}
+
+/**
+ * 功能：对最终关系状态做去重，避免 actor 关系卡与关系变更重复出现。
+ * @param values 原始关系状态列表。
+ * @returns 去重后的关系状态列表。
+ */
+function dedupeRelationState(
+    values: MemoryTakeoverConsolidationResult['relationState'],
+): MemoryTakeoverConsolidationResult['relationState'] {
+    const map = new Map<string, MemoryTakeoverConsolidationResult['relationState'][number]>();
+    values.forEach((item): void => {
+        const key = [
+            String(item.targetType ?? 'unknown').trim(),
+            String(item.target ?? '').trim(),
+            String(item.relationTag ?? '').trim(),
+        ].join('::');
+        if (!key || key === 'unknown::::') {
+            return;
+        }
+        map.set(key, item);
+    });
+    return [...map.values()];
 }
 
 /**
@@ -207,17 +243,20 @@ function collapseEntityTransitions(transitions: MemoryTakeoverEntityTransition[]
 }
 
 /**
- * 功能：去重稳定事实。
- * @param facts 原始事实列表。
- * @returns 去重后的事实列表。
+ * 功能：对候选角色提及做去重聚合。
+ * @param mentions 原始候选角色提及。
+ * @returns 去重后的候选列表。
  */
-function dedupeFacts(facts: MemoryTakeoverStableFact[]): MemoryTakeoverStableFact[] {
-    const map = new Map<string, MemoryTakeoverStableFact>();
-    for (const fact of facts) {
-        const key = `${fact.type}::${fact.subject}::${fact.predicate}::${fact.value}`;
+function dedupeCandidateActors(mentions: MemoryTakeoverCandidateActorMention[]): MemoryTakeoverCandidateActorMention[] {
+    const map = new Map<string, MemoryTakeoverCandidateActorMention>();
+    for (const mention of mentions) {
+        const key = `${String(mention.actorKey ?? '').trim()}::${String(mention.name ?? '').trim()}`;
+        if (!key || key === '::') {
+            continue;
+        }
         const current = map.get(key);
-        if (!current || Number(fact.confidence ?? 0) >= Number(current.confidence ?? 0)) {
-            map.set(key, fact);
+        if (!current || Number(mention.evidenceScore ?? 0) >= Number(current.evidenceScore ?? 0)) {
+            map.set(key, mention);
         }
     }
     return [...map.values()];

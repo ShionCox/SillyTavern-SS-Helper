@@ -13,6 +13,7 @@ export {
     mapTakeoverRecordsToLedger,
     reduceTakeoverActors,
     reduceTakeoverEntities,
+    reduceTakeoverFacts,
     reduceTakeoverRelationships,
     reduceTakeoverTasks,
     reduceTakeoverWorld,

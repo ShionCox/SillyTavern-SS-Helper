@@ -5,7 +5,12 @@ import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-
 import { buildSummaryMutationContext, buildLightweightPlannerInput } from '../memory-summary-planner';
 import { applySummaryMutation, type MutationApplyDependencies } from './mutation-applier';
 import { planSummaryMutationBatches } from './mutation-batch-planner';
-import { appendSummaryMutationBatchResult, clearSummaryMutationStagingSnapshot, readSummaryMutationStagingSnapshot } from './mutation-staging-store';
+import {
+    appendSummaryMutationBatchResult,
+    appendSummaryMutationStagingSnapshot,
+    clearSummaryMutationStagingSnapshot,
+    readSummaryMutationStagingSnapshot,
+} from './mutation-staging-store';
 import { finalizeSummaryMutationSnapshot } from './mutation-finalizer';
 import { runSummaryMutationBatch } from './mutation-batch-runner';
 import { validateSummaryPatch, normalizeSummaryPatch } from './mutation-patch-utils';
@@ -43,6 +48,7 @@ export interface RunSummaryOrchestratorInput {
     dependencies: SummaryOrchestratorDependencies;
     llm: MemoryLLMApi | null;
     pluginId: string;
+    chatKey?: string;
     messages: SummaryWindowMessage[];
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
 }
@@ -157,51 +163,68 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         return buildSummaryFailureResult(plannerResult, 'llm_unavailable');
     }
 
+    const summaryJobId = buildSummaryJobId(input.chatKey, plannerResult.context.window.fromTurn, plannerResult.context.window.toTurn);
+    const existingStagingSnapshot = readSummaryMutationStagingSnapshot(summaryJobId);
     const promptPack = await loadPromptPackSections();
-    const plannerSchema = normalizeMemoryPromptSchema('SUMMARY_PLANNER_SCHEMA', parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA));
-    const plannerSample = parseJsonSection(promptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
-    const plannerSystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_PLANNER_SYSTEM, {
-        userDisplayName,
-    })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 reasons、topics 以及其它自然语言字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
-    const lightweightPlannerInput = {
-        ...buildLightweightPlannerInput(plannerResult.context),
-        userDisplayName,
-    };
-    const plannerUserPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(lightweightPlannerInput, null, 2),
-        JSON.stringify(plannerSchema ?? {}, null, 2),
-        JSON.stringify(plannerSample ?? {}, null, 2),
-    );
-    const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
-        consumer: input.pluginId,
-        taskId: 'memory_summary_planner',
-        taskDescription: '记忆总结第一阶段：候选规划',
-        taskKind: 'generation',
-        input: {
-            messages: [
-                { role: 'system', content: plannerSystemPrompt },
-                { role: 'user', content: plannerUserPayload },
-            ],
-        },
-        schema: plannerSchema,
-        enqueue: { displayMode: 'compact' },
-    });
-    const plannerDecision = normalizePlannerOutput(plannerLLMResult.ok ? plannerLLMResult.data : plannerResult.context.plannerHints);
-    await input.dependencies.appendMutationHistory({
-        action: 'summary_planner_resolved',
-        payload: {
-            shouldUpdate: plannerDecision.should_update,
-            focusTypes: plannerDecision.focus_types,
-            entities: plannerDecision.entities,
-            topics: plannerDecision.topics,
-            reasons: plannerDecision.reasons,
-            narrativeStyle: plannerResult.context.narrativeStyle,
+    let plannerDecision = existingStagingSnapshot?.plannerDecision;
+    if (!plannerDecision) {
+        const plannerSchema = normalizeMemoryPromptSchema('SUMMARY_PLANNER_SCHEMA', parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA));
+        const plannerSample = parseJsonSection(promptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
+        const plannerSystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_PLANNER_SYSTEM, {
             userDisplayName,
-        },
-    });
+        })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 reasons、topics 以及其它自然语言字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+        const lightweightPlannerInput = {
+            ...buildLightweightPlannerInput(plannerResult.context),
+            userDisplayName,
+        };
+        const plannerUserPayload = buildStructuredTaskUserPayload(
+            JSON.stringify(lightweightPlannerInput, null, 2),
+            JSON.stringify(plannerSchema ?? {}, null, 2),
+            JSON.stringify(plannerSample ?? {}, null, 2),
+        );
+        const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
+            consumer: input.pluginId,
+            taskId: 'memory_summary_planner',
+            taskDescription: '记忆总结第一阶段：候选规划',
+            taskKind: 'generation',
+            input: {
+                messages: [
+                    { role: 'system', content: plannerSystemPrompt },
+                    { role: 'user', content: plannerUserPayload },
+                ],
+            },
+            schema: plannerSchema,
+            enqueue: { displayMode: 'compact' },
+        });
+        plannerDecision = normalizePlannerOutput(plannerLLMResult.ok ? plannerLLMResult.data : plannerResult.context.plannerHints);
+        await input.dependencies.appendMutationHistory({
+            action: 'summary_planner_resolved',
+            payload: {
+                shouldUpdate: plannerDecision.should_update,
+                focusTypes: plannerDecision.focus_types,
+                entities: plannerDecision.entities,
+                topics: plannerDecision.topics,
+                reasons: plannerDecision.reasons,
+                narrativeStyle: plannerResult.context.narrativeStyle,
+                userDisplayName,
+            },
+        });
+        appendSummaryMutationStagingSnapshot(summaryJobId, {
+            plannerContext: plannerResult.context as unknown as Record<string, unknown>,
+            plannerDiagnostics: {
+                retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
+                matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
+                worldProfile: plannerResult.diagnostics.worldProfile,
+                reasonCode: 'ok',
+            },
+            plannerDecision,
+        });
+    }
 
+    const resolvedPlannerDecision: SummaryPlannerOutput = plannerDecision;
     const actorKeys = window.actorHints.length > 0 ? window.actorHints : ['user'];
-    if (!plannerDecision.should_update) {
+    if (!resolvedPlannerDecision.should_update) {
+        clearSummaryMutationStagingSnapshot(summaryJobId);
         const noopDocument: SummaryMutationDocument = {
             schemaVersion: '1.0.0',
             window: {
@@ -211,8 +234,8 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             actions: [
                 {
                     action: 'NOOP',
-                    targetKind: plannerDecision.focus_types[0] || 'other',
-                    reason: plannerDecision.reasons[0] || '当前区间没有稳定长期变更。',
+                    targetKind: resolvedPlannerDecision.focus_types[0] || 'other',
+                    reason: resolvedPlannerDecision.reasons[0] || '当前区间没有稳定长期变更。',
                     confidence: 0.9,
                     reasonCodes: ['planner_noop'],
                 },
@@ -263,8 +286,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         userDisplayName,
     })}\n\n当前用户自然语言称呼固定为"${userDisplayName}"。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成"用户"或"主角"。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
-    const summaryJobId = `summary:${plannerResult.context.window.fromTurn}:${plannerResult.context.window.toTurn}:${Date.now()}`;
-    clearSummaryMutationStagingSnapshot(summaryJobId);
     upsertPipelineJobRecord({
         jobId: summaryJobId,
         jobType: 'summary',
@@ -279,42 +300,60 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         updatedAt: Date.now(),
     });
 
-    const batchPlans = planSummaryMutationBatches({
-        plannerDecision,
-        candidateRecords: plannerResult.context.candidateRecords.map((item) => ({
-            candidateId: item.candidateId,
-            targetKind: item.targetKind,
-        })),
-        budget,
-        splitByActionType: settings.summarySplitByActionType,
-    });
-    await input.dependencies.appendMutationHistory({
-        action: 'summary_mutation_batches_planned',
-        payload: {
-            summaryJobId,
-            batchCount: batchPlans.length,
-            batches: batchPlans.map((item) => ({
-                batchId: item.batchId,
-                focusTypes: item.focusTypes,
-                candidateCount: item.candidateIds.length,
-                actionBudget: item.actionBudget,
+    const batchPlans = existingStagingSnapshot?.batchPlans && existingStagingSnapshot.batchPlans.length > 0
+        ? existingStagingSnapshot.batchPlans
+        : planSummaryMutationBatches({
+            plannerDecision: resolvedPlannerDecision,
+            candidateRecords: plannerResult.context.candidateRecords.map((item) => ({
+                candidateId: item.candidateId,
+                targetKind: item.targetKind,
             })),
-        },
-    });
+            budget,
+            splitByActionType: settings.summarySplitByActionType,
+        });
+    if (!existingStagingSnapshot?.batchPlans || existingStagingSnapshot.batchPlans.length <= 0) {
+        await input.dependencies.appendMutationHistory({
+            action: 'summary_mutation_batches_planned',
+            payload: {
+                summaryJobId,
+                batchCount: batchPlans.length,
+                batches: batchPlans.map((item) => ({
+                    batchId: item.batchId,
+                    focusTypes: item.focusTypes,
+                    candidateCount: item.candidateIds.length,
+                    actionBudget: item.actionBudget,
+                })),
+            },
+        });
+        appendSummaryMutationStagingSnapshot(summaryJobId, {
+            batchPlans,
+        });
+    }
+
+    const resumedPlannerContext = (readSummaryMutationStagingSnapshot(summaryJobId)?.plannerContext ?? plannerResult.context) as typeof plannerResult.context;
+    const resumedDiagnostics = readSummaryMutationStagingSnapshot(summaryJobId)?.plannerDiagnostics ?? {
+        retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
+        matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
+        worldProfile: plannerResult.diagnostics.worldProfile,
+        reasonCode: 'ok',
+    };
 
     for (const batchPlan of batchPlans) {
+        if (readSummaryMutationStagingSnapshot(summaryJobId)?.batchResults.some((item) => item.batchId === batchPlan.batchId)) {
+            continue;
+        }
         updatePipelineJobPhase(summaryJobId, 'reduce');
         const batchDecision: SummaryPlannerOutput = {
-            ...plannerDecision,
+            ...resolvedPlannerDecision,
             focus_types: batchPlan.focusTypes,
         };
-        const focusTypeSchemas = plannerResult.context.typeSchemas.filter(
+        const focusTypeSchemas = resumedPlannerContext.typeSchemas.filter(
             (schema) => batchPlan.focusTypes.length <= 0 || batchPlan.focusTypes.includes(schema.schemaId),
         );
-        const activeTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : plannerResult.context.typeSchemas;
+        const activeTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : resumedPlannerContext.typeSchemas;
         const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, activeTypeSchemas);
         const mutationContext = buildSlimMutationContext(
-            plannerResult.context,
+            resumedPlannerContext,
             batchDecision,
             settings.summarySecondStageRollingDigestMaxChars || budget.maxRollingDigestChars,
             settings.summarySecondStageCandidateSummaryMaxChars || budget.maxCandidateSummaryChars,
@@ -334,8 +373,21 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             schema: strictSummarySchema,
         });
         if (!batchResult.ok || !batchResult.data) {
-            clearSummaryMutationStagingSnapshot(summaryJobId);
-            return buildSummaryFailureResult(plannerResult, batchResult.reasonCode || 'summary_llm_failed');
+            await input.dependencies.appendMutationHistory({
+                action: 'summary_failed',
+                payload: {
+                    reasonCode: batchResult.reasonCode || 'summary_llm_failed',
+                    batchId: batchPlan.batchId,
+                    worldProfile: resumedDiagnostics.worldProfile,
+                },
+            });
+            return buildSummaryFailureResult(
+                {
+                    ...plannerResult,
+                    diagnostics: resumedDiagnostics,
+                },
+                batchResult.reasonCode || 'summary_llm_failed',
+            );
         }
         const trimmedDocument = trimMutationDocumentActions(batchResult.data, batchPlan.actionBudget);
 
@@ -370,7 +422,6 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 
         const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
         if (!validation.valid || !validation.document) {
-            clearSummaryMutationStagingSnapshot(summaryJobId);
             const reasonCode = `validation_failed:${validation.errors.join(',') || 'unknown'}`;
             await input.dependencies.appendMutationHistory({
                 action: 'summary_failed',
@@ -378,10 +429,13 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                     reasonCode,
                     batchId: batchPlan.batchId,
                     validationErrors: validation.errors,
-                    worldProfile: plannerResult.diagnostics.worldProfile,
+                    worldProfile: resumedDiagnostics.worldProfile,
                 },
             });
-            return buildSummaryFailureResult(plannerResult, reasonCode);
+            return buildSummaryFailureResult({
+                ...plannerResult,
+                diagnostics: resumedDiagnostics,
+            }, reasonCode);
         }
         appendSummaryMutationBatchResult({
             summaryJobId,
@@ -394,7 +448,10 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const stagingSnapshot = readSummaryMutationStagingSnapshot(summaryJobId);
     if (!stagingSnapshot || stagingSnapshot.batchResults.length <= 0) {
         clearSummaryMutationStagingSnapshot(summaryJobId);
-        return buildSummaryFailureResult(plannerResult, 'empty_mutation_batches');
+        return buildSummaryFailureResult({
+            ...plannerResult,
+            diagnostics: resumedDiagnostics,
+        }, 'empty_mutation_batches');
     }
 
     updatePipelineJobPhase(summaryJobId, 'apply');
@@ -404,19 +461,19 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         payload: {
             actionCount: finalMutationDocument.actions.length,
             batchCount: stagingSnapshot.batchResults.length,
-            plannerDecision,
-            worldProfile: plannerResult.diagnostics.worldProfile,
+            plannerDecision: resolvedPlannerDecision,
+            worldProfile: resumedDiagnostics.worldProfile,
         },
     });
 
     const snapshot = await applySummaryMutation({
         dependencies: input.dependencies,
         mutationDocument: finalMutationDocument,
-        candidateRecords: plannerResult.context.candidateRecords,
+        candidateRecords: resumedPlannerContext.candidateRecords,
         actorKeys,
         userDisplayName,
         summaryTitle: '结构化回合总结',
-        summaryContent: plannerResult.context.window.summaryText,
+        summaryContent: resumedPlannerContext.window.summaryText,
     });
     await input.dependencies.appendMutationHistory({
         action: 'mutation_applied',
@@ -443,12 +500,24 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         snapshot,
         diagnostics: {
             usedLLM: true,
-            retrievalProviderId: plannerResult.diagnostics.retrievalProviderId,
-            matchedEntryIds: plannerResult.diagnostics.matchedEntryIds,
-            worldProfile: plannerResult.diagnostics.worldProfile,
+            retrievalProviderId: resumedDiagnostics.retrievalProviderId,
+            matchedEntryIds: resumedDiagnostics.matchedEntryIds,
+            worldProfile: resumedDiagnostics.worldProfile,
             reasonCode: 'ok',
         },
     };
+}
+
+/**
+ * 功能：构建总结任务标识，确保同一窗口失败后可从断点继续。
+ * @param chatKey 聊天键。
+ * @param fromTurn 起始楼层。
+ * @param toTurn 结束楼层。
+ * @returns 总结任务标识。
+ */
+function buildSummaryJobId(chatKey: string | undefined, fromTurn: number, toTurn: number): string {
+    const normalizedChatKey = String(chatKey ?? '').trim() || 'global';
+    return `summary:${normalizedChatKey}:${fromTurn}:${toTurn}`;
 }
 
 /**

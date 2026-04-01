@@ -132,4 +132,44 @@ describe('旧聊天批次已知上下文', (): void => {
         expect(context.taskState).toContain('寻找食物：进行中');
         expect(context.worldState).toContain('森林边界市场：已经抵达');
     });
+
+    it('应优先保留正式中文角色名，不让退化名进入后续批次提示', (): void => {
+        const context = buildTakeoverKnownContext([{
+            ...createBatchResult(),
+            actorCards: [{
+                actorKey: 'actor_heying',
+                displayName: '何盈',
+                aliases: [],
+                identityFacts: [],
+                originFacts: [],
+                traits: [],
+            }],
+            relationTransitions: [{
+                target: 'actor_heying',
+                from: '疏离',
+                to: '旧情翻涌',
+                reason: '灵堂守夜后旧事回潮',
+                targetType: 'actor',
+            }],
+        }], {
+            actors: [{
+                actorKey: 'actor_heying',
+                displayName: 'heying',
+            }],
+            organizations: [],
+            cities: [],
+            nations: [],
+            locations: [],
+            tasks: [],
+            worldStates: [],
+        });
+
+        expect(context.knownEntities.actors).toContainEqual({
+            actorKey: 'actor_heying',
+            displayName: '何盈',
+        });
+        expect(context.actorHints).toContain('何盈');
+        expect(context.actorHints).not.toContain('heying');
+        expect(context.actorHints).not.toContain('actor_heying');
+    });
 });

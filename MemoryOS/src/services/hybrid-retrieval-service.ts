@@ -10,6 +10,7 @@
 
 import type { RetrievalResultItem, RetrievalCandidate, RetrievalContextRoute } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
+import type { MemoryRetrievalProgress } from '../memory-retrieval/retrieval-input';
 import type { VectorStrategyDecision } from '../types/vector-strategy';
 import type { VectorSearchHit } from '../types/vector-search';
 import type { QueryContextBundle } from './query-context-builder';
@@ -39,6 +40,8 @@ export interface HybridRetrievalInput {
     contextRoute?: RetrievalContextRoute | null;
     /** 最终 topK */
     overrideFinalTopK?: number;
+    /** 进度回调 */
+    onProgress?: (progress: MemoryRetrievalProgress) => void;
 }
 
 export interface HybridRetrievalOutput {
@@ -147,6 +150,7 @@ export class HybridRetrievalService {
         const { retrievalMode, query, chatKey } = input;
 
         if (retrievalMode === 'lexical_only') {
+            this.emitProgress(input.onProgress, 'lexical_only', '仅词法模式', '当前模式为仅词法检索，直接使用词法主链结果。', 0.72);
             return {
                 items: input.lexicalResults,
                 strategyDecision: null,
@@ -164,6 +168,7 @@ export class HybridRetrievalService {
         const vectorAvailable = this.isVectorAvailable();
         const vectorUnavailableReason = this.getVectorUnavailableReason();
         const decision = this.buildDecision(input, settings);
+        this.emitProgress(input.onProgress, 'vector_check', '检查向量能力', '正在检查编码服务与向量存储状态。', 0.74);
 
         if (!vectorAvailable) {
             if (retrievalMode === 'vector_only') {
@@ -197,6 +202,7 @@ export class HybridRetrievalService {
         }
 
         const textToEncode = input.queryContext?.mergedContextText || query;
+        this.emitProgress(input.onProgress, 'vector_encode', '向量编码', '正在将查询文本编码为向量。', 0.8);
         const encodeResult = await this.embeddingService.encodeOne(textToEncode);
 
         if (!encodeResult.ok) {
@@ -229,6 +235,7 @@ export class HybridRetrievalService {
             };
         }
 
+        this.emitProgress(input.onProgress, 'vector_search', '向量搜索', '正在读取向量索引并检索相似候选。', 0.86);
         await this.vectorStore.ensureLoaded(chatKey);
         const vectorHits = await this.vectorStore.search(chatKey, {
             vector: encodeResult.vector,
@@ -240,9 +247,35 @@ export class HybridRetrievalService {
         const vectorResults = this.mapVectorHits(vectorHits, input.candidates);
 
         if (retrievalMode === 'vector_only') {
+            this.emitProgress(input.onProgress, 'vector_finalize', '整理向量结果', '正在整理仅向量模式下的候选结果。', 0.9);
             return this.handleVectorOnly(vectorResults, decision, vectorHits, query, input, settings);
         }
+        this.emitProgress(input.onProgress, 'hybrid_merge', '融合结果', '正在合并词法结果与向量结果。', 0.9);
         return this.handleHybrid(input.lexicalResults, vectorResults, decision, vectorHits, query, input, settings);
+    }
+
+    /**
+     * 功能：发送混合检索阶段进度。
+     * @param onProgress 进度回调。
+     * @param stage 阶段键。
+     * @param title 阶段标题。
+     * @param message 阶段说明。
+     * @param progress 进度值。
+     * @returns 异步完成。
+     */
+    private emitProgress(
+        onProgress: HybridRetrievalInput['onProgress'],
+        stage: string,
+        title: string,
+        message: string,
+        progress?: number,
+    ): void {
+        onProgress?.({
+            stage,
+            title,
+            message,
+            progress,
+        });
     }
 
     /**

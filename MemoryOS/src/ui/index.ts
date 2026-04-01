@@ -70,9 +70,6 @@ const VECTOR_LLMHUB_RERANK_MODEL_ID = 'stx-memoryos-vector-llmhub-rerank-model';
 const VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-min-candidates';
 const VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-max-candidates';
 const VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID = 'stx-memoryos-vector-llmhub-rerank-fallback-to-rule';
-const MAINTENANCE_AUTO_COMPRESS_ID = 'stx-memoryos-maintenance-auto-compress';
-const MAINTENANCE_DUPLICATE_CHECK_ID = 'stx-memoryos-maintenance-duplicate-check';
-const SCORING_SERVICE_ENABLED_ID = 'stx-memoryos-scoring-service-enabled';
 const PIPELINE_BUDGET_ENABLED_ID = 'stx-memoryos-pipeline-budget-enabled';
 const PIPELINE_MAX_INPUT_CHARS_ID = 'stx-memoryos-pipeline-max-input-chars';
 const PIPELINE_MAX_OUTPUT_ITEMS_ID = 'stx-memoryos-pipeline-max-output-items';
@@ -269,10 +266,6 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_LOG_LEVEL_ID}">retrievalLogLevel</label>${retrievalLogLevelSelect}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_RULE_PACK_ID}">retrievalRulePack</label>${retrievalRulePackSelect}</div>
             </div></div>
-            ${divider('秘书层 / 维护治理')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用蒸馏服务</div><div class="stx-ui-item-desc">在总结和接管前对原始对话做噪音清洗、批次拆分和线索提取。</div></div><div class="stx-ui-inline">${inlineCheckbox(SCORING_SERVICE_ENABLED_ID, '启用蒸馏服务')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用维护层重复检测</div><div class="stx-ui-item-desc">定期检测 compareKey 冲突和重复候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(MAINTENANCE_DUPLICATE_CHECK_ID, '启用重复检测')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用维护层自动压缩</div><div class="stx-ui-item-desc">自动标记低价值旧条目为待压缩。</div></div><div class="stx-ui-inline">${inlineCheckbox(MAINTENANCE_AUTO_COMPRESS_ID, '启用自动压缩')}</div></div>
         </div>
         <div id="${PANEL_PIPELINE_ID}" class="stx-ui-panel" hidden>
             ${divider('统一预算')}
@@ -388,9 +381,6 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [RETRIEVAL_TRACE_PANEL_ID, settings.retrievalTracePanelEnabled],
         [RETRIEVAL_LOG_LEVEL_ID, settings.retrievalLogLevel],
         [RETRIEVAL_RULE_PACK_ID, settings.retrievalRulePack],
-        [SCORING_SERVICE_ENABLED_ID, settings.scoringServiceEnabled],
-        [MAINTENANCE_DUPLICATE_CHECK_ID, settings.maintenanceDuplicateCheckEnabled],
-        [MAINTENANCE_AUTO_COMPRESS_ID, settings.maintenanceAutoCompressEnabled],
         [PIPELINE_BUDGET_ENABLED_ID, settings.pipelineBudgetEnabled],
         [PIPELINE_MAX_INPUT_CHARS_ID, String(settings.pipelineMaxInputCharsPerBatch)],
         [PIPELINE_MAX_OUTPUT_ITEMS_ID, String(settings.pipelineMaxOutputItemsPerBatch)],
@@ -491,9 +481,6 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
                 ? 'perocore'
                 : 'hybrid',
         retrievalTracePanelEnabled: checked(RETRIEVAL_TRACE_PANEL_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalTracePanelEnabled),
-        scoringServiceEnabled: checked(SCORING_SERVICE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.scoringServiceEnabled),
-        maintenanceDuplicateCheckEnabled: checked(MAINTENANCE_DUPLICATE_CHECK_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceDuplicateCheckEnabled),
-        maintenanceAutoCompressEnabled: checked(MAINTENANCE_AUTO_COMPRESS_ID, DEFAULT_MEMORY_OS_SETTINGS.maintenanceAutoCompressEnabled),
     };
 }
 
