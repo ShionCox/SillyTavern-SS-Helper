@@ -29,7 +29,7 @@ export async function runBootstrapPhase(input: {
         : '本阶段只关注 relationships、memoryRecords 与近期状态线索；identity、actorCards、entityCards、worldBase 如无新增可返回空集合。';
     const result = await input.llm.runTask({
         consumer: input.pluginId,
-        taskId: input.phaseName === 'phase1' ? 'memory_cold_start_core' : 'memory_cold_start_state',
+        taskKey: input.phaseName === 'phase1' ? 'memory_cold_start_core' : 'memory_cold_start_state',
         taskDescription: `冷启动分阶段抽取：${input.phaseName}`,
         taskKind: 'generation',
         input: {

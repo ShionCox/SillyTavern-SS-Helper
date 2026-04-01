@@ -2,7 +2,7 @@
  * 功能：定义 LLMHub 任务描述。
  */
 export interface MemoryLLMTaskDescriptor {
-    taskId: string;
+    taskKey: string;
     taskKind: 'generation' | 'embedding' | 'rerank';
     requiredCapabilities: string[];
     maxTokens?: number;
@@ -34,7 +34,7 @@ export interface MemoryLLMApi {
     registerConsumer: (registration: MemoryLLMConsumerRegistration) => void;
     runTask: <T>(args: {
         consumer: string;
-        taskId: string;
+        taskKey: string;
         taskDescription?: string;
         taskKind: 'generation';
         input: {

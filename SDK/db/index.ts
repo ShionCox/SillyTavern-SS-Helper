@@ -39,6 +39,7 @@ export {
     deleteSdkPluginChatState,
     listSdkPluginChatStateSummaries,
     appendSdkPluginChatRecord,
+    queryLatestSdkPluginChatRecords,
     querySdkPluginChatRecords,
     queryAllSdkPluginChatRecords,
     deleteSdkPluginChatRecords,

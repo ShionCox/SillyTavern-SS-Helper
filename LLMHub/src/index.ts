@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LLMHub 统一入口
  * 四层架构：注册中心 → 路由解析器 → 请求编排器 → 展示控制器
  * 导出公共模块并初始化运行时实例。
@@ -239,14 +239,16 @@ class LLMHub {
             this.orchestrator,
             this.displayController,
             this.registry,
+            this.requestLogService,
         );
         this.sdk.setSettingsResolver(() => this.readSettings());
         this.sdk.inspect = this.buildInspectApi();
         this.orchestrator.setArchiveCallback((record) => {
             logger.info('[RequestLog][ArchiveTrigger]', {
+                llmTaskId: record.llmTaskId,
                 requestId: record.requestId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 state: record.state,
                 chatKey: record.chatKey,
                 reasonCode: record.debug?.reasonCode,
@@ -254,9 +256,10 @@ class LLMHub {
             });
             void this.requestLogService.archiveRecord(record).catch((error: unknown) => {
                 logger.error('[RequestLog][ArchivePersistFailed]', {
+                    llmTaskId: record.llmTaskId,
                     requestId: record.requestId,
                     consumer: record.consumer,
-                    taskId: record.taskId,
+                    taskKey: record.taskKey,
                     state: record.state,
                     chatKey: record.chatKey,
                     error: String((error as Error)?.message || error),
@@ -893,7 +896,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: false,
                 blockedReason: 'LLMHub 未启用',
@@ -934,7 +937,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: blockedReason.length === 0,
                 resourceId: resolved.resourceId,
@@ -949,7 +952,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: false,
                 blockedReason: String((error as Error)?.message || error),

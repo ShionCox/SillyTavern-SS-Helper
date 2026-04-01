@@ -76,14 +76,14 @@ type LLMHubRuntime = {
     };
     orchestrator?: {
         getQueueSnapshot?: () => {
-            pending: Array<{ requestId: string; consumer: string; taskId: string; taskDescription?: string; queuedAt: number }>;
-            active: { requestId: string; consumer: string; taskId: string; taskDescription?: string; state: string } | null;
+            pending: Array<{ requestId: string; consumer: string; taskKey: string; taskDescription?: string; queuedAt: number }>;
+            active: { requestId: string; consumer: string; taskKey: string; taskDescription?: string; state: string } | null;
         };
     };
     displayController?: {
         exportSilentPermissions?: () => SilentPermissionGrant[];
-        grantSilentPermission?: (pluginId: string, taskId: string) => void;
-        revokeSilentPermission?: (pluginId: string, taskId: string) => void;
+        grantSilentPermission?: (pluginId: string, taskKey: string) => void;
+        revokeSilentPermission?: (pluginId: string, taskKey: string) => void;
     };
     sdk?: {
         setGlobalProfile?: (profile: string) => void;
@@ -464,9 +464,13 @@ function buildRequestLogSearchText(entry: LLMRequestLogEntry): string {
         formatRequestLogChatKey(entry.chatKey),
         entry.chatKey,
         entry.consumer,
-        entry.taskId,
+        entry.taskKey,
         entry.taskDescription,
+        entry.llmTaskId,
         entry.requestId,
+        entry.attemptTag,
+        entry.attemptOutcome,
+        entry.attemptIndex,
         entry.response?.meta?.resourceId,
         entry.response?.meta?.model,
         entry.response?.reasonCode,
@@ -484,21 +488,35 @@ function formatRequestLogChatKey(chatKey?: string): string {
     return normalized;
 }
 
-function formatTaskDisplayLabel(taskId?: string, taskDescription?: string): string {
+function formatTaskDisplayLabel(taskKey?: string, taskDescription?: string): string {
     const descriptionText = String(taskDescription || '').trim();
     if (descriptionText) {
         return descriptionText;
     }
-    return String(taskId || '').trim();
+    return String(taskKey || '').trim();
 }
 
 /**
- * 功能：根据 taskId 推断 MemoryOS 任务阶段颜色。
- * @param taskId 任务 ID。
+ * 功能：将请求尝试标签格式化为列表可读文本。
+ * @param entry 日志条目。
+ * @returns 展示标签。
+ */
+function formatAttemptBadgeLabel(entry: LLMRequestLogEntry): string {
+    if (entry.attemptTag === '重试' && entry.attemptOutcome === '成功') return '重试成功';
+    if (entry.attemptTag === '重试' && entry.attemptOutcome === '失败') return '重试失败';
+    if (entry.attemptTag === '重试' && entry.attemptOutcome === '取消') return '已取消';
+    if (entry.attemptTag === '初次请求' && entry.attemptOutcome === '失败') return '初次失败';
+    if (entry.attemptTag === '初次请求' && entry.attemptOutcome === '成功') return '初次成功';
+    return `${entry.attemptTag}${entry.attemptOutcome}`;
+}
+
+/**
+ * 功能：根据 taskKey 推断 MemoryOS 任务阶段颜色。
+ * @param taskKey 任务 ID。
  * @returns CSS 颜色值；非 MemoryOS 任务返回空串。
  */
-function resolveTaskStageColor(taskId?: string): string {
-    const id = String(taskId || '').trim();
+function resolveTaskStageColor(taskKey?: string): string {
+    const id = String(taskKey || '').trim();
     if (id.includes('cold_start') || id.includes('bootstrap')) return '#38bdf8';
     if (id.includes('planner')) return '#c4a062';
     if (id.includes('mutation') || id.includes('summary')) return '#a78bfa';
@@ -1438,7 +1456,7 @@ function bindUiEvents(): void {
             if (item.rerank?.resourceId === resourceId) references.push(`插件分配 / ${item.pluginId} / 重排序`);
         });
         (settings.taskAssignments || []).forEach((item: TaskAssignment) => {
-            if (item.resourceId === resourceId) references.push(`任务分配 / ${item.pluginId} / ${item.taskId}`);
+            if (item.resourceId === resourceId) references.push(`任务分配 / ${item.pluginId} / ${item.taskKey}`);
         });
         return references;
     };
@@ -2052,7 +2070,7 @@ function bindUiEvents(): void {
 
         listEl.innerHTML = allTasks
             .map(({ pluginId, displayName, task, isOnline }) => {
-                const existing = existingAssignments.find((item: TaskAssignment) => item.pluginId === pluginId && item.taskId === task.taskId);
+                const existing = existingAssignments.find((item: TaskAssignment) => item.pluginId === pluginId && item.taskKey === task.taskKey);
                 const isStale = existing?.isStale === true;
                 const registeredMaxTokens = Number(task.maxTokens || 0) > 0 ? Number(task.maxTokens) : null;
                 const resolvedRegisteredMaxTokens = registeredMaxTokens;
@@ -2065,8 +2083,8 @@ function bindUiEvents(): void {
                 const staleHtml = isStale
                     ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
                     : '';
-                const key = `${pluginId}::${task.taskId}`;
-                const selectId = `stx-llmhub-task-assign-${pluginId}-${task.taskId}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+                const key = `${pluginId}::${task.taskKey}`;
+                const selectId = `stx-llmhub-task-assign-${pluginId}-${task.taskKey}`.replace(/[^a-zA-Z0-9_-]/g, '-');
                 const selectHtml = buildResourceSharedSelectHtml(selectId, existing?.resourceId || '', getSavedResourceOptions(task.requiredCapabilities || []), {
                     'data-task-assign-resource': key,
                 });
@@ -2084,7 +2102,7 @@ function bindUiEvents(): void {
                       <div class="stx-ui-consumer-map-head-main">
                         <div class="stx-ui-list-title">
                           <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                          ${escapeHtml(normalizedDisplayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskId, task.description))}
+                          ${escapeHtml(normalizedDisplayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskKey, task.description))}
                         </div>
                                                 ${task.description ? `<div class="stx-ui-list-meta">${escapeHtml(task.description)}</div>` : ''}
                         <div class="stx-ui-consumer-map-badges">
@@ -2143,16 +2161,16 @@ function bindUiEvents(): void {
         const key = String(saveBtn?.dataset.taskAssignSave || deleteBtn?.dataset.taskAssignDelete || '').trim();
         if (!key) return;
 
-        const [pluginId, taskId] = key.split('::');
-        if (!pluginId || !taskId) return;
+        const [pluginId, taskKey] = key.split('::');
+        if (!pluginId || !taskKey) return;
 
         const settings = ensureSettings();
-        let assignments = (settings.taskAssignments || []).filter((item: TaskAssignment) => !(item.pluginId === pluginId && item.taskId === taskId));
+        let assignments = (settings.taskAssignments || []).filter((item: TaskAssignment) => !(item.pluginId === pluginId && item.taskKey === taskKey));
         const registrations = runtime?.registry?.listConsumerRegistrations?.() || [];
         let registeredTask: TaskDescriptor | undefined;
         for (const snap of registrations) {
             if (snap.pluginId !== pluginId) continue;
-            registeredTask = snap.tasks?.find((task: TaskDescriptor) => task.taskId === taskId);
+            registeredTask = snap.tasks?.find((task: TaskDescriptor) => task.taskKey === taskKey);
             if (registeredTask) break;
         }
         const registeredMaxTokens = Number(registeredTask?.maxTokens || 0) > 0 ? Number(registeredTask?.maxTokens) : undefined;
@@ -2182,7 +2200,7 @@ function bindUiEvents(): void {
             if (resourceId || maxTokens) {
                 assignments.push({
                     pluginId,
-                    taskId,
+                    taskKey,
                     taskKind,
                     resourceId: resourceId || undefined,
                     maxTokens,
@@ -2196,9 +2214,9 @@ function bindUiEvents(): void {
         runtime?.router?.applyTaskAssignments?.(assignments);
         renderTaskAssignments();
         if (saveBtn) {
-            toast.success(`已保存任务分配：${taskId}`);
+            toast.success(`已保存任务分配：${taskKey}`);
         } else if (deleteBtn) {
-            toast.success(`已重置为注册默认值：${taskId}`);
+            toast.success(`已重置为注册默认值：${taskKey}`);
         }
     });
 
@@ -2314,12 +2332,12 @@ function bindUiEvents(): void {
         const items: string[] = [];
         if (snapshot.active) {
             const active = snapshot.active;
-            const stageColor = resolveTaskStageColor(active.taskId);
+            const stageColor = resolveTaskStageColor(active.taskKey);
             const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
             items.push(`
               <div class="stx-ui-list-item"${stageStyle}>
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(formatTaskDisplayLabel(active.taskId, active.taskDescription))}</div>
+                  <div class="stx-ui-list-title">${escapeHtml(active.consumer)} / ${escapeHtml(formatTaskDisplayLabel(active.taskKey, active.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(active.requestId.slice(0, 8))}...</div>
                 </div>
                 <span class="stx-ui-state-badge ${getStateBadgeClass(active.state)}">${STATE_LABELS[active.state] || active.state}</span>
@@ -2327,12 +2345,12 @@ function bindUiEvents(): void {
         }
 
         for (const pending of snapshot.pending) {
-            const stageColor = resolveTaskStageColor(pending.taskId);
+            const stageColor = resolveTaskStageColor(pending.taskKey);
             const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
             items.push(`
               <div class="stx-ui-list-item"${stageStyle}>
                 <div>
-                  <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(formatTaskDisplayLabel(pending.taskId, pending.taskDescription))}</div>
+                  <div class="stx-ui-list-title">${escapeHtml(pending.consumer)} / ${escapeHtml(formatTaskDisplayLabel(pending.taskKey, pending.taskDescription))}</div>
                   <div class="stx-ui-list-meta">ID: ${escapeHtml(pending.requestId.slice(0, 8))}... | 入队 ${formatTimestamp(pending.queuedAt)}</div>
                 </div>
                 <span class="stx-ui-state-badge is-queued">排队中</span>
@@ -2414,9 +2432,16 @@ function bindUiEvents(): void {
                     : responseFormat || '-';
 
         const lines = [
+            `任务链ID：${entry.llmTaskId}`,
             `请求ID：${entry.requestId}`,
             `来源插件：${entry.sourcePluginId}`,
-            `任务：${formatTaskDisplayLabel(entry.taskId, entry.taskDescription)}`,
+            `任务：${formatTaskDisplayLabel(entry.taskKey, entry.taskDescription)}`,
+            `任务键：${entry.taskKey}`,
+            `尝试序号：第 ${entry.attemptIndex} 次`,
+            `尝试标签：${formatAttemptBadgeLabel(entry)}`,
+            `尝试类型：${entry.attemptTag}`,
+            `尝试结果：${entry.attemptOutcome}`,
+            `最终尝试：${entry.isFinalAttempt ? '是' : '否'}`,
             `状态：${STATE_LABELS[entry.state] || entry.state}`,
             `资源：${resourceId}`,
             `模型：${model}`,
@@ -2497,8 +2522,9 @@ function bindUiEvents(): void {
         }
 
         requestLogListEl.innerHTML = requestLogFilteredEntries.map((entry) => {
-            const stageColor = resolveTaskStageColor(entry.taskId);
+            const stageColor = resolveTaskStageColor(entry.taskKey);
             const stageStyle = stageColor ? ` style="border-left: 3px solid ${stageColor};"` : '';
+            const attemptBadgeLabel = formatAttemptBadgeLabel(entry);
             const formatLabel = entry.request?.responseFormatResolved === 'json_schema'
                 ? '<span style="color:#2dd4bf; font-size:10px; margin-left:4px;">[strict]</span>'
                 : entry.request?.responseFormatResolved === 'json_object'
@@ -2509,10 +2535,10 @@ function bindUiEvents(): void {
             return `
           <button type="button" class="stx-ui-log-list-item${entry.logId === requestLogSelectedId ? ' is-active' : ''}" data-log-id="${escapeHtml(entry.logId)}"${stageStyle}>
             <div class="stx-ui-log-list-head">
-                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(formatTaskDisplayLabel(entry.taskId, entry.taskDescription))}${formatLabel}</div>
+                            <div class="stx-ui-log-list-title">${escapeHtml(entry.sourcePluginId)} / ${escapeHtml(formatTaskDisplayLabel(entry.taskKey, entry.taskDescription))} <span style="color:#fbbf24; font-size:10px; margin-left:4px;">[${escapeHtml(attemptBadgeLabel)}]</span>${formatLabel}</div>
               <span class="stx-ui-state-badge ${getStateBadgeClass(entry.state)}">${STATE_LABELS[entry.state] || entry.state}</span>
             </div>
-                        ${entry.taskDescription ? `<div class="stx-ui-log-list-subtitle">${escapeHtml(entry.taskDescription)}</div>` : ''}
+                        <div class="stx-ui-log-list-subtitle">${escapeHtml(`taskKey=${entry.taskKey} | llmTaskId=${entry.llmTaskId} | requestId=${entry.requestId} | 第 ${entry.attemptIndex} 次尝试`)}</div>
             <div class="stx-ui-log-list-timeline">
                                                         <span>${entry.finishedAt ? `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 返回 ${escapeHtml(formatTimestamp(entry.finishedAt))} · 耗时 ${escapeHtml(formatLatency(entry.latencyMs))}` : `发出 ${escapeHtml(formatTimestamp(entry.queuedAt))} · 等待返回`}</span>
             </div>
@@ -2557,7 +2583,7 @@ function bindUiEvents(): void {
             sample: requestLogAllEntries.slice(0, 5).map((entry: LLMRequestLogEntry) => ({
                 requestId: entry.requestId,
                 sourcePluginId: entry.sourcePluginId,
-                taskId: entry.taskId,
+                taskKey: entry.taskKey,
                 state: entry.state,
                 chatKey: entry.chatKey,
             })),
@@ -2668,10 +2694,10 @@ function bindUiEvents(): void {
         listEl.innerHTML = permissions.map((permission) => `
           <div class="stx-ui-list-item">
             <div>
-              <div class="stx-ui-list-title">${escapeHtml(permission.pluginId)} / ${escapeHtml(formatTaskDisplayLabel(permission.taskId))}</div>
+              <div class="stx-ui-list-title">${escapeHtml(permission.pluginId)} / ${escapeHtml(formatTaskDisplayLabel(permission.taskKey))}</div>
               <div class="stx-ui-list-meta">授权于 ${formatTimestamp(permission.grantedAt)}</div>
             </div>
-            <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(permission.pluginId)}::${escapeHtml(permission.taskId)}">撤销</button>
+            <button class="stx-ui-btn secondary" type="button" data-silent-revoke="${escapeHtml(permission.pluginId)}::${escapeHtml(permission.taskKey)}">撤销</button>
           </div>`).join('');
     };
 
@@ -2679,9 +2705,9 @@ function bindUiEvents(): void {
         const button = (evt.target as HTMLElement).closest<HTMLButtonElement>('button[data-silent-revoke]');
         if (!button) return;
         const key = String(button.dataset.silentRevoke || '').trim();
-        const [pluginId, taskId] = key.split('::');
-        if (!pluginId || !taskId) return;
-        runtime?.displayController?.revokeSilentPermission?.(pluginId, taskId);
+        const [pluginId, taskKey] = key.split('::');
+        if (!pluginId || !taskKey) return;
+        runtime?.displayController?.revokeSilentPermission?.(pluginId, taskKey);
         const settings = ensureSettings();
         settings.silentPermissions = runtime?.displayController?.exportSilentPermissions?.() || [];
         saveSettings();

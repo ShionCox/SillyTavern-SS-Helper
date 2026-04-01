@@ -68,9 +68,9 @@ function estimateAdaptiveMaxTokens(args: RunTaskArgs, config?: AdaptiveMaxTokens
     const schemaChars = safeJsonLength(args.schema);
 
     let base = args.schema ? 960 : 720;
-    if (args.taskId === 'world.template.build') {
+    if (args.taskKey === 'world.template.build') {
         base = 1400;
-    } else if (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize') {
+    } else if (args.taskKey === 'memory.extract' || args.taskKey === 'world.update' || args.taskKey === 'memory.summarize') {
         base = 1100;
     }
 
@@ -129,7 +129,7 @@ export function resolveMaxTokens(args: RunTaskArgs, options: {
             source: 'task_manual',
             detail: {
                 pluginId: taskAssignment?.pluginId,
-                taskId: taskAssignment?.taskId,
+                taskKey: taskAssignment?.taskKey,
             },
         };
     }

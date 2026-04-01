@@ -184,7 +184,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         );
         const plannerLLMResult = await input.llm.runTask<SummaryPlannerOutput>({
             consumer: input.pluginId,
-            taskId: 'memory_summary_planner',
+            taskKey: 'memory_summary_planner',
             taskDescription: '记忆总结第一阶段：候选规划',
             taskKind: 'generation',
             input: {

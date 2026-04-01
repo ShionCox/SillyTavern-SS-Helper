@@ -39,7 +39,7 @@ export async function classifyFloorRecordsWithAI(input: {
     }
     const result = await input.llm.runTask<AIBlockClassificationResult[]>({
         consumer: input.pluginId,
-        taskId: 'memory_content_block_classifier',
+        taskKey: 'memory_content_block_classifier',
         taskDescription: '内容块 AI 兜底分类',
         taskKind: 'generation',
         input: {

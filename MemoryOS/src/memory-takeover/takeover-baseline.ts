@@ -24,7 +24,7 @@ export async function runTakeoverBaseline(input: {
     const structured = await runTakeoverStructuredTask<MemoryTakeoverBaseline>({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_baseline',
+        taskKey: 'memory_takeover_baseline',
         taskDescription: '旧聊天处理：先看基础设定',
         systemSection: 'TAKEOVER_BASELINE_SYSTEM',
         schemaSection: 'TAKEOVER_BASELINE_SCHEMA',

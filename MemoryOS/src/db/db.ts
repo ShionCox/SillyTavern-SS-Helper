@@ -5,6 +5,7 @@ import {
     deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
+    queryLatestSdkPluginChatRecords,
     querySdkPluginChatRecords,
     rebuildSSHelperDatabase,
     readSdkPluginChatState,
@@ -161,7 +162,8 @@ export type MemoryTakeoverRecordCollection =
     | 'takeover_batch_result'
     | 'candidate_actor_mentions'
     | 'takeover_logs'
-    | 'takeover_preview'
+    | 'takeover_preview_runtime'
+    | 'takeover_preview_draft'
     | 'comparekey_index';
 
 /**
@@ -261,11 +263,13 @@ export async function saveMemoryTakeoverBatchMeta(chatKey: string, batch: Memory
  * @returns 批次元数据列表。
  */
 export async function loadMemoryTakeoverBatchMetas(chatKey: string): Promise<MemoryTakeoverBatch[]> {
-    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
         order: 'asc',
         limit: 2000,
     });
-    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatch => row.payload as unknown as MemoryTakeoverBatch);
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatch => {
+        return row.payload as unknown as MemoryTakeoverBatch;
+    });
 }
 
 /**
@@ -312,11 +316,13 @@ export async function saveCandidateActorMentions(
  * @returns 候选角色提及列表。
  */
 export async function loadCandidateActorMentions(chatKey: string): Promise<MemoryTakeoverCandidateActorMention[]> {
-    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'candidate_actor_mentions', {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'candidate_actor_mentions', {
         order: 'asc',
         limit: 4000,
     });
-    return rows.map((row: DBChatPluginRecord): MemoryTakeoverCandidateActorMention => row.payload as unknown as MemoryTakeoverCandidateActorMention);
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverCandidateActorMention => {
+        return row.payload as unknown as MemoryTakeoverCandidateActorMention;
+    });
 }
 
 /**
@@ -325,11 +331,13 @@ export async function loadCandidateActorMentions(chatKey: string): Promise<Memor
  * @returns 批次分析结果列表。
  */
 export async function loadMemoryTakeoverBatchResults(chatKey: string): Promise<MemoryTakeoverBatchResult[]> {
-    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
         order: 'asc',
         limit: 2000,
     });
-    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatchResult => row.payload as unknown as MemoryTakeoverBatchResult);
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatchResult => {
+        return row.payload as unknown as MemoryTakeoverBatchResult;
+    });
 }
 
 /**
@@ -337,14 +345,16 @@ export async function loadMemoryTakeoverBatchResults(chatKey: string): Promise<M
  * @param chatKey 聊天键。
  * @param recordId 记录标识。
  * @param payload 预览数据。
+ * @param scope 预览作用域。
  * @returns 异步完成。
  */
 export async function saveMemoryTakeoverPreview(
     chatKey: string,
     recordId: 'baseline' | 'active_snapshot' | 'latest_batch' | 'consolidation',
     payload: MemoryTakeoverBaseline | MemoryTakeoverActiveSnapshot | MemoryTakeoverBatchResult | MemoryTakeoverConsolidationResult,
+    scope: 'runtime' | 'draft' = 'runtime',
 ): Promise<void> {
-    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_preview', {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection(scope), {
         recordId,
         payload: payload as unknown as Record<string, unknown>,
         ts: Date.now(),
@@ -352,19 +362,38 @@ export async function saveMemoryTakeoverPreview(
 }
 
 /**
+ * 功能：清空指定聊天的接管预览缓存。
+ * @param chatKey 聊天键。
+ * @returns 清理完成。
+ */
+export async function clearMemoryTakeoverPreview(chatKey: string): Promise<void> {
+    await deleteSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection('runtime'));
+}
+
+/**
+ * 功能：按作用域解析接管预览集合名称。
+ * @param scope 预览作用域。
+ * @returns 对应集合名。
+ */
+function resolveTakeoverPreviewCollection(scope: 'runtime' | 'draft'): 'takeover_preview_runtime' | 'takeover_preview_draft' {
+    return scope === 'draft' ? 'takeover_preview_draft' : 'takeover_preview_runtime';
+}
+
+/**
  * 功能：读取最新接管预览数据。
  * @param chatKey 聊天键。
+ * @param scope 预览作用域。
  * @returns 预览映射。
  */
-export async function loadMemoryTakeoverPreview(chatKey: string): Promise<{
+export async function loadMemoryTakeoverPreview(chatKey: string, scope: 'runtime' | 'draft' = 'runtime'): Promise<{
     baseline: MemoryTakeoverBaseline | null;
     activeSnapshot: MemoryTakeoverActiveSnapshot | null;
     latestBatch: MemoryTakeoverBatchResult | null;
     consolidation: MemoryTakeoverConsolidationResult | null;
 }> {
-    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_preview', {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection(scope), {
         order: 'desc',
-        limit: 20,
+        limit: 2000,
     });
     const result = {
         baseline: null as MemoryTakeoverBaseline | null,
@@ -423,7 +452,7 @@ export async function saveMemoryCompareKeyIndexRecord(chatKey: string, record: M
  * @returns 索引记录列表。
  */
 export async function loadMemoryCompareKeyIndexRecords(chatKey: string): Promise<MemoryCompareKeyIndexRecord[]> {
-    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'comparekey_index', {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'comparekey_index', {
         order: 'asc',
         limit: 5000,
     });

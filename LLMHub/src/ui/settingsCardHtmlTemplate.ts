@@ -757,7 +757,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
           <div class="stx-ui-log-layout">
             <aside class="stx-ui-log-sidebar">
               <div class="stx-ui-log-toolbar">
-                <input id="${ids.requestLogSearchId}" class="stx-ui-input stx-ui-input-full" type="search" placeholder="搜索 plugin / consumer / task / requestId / model" />
+                <input id="${ids.requestLogSearchId}" class="stx-ui-input stx-ui-input-full" type="search" placeholder="搜索 plugin / consumer / taskKey / llmTaskId / requestId / model" />
                 <div class="stx-ui-log-filter-row">
                   <select id="${ids.requestLogStateFilterId}" class="stx-ui-select">
                     <option value="all">全部状态</option>

@@ -16,7 +16,7 @@ export async function runSummaryMutationBatch(input: {
 }): Promise<{ ok: boolean; reasonCode?: string; data?: SummaryMutationDocument }> {
     const result = await input.llm.runTask<SummaryMutationDocument>({
         consumer: input.pluginId,
-        taskId: 'memory_summary_mutation',
+        taskKey: 'memory_summary_mutation',
         taskDescription: input.taskDescription,
         taskKind: 'generation',
         input: {

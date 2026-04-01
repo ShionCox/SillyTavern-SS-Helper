@@ -11,6 +11,7 @@ import {
     assembleTakeoverBatchPromptAssembly,
 } from '../memory-takeover';
 import {
+    clearMemoryTakeoverPreview,
     readMemoryOSChatState,
     loadMemoryTakeoverBatchResults,
     loadMemoryTakeoverPreview,
@@ -447,6 +448,7 @@ export class TakeoverService {
      */
     async startTakeover(input: TakeoverSchedulerExecutionInput): Promise<MemoryTakeoverProgressSnapshot> {
         await this.readContentLabSettings();
+        await clearMemoryTakeoverPreview(this.chatKey);
         const existingPlan = await this.readPlan();
         if (existingPlan && (!input.takeoverId || existingPlan.takeoverId === input.takeoverId)) {
             return this.runPlan(existingPlan, input);
@@ -534,7 +536,7 @@ export class TakeoverService {
         if (!plan) {
             return null;
         }
-        const preview = await loadMemoryTakeoverPreview(this.chatKey);
+        const preview = await loadMemoryTakeoverPreview(this.chatKey, 'runtime');
         const batchResults = await loadMemoryTakeoverBatchResults(this.chatKey);
         const consolidation = await this.runConsolidation({
             llm: input.llm ?? readMemoryLLMApi(),
@@ -543,7 +545,7 @@ export class TakeoverService {
             activeSnapshot: preview.activeSnapshot,
             batchResults,
         });
-        await saveMemoryTakeoverPreview(this.chatKey, 'consolidation', consolidation);
+        await saveMemoryTakeoverPreview(this.chatKey, 'consolidation', consolidation, 'runtime');
         await input.applyConsolidation(consolidation);
         const nextPlan: MemoryTakeoverPlan = {
             ...plan,

@@ -10,25 +10,40 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 5,
+        registrationVersion: 6,
         tasks: [
             {
-                taskId: 'memory_embedding',
+                taskKey: 'memory_embedding',
                 taskKind: 'embedding',
                 requiredCapabilities: ['embeddings'],
                 description: '记忆向量批量编码',
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_cold_start',
+                taskKey: 'memory_cold_start_core',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
-                description: '冷启动结构化初始化',
+                description: '冷启动核心信息抽取',
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_summary_planner',
+                taskKey: 'memory_cold_start_state',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '冷启动近期状态抽取',
+                backgroundEligible: false,
+            },
+            {
+                taskKey: 'memory_vector_rerank',
+                taskKind: 'rerank',
+                requiredCapabilities: ['rerank'],
+                description: '记忆向量结果重排序',
+                backgroundEligible: false,
+            },
+            {
+                taskKey: 'memory_summary_planner',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -36,7 +51,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_summary_mutation',
+                taskKey: 'memory_summary_mutation',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -44,7 +59,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_baseline',
+                taskKey: 'memory_takeover_baseline',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -52,7 +67,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_active_snapshot',
+                taskKey: 'memory_takeover_active_snapshot',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -60,7 +75,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_batch',
+                taskKey: 'memory_takeover_batch',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -68,7 +83,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_style_repair',
+                taskKey: 'memory_takeover_style_repair',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -76,7 +91,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_actor_completion',
+                taskKey: 'memory_takeover_actor_completion',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -84,7 +99,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_content_block_classifier',
+                taskKey: 'memory_content_block_classifier',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 4096,
@@ -92,7 +107,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_actor_conflict_resolve',
+                taskKey: 'memory_takeover_actor_conflict_resolve',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -100,7 +115,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_entity_conflict_resolve',
+                taskKey: 'memory_takeover_entity_conflict_resolve',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -108,7 +123,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_relation_conflict_resolve',
+                taskKey: 'memory_takeover_relation_conflict_resolve',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
@@ -116,7 +131,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 backgroundEligible: false,
             },
             {
-                taskId: 'memory_takeover_world_conflict_resolve',
+                taskKey: 'memory_takeover_world_conflict_resolve',
                 taskKind: 'generation',
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,

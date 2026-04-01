@@ -159,7 +159,7 @@ async function resolveBucketChunkByLLM(input: {
         const result = await runTakeoverStructuredTask<ConflictResolutionBatchDocument>({
             llm: input.llm,
             pluginId: input.pluginId,
-            taskId: resolveConflictBatchTaskId(input.domain),
+            taskKey: resolveConflictBatchTaskId(input.domain),
             taskDescription: `旧聊天接管批量冲突裁决：${input.domain}/${input.conflictType}`,
             systemSection: 'TAKEOVER_BATCH_SYSTEM',
             schemaSection: 'TAKEOVER_CONFLICT_RESOLUTION_BATCH_SCHEMA',

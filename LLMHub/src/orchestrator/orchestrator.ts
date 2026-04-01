@@ -23,8 +23,13 @@ import type {
 
 
 let globalRequestCounter = 0;
+let globalLlmTaskCounter = 0;
 function generateRequestId(): string {
     return `req_${Date.now()}_${++globalRequestCounter}`;
+}
+
+function generateLlmTaskId(): string {
+    return `llm_task_${Date.now()}_${++globalLlmTaskCounter}`;
 }
 
 /**
@@ -103,12 +108,13 @@ export class RequestOrchestrator {
 
     enqueue<T>(
         consumer: string,
-        taskId: string,
+        taskKey: string,
         taskKind: CapabilityKind,
         options: RequestEnqueueOptions = {},
         requestArgs?: unknown,
         taskDescription?: string,
     ): RequestRecord<T> {
+        const llmTaskId = generateLlmTaskId();
         const requestId = generateRequestId();
 
         // dedupeKey: 检查重复
@@ -125,12 +131,14 @@ export class RequestOrchestrator {
             this.replacePending(options.replacePendingByKey, requestId);
         }
 
+        let displayMode: DisplayMode = options.displayMode || (taskKind === 'generation' ? 'fullscreen' : 'silent');
         // 确定 blockNextUntilOverlayClose 默认值
         const blockNext = options.blockNextUntilOverlayClose ??
-            (taskKind === 'generation' ? this.config.defaultBlockForGeneration : false);
+            (displayMode === 'compact' || displayMode === 'silent'
+                ? false
+                : (taskKind === 'generation' ? this.config.defaultBlockForGeneration : false));
 
         // 展示模式降级：fullscreen + blockNext=false → compact
-        let displayMode: DisplayMode = options.displayMode || (taskKind === 'generation' ? 'fullscreen' : 'silent');
         if (displayMode === 'fullscreen' && !blockNext) {
             displayMode = 'compact';
         }
@@ -147,9 +155,10 @@ export class RequestOrchestrator {
         });
 
         const record: RequestRecord<T> = {
+            llmTaskId,
             requestId,
             consumer,
-            taskId,
+            taskKey,
             taskDescription,
             taskKind,
             requestArgs,
@@ -158,6 +167,7 @@ export class RequestOrchestrator {
             enqueueOptions: { ...options, blockNextUntilOverlayClose: blockNext, displayMode },
             scope: options.scope,
             queuedAt: Date.now(),
+            attemptIndex: 1,
             resultPromise,
             overlayClosedPromise,
             resolveResult,
@@ -165,12 +175,27 @@ export class RequestOrchestrator {
         };
 
         this.queue.push(record as RequestRecord);
-        logger.info(`请求 ${requestId} 入队：consumer=${consumer}, task=${taskId}, kind=${taskKind}, display=${displayMode}`);
+        logger.info(`请求 ${requestId} 入队：consumer=${consumer}, task=${taskKey}, llmTaskId=${llmTaskId}, kind=${taskKind}, display=${displayMode}`);
 
         // 启动队列处理
         this.processQueue();
 
         return record;
+    }
+
+    /**
+     * 功能：为同一任务链推进到下一次尝试。
+     * @param record 请求主记录。
+     * @returns 稳定的任务请求 ID。
+     */
+    advanceAttempt(record: RequestRecord): string {
+        record.attemptIndex = Math.max(1, Number(record.attemptIndex || 1)) + 1;
+        record.startedAt = undefined;
+        record.finishedAt = undefined;
+        record.meta = undefined;
+        record.debug = undefined;
+        record.activeAttemptRequestId = undefined;
+        return record.requestId;
     }
 
     // ─── 展示关闭通知 ───
@@ -240,12 +265,12 @@ export class RequestOrchestrator {
 
     /** 获取当前队列状态（设置页展示用） */
     getQueueSnapshot(): {
-        pending: Array<{ requestId: string; consumer: string; taskId: string; taskDescription?: string; queuedAt: number }>;
-        active: { requestId: string; consumer: string; taskId: string; taskDescription?: string; state: RequestState } | null;
+        pending: Array<{ requestId: string; consumer: string; taskKey: string; taskDescription?: string; queuedAt: number }>;
+        active: { requestId: string; consumer: string; taskKey: string; taskDescription?: string; state: RequestState } | null;
         recentHistory: Array<{
             requestId: string;
             consumer: string;
-            taskId: string;
+            taskKey: string;
             taskDescription?: string;
             state: RequestState;
             finishedAt?: number;
@@ -263,21 +288,21 @@ export class RequestOrchestrator {
             pending: this.queue.map(r => ({
                 requestId: r.requestId,
                 consumer: r.consumer,
-                taskId: r.taskId,
+                taskKey: r.taskKey,
                 taskDescription: r.taskDescription,
                 queuedAt: r.queuedAt,
             })),
             active: this.activeRequest ? {
                 requestId: this.activeRequest.requestId,
                 consumer: this.activeRequest.consumer,
-                taskId: this.activeRequest.taskId,
+                taskKey: this.activeRequest.taskKey,
                 taskDescription: this.activeRequest.taskDescription,
                 state: this.activeRequest.state,
             } : null,
             recentHistory: this.history.slice(-20).map(r => ({
                 requestId: r.requestId,
                 consumer: r.consumer,
-                taskId: r.taskId,
+                taskKey: r.taskKey,
                 taskDescription: r.taskDescription,
                 state: r.state,
                 finishedAt: r.finishedAt,
@@ -335,7 +360,7 @@ export class RequestOrchestrator {
         logger.info('[RequestLifecycle][Running]', {
             requestId: record.requestId,
             consumer: record.consumer,
-            taskId: record.taskId,
+            taskKey: record.taskKey,
             displayMode: record.enqueueOptions.displayMode || 'fullscreen',
             blockNextUntilOverlayClose: Boolean(record.enqueueOptions.blockNextUntilOverlayClose),
             chatKey: record.chatKey,
@@ -370,7 +395,7 @@ export class RequestOrchestrator {
             logger.info('[RequestLifecycle][ResultReady]', {
                 requestId: record.requestId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 ok: result.ok !== false,
                 hasMeta: Boolean(result.meta),
                 reasonCode: getRunResultReasonCode(result),
@@ -415,7 +440,7 @@ export class RequestOrchestrator {
                 logger.info('[RequestLifecycle][CompletedSilent]', {
                     requestId: record.requestId,
                     consumer: record.consumer,
-                    taskId: record.taskId,
+                    taskKey: record.taskKey,
                     reasonCode: getRunResultReasonCode(result),
                 });
                 record.resolveOverlay?.();
@@ -427,7 +452,7 @@ export class RequestOrchestrator {
                 logger.info('[RequestLifecycle][OverlayWaiting]', {
                     requestId: record.requestId,
                     consumer: record.consumer,
-                    taskId: record.taskId,
+                    taskKey: record.taskKey,
                     blockNextUntilOverlayClose: Boolean(record.enqueueOptions.blockNextUntilOverlayClose),
                 });
                 if (this.displayCallback) {
@@ -448,7 +473,7 @@ export class RequestOrchestrator {
             logger.error('[RequestLifecycle][Failed]', {
                 requestId: record.requestId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 error: errMsg,
             });
             record.debug = {
@@ -562,7 +587,7 @@ export class RequestOrchestrator {
         logger.info('[RequestLifecycle][ArchiveRecord]', {
             requestId: record.requestId,
             consumer: record.consumer,
-            taskId: record.taskId,
+            taskKey: record.taskKey,
             state: record.state,
             chatKey: record.chatKey,
             reasonCode: record.debug?.reasonCode,

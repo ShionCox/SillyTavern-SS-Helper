@@ -32,7 +32,7 @@ export async function runTakeoverActiveSnapshot(input: {
     const structured = await runTakeoverStructuredTask<MemoryTakeoverActiveSnapshot>({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_active_snapshot',
+        taskKey: 'memory_takeover_active_snapshot',
         taskDescription: `旧聊天处理：先看最近聊到哪（${input.range.startFloor}-${input.range.endFloor}层）`,
         systemSection: 'TAKEOVER_ACTIVE_SYSTEM',
         schemaSection: 'TAKEOVER_ACTIVE_SCHEMA',

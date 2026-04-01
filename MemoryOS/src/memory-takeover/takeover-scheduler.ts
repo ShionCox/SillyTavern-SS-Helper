@@ -86,14 +86,14 @@ export async function runTakeoverScheduler(input: {
         },
     });
 
-    const preview = await loadMemoryTakeoverPreview(input.chatKey);
+    const preview = await loadMemoryTakeoverPreview(input.chatKey, 'runtime');
     const baseline: MemoryTakeoverBaseline = preview.baseline ?? await runTakeoverBaseline({
         llm: input.llm,
         pluginId: input.pluginId,
         sourceBundle,
     });
     if (!preview.baseline) {
-        await saveMemoryTakeoverPreview(input.chatKey, 'baseline', baseline);
+        await saveMemoryTakeoverPreview(input.chatKey, 'baseline', baseline, 'runtime');
     }
 
     let activeSnapshot: MemoryTakeoverActiveSnapshot | null = preview.activeSnapshot ?? null;
@@ -120,7 +120,7 @@ export async function runTakeoverScheduler(input: {
                 messages: activeAssembly.extractionMessages,
                 hintContext: activeAssembly.channels.hintText || undefined,
             });
-            await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot);
+            await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot, 'runtime');
         }
     }
 
@@ -203,7 +203,7 @@ export async function runTakeoverScheduler(input: {
                 existingKnownEntities: input.existingKnownEntities,
             });
             const admission = admitTakeoverBatchResult(result);
-            await saveMemoryTakeoverPreview(input.chatKey, 'latest_batch', admission.result);
+            await saveMemoryTakeoverPreview(input.chatKey, 'latest_batch', admission.result, 'runtime');
             if (admission.accepted) {
                 batchResultMap.set(admission.result.batchId, admission.result);
                 completedBatchIds.add(admission.result.batchId);
@@ -321,7 +321,7 @@ export async function runTakeoverScheduler(input: {
         activeSnapshot,
         batchResults: Array.from(batchResultMap.values()).sort((left, right) => left.sourceRange.startFloor - right.sourceRange.startFloor),
     });
-    await saveMemoryTakeoverPreview(input.chatKey, 'consolidation', consolidation);
+    await saveMemoryTakeoverPreview(input.chatKey, 'consolidation', consolidation, 'runtime');
     await input.applyConsolidation(consolidation);
     plan = {
         ...plan,
@@ -348,13 +348,9 @@ export async function runTakeoverScheduler(input: {
 export async function buildProgressSnapshot(chatKey: string, plan?: MemoryTakeoverPlan | null): Promise<MemoryTakeoverProgressSnapshot> {
     const currentPlan = plan ?? await readMemoryTakeoverPlan(chatKey);
     const batchMetas = await loadMemoryTakeoverBatchMetas(chatKey);
-    const preview = await loadMemoryTakeoverPreview(chatKey);
+    const preview = await loadMemoryTakeoverPreview(chatKey, 'runtime');
     const batchResults = await loadMemoryTakeoverBatchResults(chatKey);
-    const currentBatch = batchMetas
-        .slice()
-        .sort((left, right) => (right.finishedAt ?? right.startedAt ?? 0) - (left.finishedAt ?? left.startedAt ?? 0))
-        .find((item: MemoryTakeoverBatch): boolean => item.status === 'running' || item.status === 'failed' || item.status === 'completed' || item.status === 'isolated')
-        ?? null;
+    const currentBatch = resolveCurrentTakeoverBatch(batchMetas, currentPlan);
     return {
         plan: currentPlan,
         currentBatch,
@@ -364,6 +360,39 @@ export async function buildProgressSnapshot(chatKey: string, plan?: MemoryTakeov
         consolidation: preview.consolidation,
         batchResults,
     };
+}
+
+/**
+ * 功能：按当前计划解析应该展示的“当前批次”。
+ * @param batchMetas 已去重后的批次元数据列表。
+ * @param plan 当前接管计划。
+ * @returns 当前应展示的批次。
+ */
+function resolveCurrentTakeoverBatch(
+    batchMetas: MemoryTakeoverBatch[],
+    plan: MemoryTakeoverPlan | null,
+): MemoryTakeoverBatch | null {
+    if (batchMetas.length <= 0) {
+        return null;
+    }
+    const sortByLatest = (items: MemoryTakeoverBatch[]): MemoryTakeoverBatch[] => {
+        return items.slice().sort((left, right): number => {
+            const leftSortKey = Math.max(Number(left.finishedAt ?? 0), Number(left.startedAt ?? 0));
+            const rightSortKey = Math.max(Number(right.finishedAt ?? 0), Number(right.startedAt ?? 0));
+            return rightSortKey - leftSortKey;
+        });
+    };
+    if (plan) {
+        const matchedByIndex = sortByLatest(batchMetas).find((item: MemoryTakeoverBatch): boolean => {
+            return item.batchIndex === plan.currentBatchIndex;
+        });
+        if (matchedByIndex) {
+            return matchedByIndex;
+        }
+    }
+    return sortByLatest(batchMetas).find((item: MemoryTakeoverBatch): boolean => {
+        return item.status === 'running' || item.status === 'failed' || item.status === 'completed' || item.status === 'isolated';
+    }) ?? null;
 }
 
 async function waitTakeoverRequestInterval(

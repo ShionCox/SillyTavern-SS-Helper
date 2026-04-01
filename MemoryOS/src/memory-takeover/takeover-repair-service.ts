@@ -111,11 +111,12 @@ async function requestStyleRepair(
     input: TakeoverRepairServiceInput,
     result: MemoryTakeoverBatchResult,
 ): Promise<MemoryTakeoverBatchResult | null> {
+    const rangeLabel = `${input.batch.range.startFloor}-${input.batch.range.endFloor}层`;
     return runTakeoverStructuredTask<MemoryTakeoverBatchResult>({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_style_repair',
-        taskDescription: '旧聊天处理文案修复',
+        taskKey: 'memory_takeover_style_repair',
+        taskDescription: `旧聊天处理文案修复（${input.batch.batchId} / ${rangeLabel}）`,
         systemSection: 'TAKEOVER_BATCH_SYSTEM',
         schemaSection: 'TAKEOVER_BATCH_SCHEMA',
         sampleSection: 'TAKEOVER_BATCH_OUTPUT_SAMPLE',
@@ -146,11 +147,12 @@ async function requestActorCompletion(
     input: TakeoverRepairServiceInput,
     result: MemoryTakeoverBatchResult,
 ): Promise<MemoryTakeoverBatchResult | null> {
+    const rangeLabel = `${input.batch.range.startFloor}-${input.batch.range.endFloor}层`;
     return runTakeoverStructuredTask<MemoryTakeoverBatchResult>({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_actor_completion',
-        taskDescription: '旧聊天处理角色补全',
+        taskKey: 'memory_takeover_actor_completion',
+        taskDescription: `旧聊天处理角色补全（${input.batch.batchId} / ${rangeLabel}）`,
         systemSection: 'TAKEOVER_BATCH_SYSTEM',
         schemaSection: 'TAKEOVER_BATCH_SCHEMA',
         sampleSection: 'TAKEOVER_BATCH_OUTPUT_SAMPLE',

@@ -46,8 +46,9 @@ export type LLMTaskLifecycleStage =
 
 export interface LLMTaskLifecycleEvent {
     requestId: string;
+    llmTaskId: string;
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskKind: CapabilityKind;
     stage: LLMTaskLifecycleStage;
     ts: number;
@@ -74,7 +75,7 @@ export type DisplayMode = 'fullscreen' | 'compact' | 'silent';
 
 /** 单个任务描述 */
 export interface TaskDescriptor {
-    taskId: string;
+    taskKey: string;
     taskKind: CapabilityKind;
     requiredCapabilities: LLMCapability[];
     maxTokens?: number;
@@ -86,7 +87,7 @@ export interface TaskDescriptor {
 
 /** 路由绑定 —— 一个插件对某个任务的覆盖 */
 export interface RouteBinding {
-    taskId: string;
+    taskKey: string;
     resourceId: string;
     model?: string;
     profileId?: string;
@@ -116,7 +117,7 @@ export interface ConsumerPersistentSnapshot {
     staleReason?: string;
     /** 用户覆盖来源快照 */
     userOverrides?: Record<string, {
-        taskId: string;
+        taskKey: string;
         resourceId?: string;
         model?: string;
         profileId?: string;
@@ -124,7 +125,7 @@ export interface ConsumerPersistentSnapshot {
     }>;
     /** 推荐值快照 */
     recommendedSnapshots?: Record<string, {
-        taskId: string;
+        taskKey: string;
         resourceId?: string;
         model?: string;
         profileId?: string;
@@ -137,7 +138,7 @@ export interface ConsumerSessionSnapshot {
     seenAt: number;
     currentQueueState: {
         pendingCount: number;
-        runningTaskId?: string;
+        runningTaskKey?: string;
     };
     currentOverlayState: {
         activeRequestId?: string;
@@ -155,7 +156,7 @@ export interface ConsumerSnapshot extends ConsumerPersistentSnapshot {
 // ═══════════════════════════════════════════
 
 export interface StaleBindingSnapshot {
-    taskId: string;
+    taskKey: string;
     taskKind: CapabilityKind;
     registrationVersion: number;
     lastSeenAt: number;
@@ -270,13 +271,18 @@ export interface LLMRequestLogResponseSnapshot {
 
 export interface LLMRequestLogEntry {
     logId: string;
+    llmTaskId: string;
     requestId: string;
     sourcePluginId: string;
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     taskKind: CapabilityKind;
     state: RequestState;
+    attemptIndex: number;
+    attemptTag: '初次请求' | '重试';
+    attemptOutcome: '成功' | '失败' | '取消';
+    isFinalAttempt: boolean;
     chatKey?: string;
     sessionId?: string;
     queuedAt: number;
@@ -301,9 +307,9 @@ export interface LLMRequestLogQueryOptions {
 
 /** 内部请求记录 */
 export interface RequestRecord<T = unknown> {
-    requestId: string;
+    llmTaskId: string;
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     taskKind: CapabilityKind;
     requestArgs?: unknown;
@@ -312,6 +318,9 @@ export interface RequestRecord<T = unknown> {
     enqueueOptions: RequestEnqueueOptions;
     scope?: RequestScope;
     chatKey?: string;
+    requestId: string;
+    activeAttemptRequestId?: string;
+    attemptIndex: number;
     queuedAt: number;
     startedAt?: number;
     finishedAt?: number;
@@ -366,7 +375,7 @@ export type OverlayPatch = Partial<Omit<LLMOverlaySpec, 'requestId'>>;
 export interface RouteResolveArgs {
     consumer: string;
     taskKind: CapabilityKind;
-    taskId?: string;
+    taskKey?: string;
     requiredCapabilities?: LLMCapability[];
     routeHint?: { resourceId?: string; model?: string; profileId?: string };
 }
@@ -461,7 +470,7 @@ export interface PluginAssignment {
 /** 任务分配 */
 export interface TaskAssignment {
     pluginId: string;
-    taskId: string;
+    taskKey: string;
     taskKind: CapabilityKind;
     resourceId?: string;
     maxTokens?: number;
@@ -472,7 +481,7 @@ export interface TaskAssignment {
 /** silent 权限授权 */
 export interface SilentPermissionGrant {
     pluginId: string;
-    taskId: string;
+    taskKey: string;
     grantedAt: number;
 }
 
@@ -517,7 +526,7 @@ export interface ResourceStatusSnapshot {
 export interface RoutePreviewSnapshot {
     consumer: string;
     taskKind: CapabilityKind;
-    taskId?: string;
+    taskKey?: string;
     requiredCapabilities: LLMCapability[];
     available: boolean;
     resourceId?: string;
@@ -551,7 +560,7 @@ export interface LLMInspectApi {
 
 export interface RunTaskArgs<T = unknown> {
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     taskKind: CapabilityKind;
     input: any;
@@ -565,7 +574,7 @@ export interface RunTaskArgs<T = unknown> {
 
 export interface EmbedArgs {
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     texts: string[];
     routeHint?: { resource?: string; model?: string };
@@ -575,7 +584,7 @@ export interface EmbedArgs {
 
 export interface RerankArgs {
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     query: string;
     docs: string[];

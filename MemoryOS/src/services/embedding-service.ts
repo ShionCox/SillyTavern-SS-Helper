@@ -54,7 +54,7 @@ export interface EmbeddingModelInfo {
 interface LLMEmbedApi {
     embed: (args: {
         consumer: string;
-        taskId: string;
+        taskKey: string;
         taskDescription?: string;
         texts: string[];
         routeHint?: { resource?: string; model?: string };
@@ -178,7 +178,7 @@ export class EmbeddingService {
         try {
             const response = await api.embed({
                 consumer: CONSUMER_ID,
-                taskId: TASK_ID,
+                taskKey: TASK_ID,
                 taskDescription: String(options?.taskDescription ?? '').trim() || '记忆向量编码',
                 texts: validTexts,
                 routeHint: routeResource || routeModel

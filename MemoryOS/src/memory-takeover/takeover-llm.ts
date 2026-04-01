@@ -14,13 +14,13 @@ export interface TakeoverStructuredTaskRequest {
 
 /**
  * 功能：构建旧聊天处理失败提示。
- * @param taskId 任务标识。
+ * @param taskKey 任务标识。
  * @param reasonCode 原始原因码。
  * @param errorMessage 原始错误信息。
  * @returns 统一后的错误文本。
  */
-function buildTakeoverTaskErrorMessage(taskId: string, reasonCode?: string, errorMessage?: string): string {
-    const normalizedTaskId = String(taskId ?? '').trim() || 'unknown_task';
+function buildTakeoverTaskErrorMessage(taskKey: string, reasonCode?: string, errorMessage?: string): string {
+    const normalizedTaskId = String(taskKey ?? '').trim() || 'unknown_task';
     const normalizedReasonCode = String(reasonCode ?? '').trim();
     const normalizedErrorMessage = String(errorMessage ?? '').trim();
     if (normalizedErrorMessage && normalizedReasonCode) {
@@ -310,7 +310,7 @@ export async function buildTakeoverStructuredTaskRequest(input: {
 export async function runTakeoverStructuredTask<T>(input: {
     llm: MemoryLLMApi | null;
     pluginId: string;
-    taskId: string;
+    taskKey: string;
     taskDescription?: string;
     systemSection: string;
     schemaSection: string;
@@ -320,7 +320,7 @@ export async function runTakeoverStructuredTask<T>(input: {
     extraSystemInstruction?: string;
 }): Promise<T | null> {
     if (!input.llm) {
-        throw new Error(buildTakeoverTaskErrorMessage(input.taskId, 'llm_unavailable', '当前未连接可用的 LLMHub 服务。'));
+        throw new Error(buildTakeoverTaskErrorMessage(input.taskKey, 'llm_unavailable', '当前未连接可用的 LLMHub 服务。'));
     }
     const settings = readMemoryOSSettings();
     const autoCloseMs = Math.max(0, Math.trunc(Number(settings.takeoverRequestIntervalSeconds) || 0)) * 1000;
@@ -334,7 +334,7 @@ export async function runTakeoverStructuredTask<T>(input: {
     });
     const result = await input.llm.runTask<T>({
         consumer: input.pluginId,
-        taskId: input.taskId,
+        taskKey: input.taskKey,
         taskDescription: String(input.taskDescription ?? '').trim() || '旧聊天处理',
         taskKind: 'generation',
         input: {
@@ -347,7 +347,7 @@ export async function runTakeoverStructuredTask<T>(input: {
         },
     });
     if (!result.ok) {
-        throw new Error(buildTakeoverTaskErrorMessage(input.taskId, result.reasonCode, result.error));
+        throw new Error(buildTakeoverTaskErrorMessage(input.taskKey, result.reasonCode, result.error));
     }
     return result.data;
 }

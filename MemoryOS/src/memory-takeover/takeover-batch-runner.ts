@@ -22,6 +22,7 @@ import { buildFloorRecords, assembleContentChannels, type RawFloorRecord } from 
 import { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
 import { runTakeoverRepairService } from './takeover-repair-service';
 import { logger } from '../runtime/runtime-services';
+import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import {
     COMPARE_KEY_SCHEMA_VERSION,
     buildCompareKey,
@@ -930,7 +931,7 @@ export async function runTakeoverBatch(input: {
     const structured = await runTakeoverStructuredTask<MemoryTakeoverBatchResult>({
         llm: input.llm,
         pluginId: input.pluginId,
-        taskId: 'memory_takeover_batch',
+        taskKey: 'memory_takeover_batch',
         taskDescription: `旧聊天处理（${displayProgress.current}/${displayProgress.total}）`,
         systemSection: 'TAKEOVER_BATCH_SYSTEM',
         schemaSection: 'TAKEOVER_BATCH_SCHEMA',
@@ -1146,6 +1147,87 @@ function normalizeId(value: string): string {
         || 'unknown';
 }
 
+const USER_PLACEHOLDER_SKIP_KEYS = new Set<string>([
+    'actorKey',
+    'sourceActorKey',
+    'targetActorKey',
+    'participants',
+    'entityKey',
+    'compareKey',
+    'matchKeys',
+    'schemaVersion',
+    'legacyCompareKeys',
+    'bindings',
+    'reasonCodes',
+    'sourceRange',
+    'generatedAt',
+    'takeoverId',
+    'batchId',
+    'sourceSegments',
+    'auditReport',
+]);
+
+/**
+ * 功能：转义正则中的特殊字符。
+ * @param value 原始文本。
+ * @returns 转义后的文本。
+ */
+function escapeRegExp(value: string): string {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 功能：把当前用户名统一替换为 `{{user}}`。
+ * @param text 原始文本。
+ * @param userDisplayName 当前用户名。
+ * @returns 归一化后的文本。
+ */
+function replaceCurrentUserNameWithPlaceholder(text: string, userDisplayName: string): string {
+    let output = String(text ?? '');
+    if (!output) {
+        return output;
+    }
+    output = output.replace(/\{\{\s*userDisplayName\s*\}\}/gi, '{{user}}');
+    const normalizedUserDisplayName = String(userDisplayName ?? '').trim();
+    if (normalizedUserDisplayName && normalizedUserDisplayName !== '你') {
+        output = output.replace(new RegExp(escapeRegExp(normalizedUserDisplayName), 'g'), '{{user}}');
+    }
+    return output;
+}
+
+/**
+ * 功能：递归统一接管结果里的用户占位符。
+ * @param value 原始值。
+ * @param userDisplayName 当前用户名。
+ * @param currentKey 当前字段名。
+ * @returns 归一化后的值。
+ */
+function normalizeTakeoverUserPlaceholder<T>(value: T, userDisplayName: string, currentKey?: string): T {
+    if (typeof value === 'string') {
+        if (USER_PLACEHOLDER_SKIP_KEYS.has(String(currentKey ?? '').trim())) {
+            return value;
+        }
+        return replaceCurrentUserNameWithPlaceholder(value, userDisplayName) as T;
+    }
+    if (Array.isArray(value)) {
+        if (USER_PLACEHOLDER_SKIP_KEYS.has(String(currentKey ?? '').trim())) {
+            return value;
+        }
+        return value.map((item: unknown): unknown => normalizeTakeoverUserPlaceholder(item, userDisplayName)) as T;
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    if (USER_PLACEHOLDER_SKIP_KEYS.has(String(currentKey ?? '').trim())) {
+        return value;
+    }
+    const output: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        output[key] = normalizeTakeoverUserPlaceholder(child, userDisplayName, key);
+    }
+    return output as T;
+}
+
 /**
  * 功能：统一归一化接管批次结果。
  * @param input 归一化输入。
@@ -1158,7 +1240,8 @@ export function normalizeTakeoverBatchResult(input: {
     result: MemoryTakeoverBatchResult;
     sourceSegments?: MemoryTakeoverBatchResult['sourceSegments'];
 }): MemoryTakeoverBatchResult {
-    const structured = input.result;
+    const userDisplayName = resolveCurrentNarrativeUserName();
+    const structured = normalizeTakeoverUserPlaceholder(input.result, userDisplayName);
     return {
         ...input.fallback,
         ...structured,

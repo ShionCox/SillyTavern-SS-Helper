@@ -31,11 +31,11 @@ const ALLOWED_TAGS = new Set([
 
 /** 平台内部插件 ID（默认具备 silent 权限） */
 const PLATFORM_INTERNAL_PLUGINS = new Set(['stx_llmhub', 'stx_memory_os']);
-const MEMORY_OS_AUTO_CLOSE_TASKS = new Set(['memory_cold_start']);
+const MEMORY_OS_AUTO_CLOSE_TASKS = new Set(['memory_cold_start_core', 'memory_cold_start_state']);
 const COMPACT_AUTO_CLOSE_MS: number = 3000;
 
 function formatTaskTitle(record: RequestRecord): string {
-    const taskLabel = String(record.taskDescription || record.taskId || '').trim() || record.taskId;
+    const taskLabel = String(record.taskDescription || record.taskKey || '').trim() || record.taskKey;
     if (record.consumer === 'stx_memory_os') {
         return taskLabel;
     }
@@ -46,7 +46,7 @@ export class DisplayController {
     /** 当前活跃的覆层 */
     private activeOverlays: Map<string, LLMOverlaySpec> = new Map();
     /** silent 权限授权表 */
-    private silentPermissions: Map<string, SilentPermissionGrant> = new Map(); // key: `${pluginId}::${taskId}`
+    private silentPermissions: Map<string, SilentPermissionGrant> = new Map(); // key: `${pluginId}::${taskKey}`
     /** 自动关闭计时器 */
     private autoCloseTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
@@ -75,34 +75,34 @@ export class DisplayController {
     restoreSilentPermissions(permissions: SilentPermissionGrant[]): void {
         this.silentPermissions.clear();
         for (const p of permissions) {
-            this.silentPermissions.set(`${p.pluginId}::${p.taskId}`, p);
+            this.silentPermissions.set(`${p.pluginId}::${p.taskKey}`, p);
         }
     }
 
     // ─── 权限管理 ───
 
     /** 检查某个插件任务是否有 silent 权限 */
-    canUseSilent(pluginId: string, taskId: string, backgroundEligible?: boolean): boolean {
+    canUseSilent(pluginId: string, taskKey: string, backgroundEligible?: boolean): boolean {
         // 平台内部插件始终允许
         if (PLATFORM_INTERNAL_PLUGINS.has(pluginId)) return true;
         // 注册项声明 backgroundEligible
         if (backgroundEligible) return true;
         // 用户在设置页显式授权
-        return this.silentPermissions.has(`${pluginId}::${taskId}`);
+        return this.silentPermissions.has(`${pluginId}::${taskKey}`);
     }
 
     /** 授权 silent 权限 */
-    grantSilentPermission(pluginId: string, taskId: string): void {
-        this.silentPermissions.set(`${pluginId}::${taskId}`, {
+    grantSilentPermission(pluginId: string, taskKey: string): void {
+        this.silentPermissions.set(`${pluginId}::${taskKey}`, {
             pluginId,
-            taskId,
+            taskKey,
             grantedAt: Date.now(),
         });
     }
 
     /** 撤销 silent 权限 */
-    revokeSilentPermission(pluginId: string, taskId: string): void {
-        this.silentPermissions.delete(`${pluginId}::${taskId}`);
+    revokeSilentPermission(pluginId: string, taskKey: string): void {
+        this.silentPermissions.delete(`${pluginId}::${taskKey}`);
     }
 
     /** 导出 silent 权限列表 */
@@ -118,14 +118,14 @@ export class DisplayController {
     validateDisplayMode(
         mode: DisplayMode,
         pluginId: string,
-        taskId: string,
+        taskKey: string,
         backgroundEligible?: boolean,
         blockNext?: boolean,
     ): DisplayMode {
         // silent 权限检查
         if (mode === 'silent') {
-            if (!this.canUseSilent(pluginId, taskId, backgroundEligible)) {
-                logger.warn(`插件 ${pluginId} 任务 ${taskId} 无 silent 权限，紧凑弹窗已禁用，保持静默执行`);
+            if (!this.canUseSilent(pluginId, taskKey, backgroundEligible)) {
+                logger.warn(`插件 ${pluginId} 任务 ${taskKey} 无 silent 权限，紧凑弹窗已禁用，保持静默执行`);
                 return 'silent';
             }
             return 'silent';
@@ -160,7 +160,7 @@ export class DisplayController {
                 body: [
                     '正在调用模型处理中…',
                     '',
-                    `任务：${String(record.taskDescription || record.taskId || '').trim() || record.taskId}`,
+                    `任务：${String(record.taskDescription || record.taskKey || '').trim() || record.taskKey}`,
                     `请求：${record.requestId}`,
                 ].join('\n'),
             },
@@ -179,7 +179,7 @@ export class DisplayController {
             body: [
                 '正在调用模型处理中…',
                 '',
-                `任务：${String(record.taskDescription || record.taskId || '').trim() || record.taskId}`,
+                `任务：${String(record.taskDescription || record.taskKey || '').trim() || record.taskKey}`,
                 `请求：${record.requestId}`,
             ].join('\n'),
         };
@@ -216,7 +216,7 @@ export class DisplayController {
         spec.displayMode = displayMode;
         spec.autoClose = displayMode === 'compact'
             ? true
-            : Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskId));
+            : Boolean(result.ok && record.consumer === 'stx_memory_os' && MEMORY_OS_AUTO_CLOSE_TASKS.has(record.taskKey));
         spec.autoCloseMs = displayMode === 'compact'
             ? Math.max(0, Math.trunc(Number(record.enqueueOptions.autoCloseMs) || COMPACT_AUTO_CLOSE_MS))
             : (spec.autoClose ? 300 : undefined);

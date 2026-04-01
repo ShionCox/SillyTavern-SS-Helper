@@ -242,13 +242,18 @@ export interface DBLlmCredential {
 
 export interface DBLlmRequestLog {
     logId: string;
+    llmTaskId: string;
     requestId: string;
     sourcePluginId: string;
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskKind: string;
     state: string;
     taskDescription?: string;
+    attemptIndex: number;
+    attemptTag: string;
+    attemptOutcome: string;
+    isFinalAttempt: boolean;
     chatKey?: string;
     sessionId?: string;
     reasonCode?: string;

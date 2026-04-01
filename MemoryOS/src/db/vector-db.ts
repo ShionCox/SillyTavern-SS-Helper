@@ -6,6 +6,7 @@
 import {
     appendSdkPluginChatRecord,
     deleteSdkPluginChatRecords,
+    queryLatestSdkPluginChatRecords,
     querySdkPluginChatRecords,
     db,
     type DBChatPluginRecord,
@@ -59,18 +60,16 @@ export async function saveVectorDocuments(chatKey: string, docs: DBMemoryVectorD
  * @returns 文档列表。
  */
 export async function loadVectorDocuments(chatKey: string): Promise<DBMemoryVectorDocument[]> {
-    const rows = await querySdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_DOCS, {
+    const rows = await queryLatestSdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_DOCS, {
         order: 'asc',
         limit: 10000,
     });
-    const docMap = new Map<string, DBMemoryVectorDocument>();
-    for (const row of rows) {
-        const payload = row.payload as unknown as DBMemoryVectorDocument;
-        if (payload && payload.vectorDocId) {
-            docMap.set(payload.vectorDocId, payload);
-        }
-    }
-    return Array.from(docMap.values());
+    return rows
+        .map((row: DBChatPluginRecord): DBMemoryVectorDocument | null => {
+            const payload = row.payload as unknown as DBMemoryVectorDocument;
+            return payload && payload.vectorDocId ? payload : null;
+        })
+        .filter((item: DBMemoryVectorDocument | null): item is DBMemoryVectorDocument => Boolean(item));
 }
 
 /**
@@ -189,18 +188,16 @@ export async function saveVectorIndexBatch(chatKey: string, records: DBMemoryVec
  * @returns 索引记录列表。
  */
 export async function loadVectorIndexRecords(chatKey: string): Promise<DBMemoryVectorIndex[]> {
-    const rows = await querySdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_INDEX, {
+    const rows = await queryLatestSdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_INDEX, {
         order: 'asc',
         limit: 10000,
     });
-    const indexMap = new Map<string, DBMemoryVectorIndex>();
-    for (const row of rows) {
-        const payload = row.payload as unknown as DBMemoryVectorIndex;
-        if (payload && payload.vectorDocId) {
-            indexMap.set(payload.vectorDocId, payload);
-        }
-    }
-    return Array.from(indexMap.values());
+    return rows
+        .map((row: DBChatPluginRecord): DBMemoryVectorIndex | null => {
+            const payload = row.payload as unknown as DBMemoryVectorIndex;
+            return payload && payload.vectorDocId ? payload : null;
+        })
+        .filter((item: DBMemoryVectorIndex | null): item is DBMemoryVectorIndex => Boolean(item));
 }
 
 /**
@@ -293,18 +290,16 @@ export async function saveVectorRecallStat(chatKey: string, stat: DBMemoryVector
  * @returns 统计记录列表。
  */
 export async function loadVectorRecallStats(chatKey: string): Promise<DBMemoryVectorRecallStat[]> {
-    const rows = await querySdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_RECALL, {
+    const rows = await queryLatestSdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_RECALL, {
         order: 'asc',
         limit: 10000,
     });
-    const statMap = new Map<string, DBMemoryVectorRecallStat>();
-    for (const row of rows) {
-        const payload = row.payload as unknown as DBMemoryVectorRecallStat;
-        if (payload && payload.vectorDocId) {
-            statMap.set(payload.vectorDocId, payload);
-        }
-    }
-    return Array.from(statMap.values());
+    return rows
+        .map((row: DBChatPluginRecord): DBMemoryVectorRecallStat | null => {
+            const payload = row.payload as unknown as DBMemoryVectorRecallStat;
+            return payload && payload.vectorDocId ? payload : null;
+        })
+        .filter((item: DBMemoryVectorRecallStat | null): item is DBMemoryVectorRecallStat => Boolean(item));
 }
 
 /**

@@ -42,7 +42,7 @@ export interface LLMHubRerankResult {
 interface LLMRerankApi {
     rerank: (args: {
         consumer: string;
-        taskId: string;
+        taskKey: string;
         taskDescription?: string;
         query: string;
         docs: string[];
@@ -147,7 +147,7 @@ export class LLMHubRerankService {
         try {
             const response = await api.rerank({
                 consumer: 'stx_memory_os',
-                taskId: 'memory_vector_rerank',
+                taskKey: 'memory_vector_rerank',
                 taskDescription: '记忆向量结果重排序',
                 query: input.query,
                 docs,

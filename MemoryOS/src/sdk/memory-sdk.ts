@@ -1895,7 +1895,7 @@ export class MemorySDKImpl {
             applyResults.push(snapshotSummary.mutationApplyDiagnostics);
         }
         result.applyDiagnostics = this.mergeLedgerMutationBatchResults(applyResults);
-        await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', result);
+        await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', result, 'runtime');
         await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
         await this.refreshVectorIndexAfterPipeline('旧聊天处理');
