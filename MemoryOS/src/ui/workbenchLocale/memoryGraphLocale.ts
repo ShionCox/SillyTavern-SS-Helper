@@ -39,6 +39,7 @@ const MEMORY_GRAPH_TEXT_MAP: Record<string, string> = {
     reason: '原因',
     target: '目标',
     targettype: '目标类型',
+    jump_to_node: '跳转并聚焦节点',
     bindingkey: '绑定键',
     targetref: '目标引用',
     rawref: '原始引用',
@@ -46,6 +47,8 @@ const MEMORY_GRAPH_TEXT_MAP: Record<string, string> = {
     full: '完整',
     partial: '部分',
     unknown: '未知',
+    active: '活跃',
+    inactive: '停用',
 };
 
 /**

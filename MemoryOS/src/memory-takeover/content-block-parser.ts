@@ -23,6 +23,8 @@ export interface ParsedContentBlock {
 
 /** 匹配任意开始或结束标签。 */
 const TAG_TOKEN_PATTERN = /<\/?([a-zA-Z][\w~:-]*)\b[^>]*>/gi;
+const TAG_TOKEN_PATTERN_SOURCE = TAG_TOKEN_PATTERN.source;
+const TAG_TOKEN_PATTERN_FLAGS = 'gi';
 
 /**
  * 功能：计数器，用于生成唯一 blockId。
@@ -90,7 +92,7 @@ function collectBlocksInRange(input: {
         inheritedTagName,
         blocks,
     } = input;
-    const tagPattern = new RegExp(TAG_TOKEN_PATTERN.source, 'gi');
+    const tagPattern = createTagTokenRegex();
     tagPattern.lastIndex = rangeStart;
     let cursor = rangeStart;
     let match: RegExpExecArray | null;
@@ -167,7 +169,7 @@ function findMatchingClosingTag(
     rangeEnd: number,
     tagName: string,
 ): { startOffset: number; endOffset: number } | undefined {
-    const tagPattern = new RegExp(TAG_TOKEN_PATTERN.source, 'gi');
+    const tagPattern = createTagTokenRegex();
     tagPattern.lastIndex = searchStart;
     const normalizedTagName = String(tagName ?? '').trim().toLowerCase();
     let depth = 1;
@@ -196,6 +198,14 @@ function findMatchingClosingTag(
         depth += 1;
     }
     return undefined;
+}
+
+/**
+ * 功能：创建标签扫描正则，统一复用同一份源码与 flags。
+ * @returns 新的可扫描正则实例。
+ */
+function createTagTokenRegex(): RegExp {
+    return new RegExp(TAG_TOKEN_PATTERN_SOURCE, TAG_TOKEN_PATTERN_FLAGS);
 }
 
 /**

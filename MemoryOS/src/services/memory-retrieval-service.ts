@@ -1,5 +1,13 @@
 import type { MemoryRetrievalInput, PromptRecallInput, TakeoverRecallInput, WorkbenchRecallInput } from '../memory-retrieval/retrieval-input';
-import type { MemoryRetrievalOutput, RetrievalOutputDiagnostics, VectorProviderStatus, ResultSourceLabel } from '../memory-retrieval/retrieval-output';
+import type {
+    MemoryRetrievalOutput,
+    RetrievalOutputDiagnostics,
+    VectorProviderStatus,
+    ResultSourceLabel,
+    RetrievalVectorTopHit,
+    RetrievalStageRankingItem,
+    RetrievalRankingChangeItem,
+} from '../memory-retrieval/retrieval-output';
 import type { RetrievalCandidate, RetrievalFacet } from '../memory-retrieval/types';
 import type { RecallConfig } from '../memory-retrieval/recall-config';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
@@ -107,6 +115,11 @@ export class MemoryRetrievalService {
         let hybridRerankUsed = false;
         let hybridRerankReasonCodes: string[] = [];
         let hybridRerankSource: 'none' | 'rule' | 'llmhub' = 'none';
+        let vectorTopHits: RetrievalVectorTopHit[] = [];
+        let lexicalRanking: RetrievalStageRankingItem[] = [];
+        let mergedRanking: RetrievalStageRankingItem[] = [];
+        let rerankedRanking: RetrievalStageRankingItem[] = [];
+        let rankingChanges: RetrievalRankingChangeItem[] = [];
 
         if (needsVectorChain && this.hybridService) {
             const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(config.retrievalMode);
@@ -141,6 +154,11 @@ export class MemoryRetrievalService {
             hybridRerankUsed = hybridResult.rerankUsed;
             hybridRerankReasonCodes = hybridResult.rerankReasonCodes;
             hybridRerankSource = hybridResult.rerankSource;
+            vectorTopHits = hybridResult.vectorHits.map((hit, index): RetrievalVectorTopHit => ({
+                rank: index + 1,
+                sourceId: hit.sourceId,
+                score: Number(hit.score ?? 0),
+            }));
 
             // 标注来源
             const vectorHitIds = new Set(hybridResult.vectorHits.map((h) => h.sourceId));
@@ -157,6 +175,16 @@ export class MemoryRetrievalService {
                 }
                 return { candidateId: cid, source: 'lexical' as const };
             });
+            lexicalRanking = this.buildStageRanking(result.items, vectorHitIds);
+            mergedRanking = this.buildStageRanking(hybridResult.preRerankItems, vectorHitIds);
+            rerankedRanking = this.buildStageRanking(hybridResult.postRerankItems, vectorHitIds);
+            rankingChanges = this.buildRankingChanges({
+                lexicalItems: result.items,
+                mergedItems: hybridResult.preRerankItems,
+                rerankedItems: hybridResult.postRerankItems,
+                finalItems,
+                vectorHitIds,
+            });
         } else {
             resultSourceLabels = result.items.map((item) => ({
                 candidateId: item.candidate.candidateId,
@@ -164,6 +192,16 @@ export class MemoryRetrievalService {
                     ? 'graph_expansion' as const
                     : 'lexical' as const,
             }));
+            lexicalRanking = this.buildStageRanking(result.items, new Set<string>());
+            mergedRanking = lexicalRanking;
+            rerankedRanking = this.buildStageRanking(finalItems, new Set<string>());
+            rankingChanges = this.buildRankingChanges({
+                lexicalItems: result.items,
+                mergedItems: finalItems,
+                rerankedItems: finalItems,
+                finalItems,
+                vectorHitIds: new Set<string>(),
+            });
         }
 
         const vectorProviderStatus: VectorProviderStatus = {
@@ -194,6 +232,11 @@ export class MemoryRetrievalService {
             rerankUsed: hybridRerankUsed,
             rerankReasonCodes: hybridRerankReasonCodes,
             rerankSource: hybridRerankSource,
+            vectorTopHits,
+            lexicalRanking,
+            mergedRanking,
+            rerankedRanking,
+            rankingChanges,
         };
 
         return {
@@ -259,5 +302,166 @@ export class MemoryRetrievalService {
                 payloadFilter: input.payloadFilter,
             },
         });
+    }
+
+    /**
+     * 功能：构建单个排序阶段的快照列表。
+     * @param items 检索结果项。
+     * @param vectorHitIds 向量命中 ID 集合。
+     * @returns 排序快照。
+     */
+    private buildStageRanking(items: import('../memory-retrieval/types').RetrievalResultItem[], vectorHitIds: Set<string>): RetrievalStageRankingItem[] {
+        return items.map((item, index): RetrievalStageRankingItem => ({
+            rank: index + 1,
+            candidateId: item.candidate.candidateId || item.candidate.entryId,
+            entryId: item.candidate.entryId,
+            title: item.candidate.title || item.candidate.entryId,
+            score: Number(item.score ?? 0),
+            source: this.resolveResultSource(item, vectorHitIds),
+        }));
+    }
+
+    /**
+     * 功能：生成排序变化说明列表。
+     * @param input 排序阶段输入。
+     * @returns 变化说明列表。
+     */
+    private buildRankingChanges(input: {
+        lexicalItems: import('../memory-retrieval/types').RetrievalResultItem[];
+        mergedItems: import('../memory-retrieval/types').RetrievalResultItem[];
+        rerankedItems: import('../memory-retrieval/types').RetrievalResultItem[];
+        finalItems: import('../memory-retrieval/types').RetrievalResultItem[];
+        vectorHitIds: Set<string>;
+    }): RetrievalRankingChangeItem[] {
+        const lexicalMap = this.buildRankingLookup(input.lexicalItems);
+        const mergedMap = this.buildRankingLookup(input.mergedItems);
+        const rerankedMap = this.buildRankingLookup(input.rerankedItems);
+        const finalMap = this.buildRankingLookup(input.finalItems);
+        const orderedIds = Array.from(new Set([
+            ...input.finalItems.map((item) => item.candidate.candidateId || item.candidate.entryId),
+            ...input.mergedItems.map((item) => item.candidate.candidateId || item.candidate.entryId),
+            ...input.lexicalItems.map((item) => item.candidate.candidateId || item.candidate.entryId),
+        ]));
+        return orderedIds.map((candidateId: string): RetrievalRankingChangeItem | null => {
+            const finalRecord = finalMap.get(candidateId) ?? rerankedMap.get(candidateId) ?? mergedMap.get(candidateId) ?? lexicalMap.get(candidateId);
+            if (!finalRecord) {
+                return null;
+            }
+            const lexicalRecord = lexicalMap.get(candidateId);
+            const mergedRecord = mergedMap.get(candidateId);
+            const rerankedRecord = rerankedMap.get(candidateId);
+            const source = this.resolveResultSource(finalRecord.item, input.vectorHitIds);
+            return {
+                candidateId,
+                entryId: finalRecord.item.candidate.entryId,
+                title: finalRecord.item.candidate.title || finalRecord.item.candidate.entryId,
+                source,
+                lexicalRank: lexicalRecord?.rank,
+                mergedRank: mergedRecord?.rank,
+                rerankedRank: rerankedRecord?.rank,
+                finalRank: finalRecord.rank,
+                lexicalScore: lexicalRecord?.score,
+                mergedScore: mergedRecord?.score,
+                rerankedScore: rerankedRecord?.score,
+                finalScore: finalRecord.score,
+                changeReason: this.resolveRankingChangeReason({
+                    source,
+                    lexicalRank: lexicalRecord?.rank,
+                    mergedRank: mergedRecord?.rank,
+                    rerankedRank: rerankedRecord?.rank,
+                    finalRank: finalRecord.rank,
+                }),
+            };
+        }).filter((item): item is RetrievalRankingChangeItem => item !== null);
+    }
+
+    /**
+     * 功能：构建按候选 ID 索引的排序查找表。
+     * @param items 检索结果项。
+     * @returns 查找表。
+     */
+    private buildRankingLookup(items: import('../memory-retrieval/types').RetrievalResultItem[]): Map<string, {
+        item: import('../memory-retrieval/types').RetrievalResultItem;
+        rank: number;
+        score: number;
+    }> {
+        const map = new Map<string, {
+            item: import('../memory-retrieval/types').RetrievalResultItem;
+            rank: number;
+            score: number;
+        }>();
+        items.forEach((item, index): void => {
+            map.set(item.candidate.candidateId || item.candidate.entryId, {
+                item,
+                rank: index + 1,
+                score: Number(item.score ?? 0),
+            });
+        });
+        return map;
+    }
+
+    /**
+     * 功能：判断结果项的主要来源。
+     * @param item 检索结果项。
+     * @param vectorHitIds 向量命中集合。
+     * @returns 来源标签。
+     */
+    private resolveResultSource(
+        item: import('../memory-retrieval/types').RetrievalResultItem,
+        vectorHitIds: Set<string>,
+    ): ResultSourceLabel['source'] {
+        const candidateId = item.candidate.candidateId || item.candidate.entryId;
+        if (vectorHitIds.has(item.candidate.entryId) || vectorHitIds.has(candidateId)) {
+            if ((item.breakdown.bm25 ?? 0) > 0) {
+                return 'lexical';
+            }
+            return 'vector';
+        }
+        if ((item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0) {
+            return 'graph_expansion';
+        }
+        return 'lexical';
+    }
+
+    /**
+     * 功能：生成排序变化的简要解释。
+     * @param input 变化输入。
+     * @returns 中文解释。
+     */
+    private resolveRankingChangeReason(input: {
+        source: ResultSourceLabel['source'];
+        lexicalRank?: number;
+        mergedRank?: number;
+        rerankedRank?: number;
+        finalRank?: number;
+    }): string {
+        if (input.lexicalRank === undefined && input.mergedRank !== undefined) {
+            if (input.source === 'vector') {
+                return '由向量命中补入候选。';
+            }
+            if (input.source === 'graph_expansion') {
+                return '由图扩展补入候选。';
+            }
+            return '在融合阶段进入最终候选窗口。';
+        }
+        if (input.mergedRank !== undefined && input.rerankedRank !== undefined) {
+            const diff = input.mergedRank - input.rerankedRank;
+            if (diff > 0) {
+                return `重排后提升 ${diff} 位。`;
+            }
+            if (diff < 0) {
+                return `重排后下降 ${Math.abs(diff)} 位。`;
+            }
+        }
+        if (input.lexicalRank !== undefined && input.finalRank !== undefined) {
+            const diff = input.lexicalRank - input.finalRank;
+            if (diff > 0) {
+                return `相较初始词法排序提升 ${diff} 位。`;
+            }
+            if (diff < 0) {
+                return `相较初始词法排序下降 ${Math.abs(diff)} 位。`;
+            }
+        }
+        return '排序位置基本保持不变。';
     }
 }

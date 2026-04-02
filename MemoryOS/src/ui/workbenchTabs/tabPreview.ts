@@ -90,25 +90,25 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
     return `
         <section class="stx-memory-workbench__view"${state.currentView !== 'preview' ? ' hidden' : ''}>
             <div class="stx-memory-workbench__view-head">
-                <div class="stx-memory-workbench__section-title">诊断中心</div>
+                <div class="stx-memory-workbench__section-title">${escapeHtml(resolvePreviewWorkbenchText('section_title'))}</div>
                 <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
-                    <input class="stx-memory-workbench__input" id="stx-memory-preview-query" placeholder="模拟检索输入" style="width:280px;" value="${escapeAttr(state.previewQuery)}">
-                    <button class="stx-memory-workbench__button" data-action="refresh-preview"><i class="fa-solid fa-satellite-dish"></i> 刷新诊断</button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="capture-summary"><i class="fa-solid fa-camera"></i> 强制生成总结</button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="export-chat-database"><i class="fa-solid fa-file-export"></i> 导出当前聊天记忆库</button>
+                    <input class="stx-memory-workbench__input" id="stx-memory-preview-query" placeholder="${escapeAttr(resolvePreviewWorkbenchText('preview_query_placeholder'))}" style="width:280px;" value="${escapeAttr(state.previewQuery)}">
+                    <button class="stx-memory-workbench__button" data-action="refresh-preview"><i class="fa-solid fa-satellite-dish"></i> ${escapeHtml(resolvePreviewWorkbenchText('refresh_preview'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="capture-summary"><i class="fa-solid fa-camera"></i> ${escapeHtml(resolvePreviewWorkbenchText('capture_summary'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="export-chat-database"><i class="fa-solid fa-file-export"></i> ${escapeHtml(resolvePreviewWorkbenchText('export_chat_database'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="clear-chat-database" style="border-color:rgba(239,68,68,0.4); color:var(--mw-warn);">
-                        <i class="fa-solid fa-trash-can"></i> 清空当前聊天记忆库
+                        <i class="fa-solid fa-trash-can"></i> ${escapeHtml(resolvePreviewWorkbenchText('clear_chat_database'))}
                     </button>
                 </div>
             </div>
             ${previewNotReady && !previewLoading ? `
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__empty">进入本页后将按需加载诊断快照与最近注入说明。</div>
+                    <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('lazy_placeholder'))}</div>
                 </div>
             ` : ''}
             ${previewLoading ? `
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__empty">正在加载诊断快照...</div>
+                    <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('loading_placeholder'))}</div>
                 </div>
             ` : ''}
             ${previewNotReady || previewLoading ? '' : `
@@ -120,16 +120,16 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
                     <div class="stx-memory-workbench__info-list">
-                        <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.preview?.query, '未提供'))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>命中角色数</span><strong>${escapeHtml(String(snapshot.preview?.matchedActorKeys.length ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>命中词条数</span><strong>${escapeHtml(String(snapshot.preview?.matchedEntryIds.length ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>注入视角</span><strong>${escapeHtml(previewDiagnostics?.injectionActorKey || '暂无')}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>注入词条</span><strong>${escapeHtml(String(previewDiagnostics?.injectedCount ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>估算字符数</span><strong>${escapeHtml(String(previewDiagnostics?.estimatedChars ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>清晰记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.clear ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>模糊记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.blur ?? 0))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>失真记忆</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.distorted ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('query_text'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.preview?.query, resolvePreviewWorkbenchText('not_provided')))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('generated_at'))}</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_actor_count'))}</span><strong>${escapeHtml(String(snapshot.preview?.matchedActorKeys.length ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_entry_count'))}</span><strong>${escapeHtml(String(snapshot.preview?.matchedEntryIds.length ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injection_actor'))}</span><strong>${escapeHtml(previewDiagnostics?.injectionActorKey || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injected_entry_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.injectedCount ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('estimated_chars'))}</span><strong>${escapeHtml(String(previewDiagnostics?.estimatedChars ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('clear_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.clear ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('blur_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.blur ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('distorted_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.distorted ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(String(previewDiagnostics?.compareKeySchemaVersion ?? 'v2'))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.indexed_match ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.fallback_match ?? 0))}</strong></div>
@@ -137,11 +137,11 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     <div class="stx-memory-workbench__stack" style="margin-top:12px;">
                         <div class="stx-memory-workbench__card">
                             <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('systemText'))}</div>
-                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.systemText || '暂无系统注入文本')}</pre>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.systemText || resolvePreviewWorkbenchText('no_system_text'))}</pre>
                         </div>
                         <div class="stx-memory-workbench__card">
                             <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('finalText'))}</div>
-                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.finalText || '暂无最终注入文本')}</pre>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.finalText || resolvePreviewWorkbenchText('no_final_text'))}</pre>
                         </div>
                     </div>
                 </div>
@@ -155,9 +155,9 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 ${buildMutationApplyDiagnosticsMarkup(snapshot)}
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">词条更新记录</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('entry_updates'))}</div>
                     <div class="stx-memory-workbench__stack" style="max-height: 900px; overflow-y: auto; padding-right: 4px;">
-                        ${entryUpdateCards || '<div class="stx-memory-workbench__empty">当前还没有可展示的词条更新记录。</div>'}
+                        ${entryUpdateCards || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_entry_updates'))}</div>`}
                     </div>
                 </div>
 
@@ -178,19 +178,19 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                             <div class="stx-memory-workbench__info-row"><span>最终链路</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.finalProviderId || snapshot.recallExplanation.retrievalProviderId || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>基线种子</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.seedProviderId || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(resolveRetrievalRulePackLabel(snapshot.recallExplanation.retrievalRulePack || ''))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>向量命中数</span><strong>${escapeHtml(String(snapshot.recallExplanation.vectorHitCount ?? 0))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>执行融合</span><strong>${escapeHtml(snapshot.recallExplanation.mergeUsed ? '是' : '否')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>执行重排</span><strong>${escapeHtml(snapshot.recallExplanation.rerankUsed ? '是' : '否')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>重排来源</span><strong>${escapeHtml(snapshot.recallExplanation.rerankSource === 'llmhub' ? 'LLMHub' : snapshot.recallExplanation.rerankSource === 'rule' ? '规则重排' : '无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>策略路由</span><strong>${escapeHtml(snapshot.recallExplanation.strategyDecision?.route === 'deep_vector' ? '深路径' : snapshot.recallExplanation.strategyDecision?.route === 'fast_vector' ? '快路径' : '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>候选窗口</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.candidateWindow ?? 0))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>最终 TopK</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.finalTopK ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('vector_hit_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.vectorHitCount ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('merge_used'))}</span><strong>${escapeHtml(snapshot.recallExplanation.mergeUsed ? resolvePreviewWorkbenchText('yes') : resolvePreviewWorkbenchText('no'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('rerank_used'))}</span><strong>${escapeHtml(snapshot.recallExplanation.rerankUsed ? resolvePreviewWorkbenchText('yes') : resolvePreviewWorkbenchText('no'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('rerank_source'))}</span><strong>${escapeHtml(snapshot.recallExplanation.rerankSource === 'llmhub' ? resolvePreviewWorkbenchText('rerank_source_llmhub') : snapshot.recallExplanation.rerankSource === 'rule' ? resolvePreviewWorkbenchText('rerank_source_rule') : resolvePreviewWorkbenchText('rerank_source_none'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('strategy_route'))}</span><strong>${escapeHtml(snapshot.recallExplanation.strategyDecision?.route === 'deep_vector' ? resolvePreviewWorkbenchText('strategy_route_deep') : snapshot.recallExplanation.strategyDecision?.route === 'fast_vector' ? resolvePreviewWorkbenchText('strategy_route_fast') : resolvePreviewWorkbenchText('strategy_route_none'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('candidate_window'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.candidateWindow ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('final_topk'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.finalTopK ?? 0))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(snapshot.recallExplanation.compareKeySchemaVersion || 'v2')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>命中角色</span><strong>${escapeHtml(snapshot.recallExplanation.matchedActorKeys.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>命中词条</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_actors'))}</span><strong>${escapeHtml(snapshot.recallExplanation.matchedActorKeys.join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_entries'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.indexed_match ?? 0))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.fallback_match ?? 0))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>原因码</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_codes'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
                         </div>
                     ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_latest_injection_reason'))}</div>`}
                 </div>
@@ -203,22 +203,22 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 </div>
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">最近总结</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('recent_summaries'))}</div>
                     <div class="stx-memory-workbench__stack" style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
                         ${snapshot.summaries.map((summary): string => `
                             <article class="stx-memory-workbench__card">
                                 <div class="stx-memory-workbench__split-head">
-                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(summary.title, '未命名总结'))}</div>
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(summary.title, resolvePreviewWorkbenchText('unnamed_summary')))}</div>
                                     <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(summary.updatedAt))}</span>
                                 </div>
-                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(summary.content, '暂无内容'))}</div>
+                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(summary.content, resolvePreviewWorkbenchText('no_content_text')))}</div>
                             </article>
-                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有总结快照数据。</div>'}
+                        `).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_summary_snapshots'))}</div>`}
                     </div>
                 </div>
 
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">原始变更时间线</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('raw_timeline'))}</div>
                     <div class="stx-memory-workbench__stack" style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
                         ${snapshot.mutationHistory.map((history): string => `
                             <article class="stx-memory-workbench__card">
@@ -228,11 +228,11 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                 </div>
                                 <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(buildHistorySummary(history.action, history.payload)))}</div>
                                 <details class="stx-memory-workbench__details">
-                                    <summary>查看原始数据</summary>
+                                    <summary>${escapeHtml(resolvePreviewWorkbenchText('view_raw_data'))}</summary>
                                     <pre>${escapeHtml(stringifyData(history.payload))}</pre>
                                 </details>
                             </article>
-                        `).join('') || '<div class="stx-memory-workbench__empty">当前还没有变更时间线数据。</div>'}
+                        `).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_timeline'))}</div>`}
                     </div>
                 </div>
             </div>
@@ -254,7 +254,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
 function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
     const binding = snapshot.worldProfileBinding;
     if (!binding) {
-        return '<div class="stx-memory-workbench__empty">当前聊天还没有识别出稳定的世界画像。</div>';
+        return `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_world_profile'))}</div>`;
     }
     const primaryProfile = getWorldProfileById(binding.primaryProfile);
     const primaryProfileLabel = resolveWorldProfileLabel(binding.primaryProfile);
@@ -262,24 +262,24 @@ function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
     const worldType = resolveWorldTypeLabel(binding.primaryProfile);
     const subTypeText = primaryProfile?.subGenres?.length
         ? resolveWorldIdentifierList(primaryProfile.subGenres, resolveWorldSubTypeLabel)
-        : '暂无';
+        : resolvePreviewWorkbenchText('empty_value');
     const reasonCodeText = resolveWorldIdentifierList(binding.reasonCodes, resolveWorldReasonCodeLabel);
 
     return `
         <div class="stx-memory-workbench__info-list">
-            <div class="stx-memory-workbench__info-row"><span>当前聊天画像</span><strong>${escapeHtml(primaryProfile?.displayName || primaryProfileLabel)}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>当前世界类型</span><strong>${escapeHtml(worldType)}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>细分类型</span><strong>${escapeHtml(subTypeText)}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>辅助画像</span><strong>${escapeHtml(secondaryProfileText)}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>识别置信度</span><strong>${escapeHtml(String(binding.confidence))}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>识别依据</span><strong>${escapeHtml(reasonCodeText)}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>创建时间</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
-            <div class="stx-memory-workbench__info-row"><span>更新时间</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_chat_profile'))}</span><strong>${escapeHtml(primaryProfile?.displayName || primaryProfileLabel)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_type'))}</span><strong>${escapeHtml(worldType)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_sub_type'))}</span><strong>${escapeHtml(subTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('secondary_profile'))}</span><strong>${escapeHtml(secondaryProfileText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('confidence'))}</span><strong>${escapeHtml(String(binding.confidence))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_basis'))}</span><strong>${escapeHtml(reasonCodeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('created_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
         </div>
         <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__mini-title">识别来源样本</div>
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('source_samples'))}</div>
             <div class="stx-memory-workbench__stack">
-                ${(binding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || '<div class="stx-memory-workbench__empty">暂无来源样本。</div>'}
+                ${(binding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_source_samples'))}</div>`}
             </div>
         </div>
     `;
@@ -304,13 +304,13 @@ function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
 
     return `
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__panel-title">提示词体积统计</div>
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_size_stats'))}</div>
                     <div class="stx-memory-workbench__info-list">
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('systemText'))}字符数</span><strong>${escapeHtml(String(systemTextLen))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('roleText'))}字符数</span><strong>${escapeHtml(String(roleTextLen))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('finalText'))}字符数</span><strong>${escapeHtml(String(finalTextLen))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('preview_total_chars'))}</span><strong>${escapeHtml(String(totalPreviewLen))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>候选记录数</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('candidate_count'))}</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('active_schema_count'))}</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
                 ${schemaCount.length > 0 ? `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('schema_list'))}</span><strong>${escapeHtml(schemaCount.join('、'))}</strong></div>` : ''}
             </div>
@@ -339,7 +339,7 @@ function buildMutationApplyDiagnosticsMarkup(snapshot: WorkbenchSnapshot): strin
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('apply_diagnostics'))}</div>
             <div class="stx-memory-workbench__info-list">
-                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('mutation_source'))}</span><strong>${escapeHtml(latestSummary?.title || '结构化回合总结')}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('mutation_source'))}</span><strong>${escapeHtml(latestSummary?.title || resolvePreviewWorkbenchText('structured_round_summary'))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('total_mutations'))}</span><strong>${escapeHtml(String(diagnostics.counts.input ?? 0))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('noop_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.noop ?? 0))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('add_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.add ?? 0))}</strong></div>
@@ -408,9 +408,9 @@ function buildActionDistributionMarkup(snapshot: WorkbenchSnapshot): string {
 
     return `
         <div class="stx-memory-workbench__card">
-            <div class="stx-memory-workbench__panel-title">动作统计</div>
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('action_stats'))}</div>
             <div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 0; min-width: 0;">
-                ${actionBars || '<div class="stx-memory-workbench__empty">暂无动作记录。</div>'}
+                ${actionBars || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_action_records'))}</div>`}
             </div>
             ${failedSummary}
         </div>
@@ -449,8 +449,8 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
         <div style="padding: 8px 10px; background: rgba(167,139,250,0.08); border-left: 3px solid #a78bfa; border-radius: 0 4px 4px 0;">
             <div style="font-size: 12px; font-weight: 600; color: #a78bfa; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('mutation'))}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
-                <div>动作数：<strong>${escapeHtml(String(validatedRecord.payload.actionCount ?? 0))}</strong></div>
-                ${validatedRecord.payload.plannerNoop ? '<div style="color: var(--mw-muted);">规划阶段判定无需更新</div>' : ''}
+                <div>${escapeHtml(resolvePreviewWorkbenchText('action_count'))}：<strong>${escapeHtml(String(validatedRecord.payload.actionCount ?? 0))}</strong></div>
+                ${validatedRecord.payload.plannerNoop ? `<div style="color: var(--mw-muted);">${escapeHtml(resolvePreviewWorkbenchText('planner_noop'))}</div>` : ''}
             </div>
         </div>
     ` : '';
@@ -459,8 +459,8 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
         <div style="padding: 8px 10px; background: rgba(45,212,191,0.08); border-left: 3px solid #2dd4bf; border-radius: 0 4px 4px 0;">
             <div style="font-size: 12px; font-weight: 600; color: #2dd4bf; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('apply'))}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
-                <div>总结ID：<strong style="font-family:'Fira Code',monospace; font-size:11px;">${escapeHtml(String(appliedRecord.payload.summaryId ?? '-'))}</strong></div>
-                <div>动作数：<strong>${escapeHtml(String(appliedRecord.payload.actionCount ?? 0))}</strong></div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('summary_id'))}：<strong style="font-family:'Fira Code',monospace; font-size:11px;">${escapeHtml(String(appliedRecord.payload.summaryId ?? '-'))}</strong></div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('action_count'))}：<strong>${escapeHtml(String(appliedRecord.payload.actionCount ?? 0))}</strong></div>
             </div>
         </div>
     ` : '';
@@ -471,15 +471,15 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
             ? (record.payload.validationErrors as string[]).map((e: string) => String(e ?? '').trim()).filter(Boolean)
             : [];
         const isSchemaFail = reasonCode.startsWith('validation_failed');
-        const stageLabel = isSchemaFail ? '结构校验失败' : '总结链路失败';
+        const stageLabel = isSchemaFail ? resolvePreviewWorkbenchText('stage_validation_failed') : resolvePreviewWorkbenchText('stage_summary_failed');
 
         return `
         <div style="padding: 8px 10px; background: rgba(239,68,68,0.08); border-left: 3px solid var(--mw-warn); border-radius: 0 4px 4px 0;">
             <div style="font-size: 12px; font-weight: 600; color: var(--mw-warn); margin-bottom: 4px;">${escapeHtml(stageLabel)}</div>
             <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
-                <div>原因：<strong>${escapeHtml(resolveFailureReasonLabel(reasonCode || 'unknown'))}</strong></div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('reason_prefix'))}<strong>${escapeHtml(resolveFailureReasonLabel(reasonCode || 'unknown'))}</strong></div>
                 <div>失败阶段：<strong>${escapeHtml(resolveSummaryFailureStageLabel(reasonCode))}</strong></div>
-                ${validationErrors.length > 0 ? `<div>校验错误：<strong>${escapeHtml(validationErrors.join('；'))}</strong></div>` : ''}
+                ${validationErrors.length > 0 ? `<div>${escapeHtml(resolvePreviewWorkbenchText('validation_errors'))}<strong>${escapeHtml(validationErrors.join('；'))}</strong></div>` : ''}
             </div>
         </div>
     `;
@@ -487,13 +487,13 @@ function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
 
     return `
         <div class="stx-memory-workbench__card">
-            <div class="stx-memory-workbench__panel-title">总结阶段详情</div>
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('summary_stage_details'))}</div>
             <div class="stx-memory-workbench__stack" style="gap: 8px;">
                 ${plannerSection}
                 ${validatedSection}
                 ${appliedSection}
                 ${failedSection}
-                ${!plannerSection && !validatedSection && !appliedSection && !failedSection ? '<div class="stx-memory-workbench__empty">当前还没有总结阶段信息。</div>' : ''}
+                ${!plannerSection && !validatedSection && !appliedSection && !failedSection ? `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_summary_stage_info'))}</div>` : ''}
             </div>
         </div>
     `;
@@ -522,10 +522,10 @@ function buildNarrativeStyleDebugMarkup(value: unknown): string {
     }
     return `
         <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.12);">
-            <div>当前风格：<strong>${escapeHtml(resolveNarrativeStyleLabel(primaryStyle || ''))}</strong></div>
-            <div>次风格：<strong>${escapeHtml(secondaryStyles.length > 0 ? secondaryStyles.map((item: string): string => resolveNarrativeStyleLabel(item)).join('、') : '暂无')}</strong></div>
-            <div>来源：<strong>${escapeHtml(resolveNarrativeStyleSourceLabel(source || ''))}</strong></div>
-            <div>稳定状态：<strong>${escapeHtml(isStable ? '已稳定' : '待观察')}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('current_style'))}：<strong>${escapeHtml(resolveNarrativeStyleLabel(primaryStyle || ''))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('secondary_style'))}：<strong>${escapeHtml(secondaryStyles.length > 0 ? secondaryStyles.map((item: string): string => resolveNarrativeStyleLabel(item)).join('、') : resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('style_source'))}：<strong>${escapeHtml(resolveNarrativeStyleSourceLabel(source || ''))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('style_stability'))}：<strong>${escapeHtml(isStable ? resolvePreviewWorkbenchText('style_stable') : resolvePreviewWorkbenchText('style_pending'))}</strong></div>
         </div>
     `;
 }
@@ -536,11 +536,11 @@ function buildEntryUpdateCards(snapshot: WorkbenchSnapshot): string {
         ts: audit.ts,
         status: 'success',
         mode: resolveAuditMode(audit.actionType),
-        title: String(audit.entryTitle ?? '未命名词条').trim() || '未命名词条',
+        title: String(audit.entryTitle ?? resolvePreviewWorkbenchText('unknown_entry')).trim() || resolvePreviewWorkbenchText('unknown_entry'),
         entryType: String(audit.entryType ?? 'other').trim() || 'other',
         entryId: String(audit.entryId ?? '').trim(),
         sourceLabel: String(audit.sourceLabel ?? '').trim()
-            || (String(audit.summaryId ?? '').trim() ? '结构化回合总结' : '工作台直接编辑'),
+            || (String(audit.summaryId ?? '').trim() ? resolvePreviewWorkbenchText('structured_round_summary') : resolvePreviewWorkbenchText('direct_workbench_edit')),
         detailText: resolveAuditDetailText(audit as unknown as Record<string, unknown>),
         payload: {
             actionType: audit.actionType,
@@ -564,11 +564,11 @@ function buildEntryUpdateCards(snapshot: WorkbenchSnapshot): string {
             key: `failed:${history.historyId}:${index}`,
             ts: history.ts,
             status: 'failed',
-            mode: '更新失败',
+            mode: resolvePreviewWorkbenchText('update_failed'),
             title: resolveFailureTitle(history.payload),
             entryType: String(history.payload.targetKind ?? history.payload.schemaId ?? 'unknown').trim() || 'unknown',
             entryId: String(history.payload.recordId ?? history.payload.entryId ?? '').trim(),
-            sourceLabel: '总结链路失败',
+            sourceLabel: resolvePreviewWorkbenchText('stage_summary_failed'),
             detailText: buildFailureDetail(history.payload),
             payload: normalizeRecord(history.payload),
             actionType: 'summary_failed',
@@ -769,7 +769,7 @@ function normalizeRecord(value: unknown): Record<string, unknown> {
  */
 function resolveFailureTitle(payload: Record<string, unknown>): string {
     const reasonCode = String(payload.reasonCode ?? '').trim();
-    return reasonCode ? `总结失败：${resolveFailureReasonLabel(reasonCode)}` : '结构化记忆更新失败';
+    return reasonCode ? `${resolvePreviewWorkbenchText('summary_failed_prefix')}${resolveFailureReasonLabel(reasonCode)}` : resolvePreviewWorkbenchText('structured_summary_failed');
 }
 
 /**
@@ -782,13 +782,13 @@ function buildFailureDetail(payload: Record<string, unknown>): string {
         ? payload.validationErrors.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
         : [];
     if (validationErrors.length > 0) {
-        return `校验失败：${validationErrors.join('；')}`;
+        return `${resolvePreviewWorkbenchText('validation_failed_prefix')}${validationErrors.join('；')}`;
     }
     const reasonCode = String(payload.reasonCode ?? '').trim();
     if (reasonCode) {
-        return `原因：${resolveFailureReasonLabel(reasonCode)}`;
+        return `${resolvePreviewWorkbenchText('reason_prefix')}${resolveFailureReasonLabel(reasonCode)}`;
     }
-    return '本次总结链路失败，详情请展开查看原始记录。';
+    return resolvePreviewWorkbenchText('summary_chain_failed');
 }
 
 /**
@@ -799,12 +799,12 @@ function buildFailureDetail(payload: Record<string, unknown>): string {
 function resolveAuditMode(actionType: string): string {
     const mapping: Record<string, string> = {
         ADD: '新增成功',
-        UPDATE: '更新成功',
+        UPDATE: resolvePreviewWorkbenchText('success_update'),
         MERGE: '合并成功',
         INVALIDATE: '失效成功',
         DELETE: '删除成功',
     };
-    return mapping[String(actionType ?? '').trim()] || '更新成功';
+    return mapping[String(actionType ?? '').trim()] || resolvePreviewWorkbenchText('success_update');
 }
 
 /**
@@ -822,7 +822,7 @@ function resolveAuditDetailText(audit: Record<string, unknown>): string {
     const beforeEntry = normalizeRecord(audit.beforeEntry);
     const summary = sanitizeWorkbenchDisplayText(afterEntry.summary ?? beforeEntry.summary);
     const detail = sanitizeWorkbenchDisplayText(afterEntry.detail ?? beforeEntry.detail);
-    return summary || detail || '本次记录没有可直接显示的摘要。';
+    return summary || detail || resolvePreviewWorkbenchText('no_direct_summary');
 }
 
 /**
@@ -832,7 +832,7 @@ function resolveAuditDetailText(audit: Record<string, unknown>): string {
  */
 function formatAuditFieldValue(value: unknown): string {
     if (value === undefined || value === null || value === '') {
-        return '空';
+        return resolvePreviewWorkbenchText('empty_text');
     }
     if (typeof value === 'string') {
         return truncateText(sanitizeWorkbenchDisplayText(value), 80);

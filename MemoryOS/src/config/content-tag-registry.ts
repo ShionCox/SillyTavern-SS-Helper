@@ -201,6 +201,37 @@ export const DEFAULT_CONTENT_LAB_SETTINGS: ContentLabSettings = {
 let _runtimeContentLabSettings: ContentLabSettings = cloneContentLabSettings(DEFAULT_CONTENT_LAB_SETTINGS);
 
 /**
+ * 功能：定义运行时预编译后的标签规则缓存。
+ */
+interface CompiledContentBlockPolicy {
+    policy: ContentBlockPolicy;
+    index: number;
+    priority: number;
+    normalizedTagName: string;
+    normalizedAliases: string[];
+    normalizedPrefixPattern?: string;
+    compiledRegex?: RegExp;
+}
+
+/**
+ * 功能：定义运行时内容实验室缓存。
+ */
+interface ContentLabRuntimeCache {
+    compiledPolicies: CompiledContentBlockPolicy[];
+}
+
+/**
+ * 功能：定义内容分类器运行时快照。
+ */
+export interface ContentClassificationRuntimeSnapshot {
+    unknownTagPolicy: UnknownTagPolicy;
+    classifierToggles: ClassifierToggleConfig;
+}
+
+/** 运行时内容实验室匹配缓存。 */
+let _runtimeContentLabCache: ContentLabRuntimeCache = buildContentLabRuntimeCache(_runtimeContentLabSettings);
+
+/**
  * 功能：获取当前内容实验室配置快照。
  * @returns 配置快照。
  */
@@ -222,6 +253,7 @@ export function applyContentLabSettings(settings: Partial<ContentLabSettings>): 
         classifierToggles: settings.classifierToggles ?? _runtimeContentLabSettings.classifierToggles,
         enableAIClassifier: settings.enableAIClassifier ?? _runtimeContentLabSettings.enableAIClassifier,
     });
+    refreshContentLabRuntimeCache();
     return getContentLabSettings();
 }
 
@@ -231,6 +263,7 @@ export function applyContentLabSettings(settings: Partial<ContentLabSettings>): 
  */
 export function resetContentLabSettings(): ContentLabSettings {
     _runtimeContentLabSettings = cloneContentLabSettings(DEFAULT_CONTENT_LAB_SETTINGS);
+    refreshContentLabRuntimeCache();
     return getContentLabSettings();
 }
 
@@ -277,6 +310,17 @@ export function getClassifierToggles(): ClassifierToggleConfig {
 }
 
 /**
+ * 功能：获取供内容分类器高频复用的运行时快照。
+ * @returns 分类器运行时快照。
+ */
+export function getContentClassificationRuntimeSnapshot(): ContentClassificationRuntimeSnapshot {
+    return {
+        unknownTagPolicy: _runtimeContentLabSettings.unknownTagPolicy,
+        classifierToggles: _runtimeContentLabSettings.classifierToggles,
+    };
+}
+
+/**
  * 功能：保存分类器开关。
  */
 export function saveClassifierToggles(toggles: ClassifierToggleConfig): void {
@@ -293,16 +337,16 @@ export function lookupTagPolicy(tagName: string): ContentBlockPolicy | undefined
     if (!normalized) {
         return undefined;
     }
-    const matches = getContentTagRegistry()
-        .map((policy, index) => {
-            const match = resolvePolicyMatch(policy, normalized);
+    const matches = _runtimeContentLabCache.compiledPolicies
+        .map((compiledPolicy: CompiledContentBlockPolicy) => {
+            const match = resolvePolicyMatch(compiledPolicy, normalized);
             if (!match) {
                 return null;
             }
             return {
-                policy,
-                index,
-                priority: Number.isFinite(policy.priority) ? Number(policy.priority) : 0,
+                policy: compiledPolicy.policy,
+                index: compiledPolicy.index,
+                priority: compiledPolicy.priority,
                 specificity: match,
             };
         })
@@ -385,30 +429,78 @@ function cloneContentLabSettings(settings: ContentLabSettings): ContentLabSettin
 }
 
 /**
+ * 功能：根据当前运行时设置重建标签匹配缓存。
+ * @returns 无返回值。
+ */
+function refreshContentLabRuntimeCache(): void {
+    _runtimeContentLabCache = buildContentLabRuntimeCache(_runtimeContentLabSettings);
+}
+
+/**
+ * 功能：构建内容实验室运行时缓存。
+ * @param settings 已规范化的运行时配置。
+ * @returns 预编译缓存。
+ */
+function buildContentLabRuntimeCache(settings: ContentLabSettings): ContentLabRuntimeCache {
+    return {
+        compiledPolicies: settings.tagRegistry.map(compileContentBlockPolicy),
+    };
+}
+
+/**
+ * 功能：把单条标签规则预编译为运行时高频匹配结构。
+ * @param policy 原始标签策略。
+ * @param index 注册顺序索引。
+ * @returns 预编译后的规则。
+ */
+function compileContentBlockPolicy(policy: ContentBlockPolicy, index: number): CompiledContentBlockPolicy {
+    const normalizedPatternMode = normalizePatternMode(policy.patternMode);
+    const normalizedPattern = String(policy.pattern ?? '').trim();
+    const compiledRegex = normalizedPatternMode === 'regex' && normalizedPattern
+        ? tryBuildContentTagRegex(normalizedPattern)
+        : undefined;
+    return {
+        policy,
+        index,
+        priority: Number.isFinite(policy.priority) ? Number(policy.priority) : 0,
+        normalizedTagName: String(policy.tagName ?? '').trim().toLowerCase(),
+        normalizedAliases: (policy.aliases ?? []).map((alias: string): string => String(alias ?? '').trim().toLowerCase()).filter(Boolean),
+        normalizedPrefixPattern: normalizedPatternMode === 'prefix' && normalizedPattern
+            ? normalizedPattern.toLowerCase()
+            : undefined,
+        compiledRegex,
+    };
+}
+
+/**
  * 功能：解析单条策略对标签的命中强度。
- * @param policy 标签策略。
+ * @param compiledPolicy 预编译标签策略。
  * @param normalizedTag 已归一化标签。
  * @returns 命中强度；未命中时返回 0。
  */
-function resolvePolicyMatch(policy: ContentBlockPolicy, normalizedTag: string): number {
-    if (String(policy.tagName ?? '').trim().toLowerCase() === normalizedTag) {
+function resolvePolicyMatch(compiledPolicy: CompiledContentBlockPolicy, normalizedTag: string): number {
+    if (compiledPolicy.normalizedTagName === normalizedTag) {
         return 400;
     }
-    if (policy.aliases.some((alias) => String(alias ?? '').trim().toLowerCase() === normalizedTag)) {
+    if (compiledPolicy.normalizedAliases.includes(normalizedTag)) {
         return 300;
     }
-    const pattern = String(policy.pattern ?? '').trim();
-    if (!pattern) {
-        return 0;
+    if (compiledPolicy.normalizedPrefixPattern) {
+        return normalizedTag.startsWith(compiledPolicy.normalizedPrefixPattern) ? 200 : 0;
     }
-    const patternMode = normalizePatternMode(policy.patternMode);
-    if (patternMode === 'prefix') {
-        return normalizedTag.startsWith(pattern.toLowerCase()) ? 200 : 0;
-    }
+    return compiledPolicy.compiledRegex?.test(normalizedTag) ? 100 : 0;
+}
+
+/**
+ * 功能：安全预编译标签正则。
+ * @param pattern 原始正则文本。
+ * @returns 正则对象；非法时返回 undefined。
+ */
+function tryBuildContentTagRegex(pattern: string): RegExp | undefined {
     try {
-        return new RegExp(pattern, 'i').test(normalizedTag) ? 100 : 0;
+        return new RegExp(pattern, 'i');
     } catch {
-        return 0;
+        return undefined;
     }
 }
 

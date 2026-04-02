@@ -1,5 +1,6 @@
 import {
     buildTakeoverBatches,
+    buildTakeoverKnownContext,
     buildProgressSnapshot,
     buildTakeoverPlan,
     buildTakeoverPreviewEstimate,
@@ -10,6 +11,7 @@ import {
     runTakeoverScheduler,
     assembleTakeoverBatchPromptAssembly,
 } from '../memory-takeover';
+import type { MemoryTakeoverKnownEntities } from '../memory-takeover/takeover-batch-runner';
 import {
     clearMemoryTakeoverPreview,
     readMemoryOSChatState,
@@ -50,18 +52,7 @@ import type {
     MemoryTakeoverProgressSnapshot,
 } from '../types';
 
-/**
- * 功能：定义旧聊天接管已知实体集合。
- */
-export interface TakeoverKnownEntities {
-    actors: Array<{ actorKey: string; displayName: string }>;
-    organizations: Array<{ entityKey: string; displayName: string }>;
-    cities: Array<{ entityKey: string; displayName: string }>;
-    nations: Array<{ entityKey: string; displayName: string }>;
-    locations: Array<{ entityKey: string; displayName: string }>;
-    tasks: Array<{ entityKey: string; displayName: string }>;
-    worldStates: Array<{ entityKey: string; displayName: string }>;
-}
+export type TakeoverKnownEntities = MemoryTakeoverKnownEntities;
 
 /**
  * 功能：定义接管调度执行输入。
@@ -262,10 +253,14 @@ export class TakeoverService {
      * @param config 接管配置。
      * @returns 实际送模内容预览。
      */
-    async previewActualTakeoverPayload(config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPayloadPreview> {
+    async previewActualTakeoverPayload(
+        config?: MemoryTakeoverCreateInput,
+        existingKnownEntities: TakeoverKnownEntities = createEmptyTakeoverKnownEntities(),
+    ): Promise<MemoryTakeoverPayloadPreview> {
         await this.readContentLabSettings();
         const settings = readMemoryOSSettings();
         const sourceBundle = collectTakeoverSourceBundle();
+        const storedBatchResults = await loadMemoryTakeoverBatchResults(this.chatKey);
         const plan = buildTakeoverPlan({
             chatKey: this.chatKey,
             chatId: this.chatKey,
@@ -298,40 +293,28 @@ export class TakeoverService {
                 pluginId: MEMORY_OS_PLUGIN_ID,
                 messages: sourceMessages,
             });
+            const requestPayload = batch.category === 'active'
+                ? {
+                    range: batch.range,
+                    messages: assembly.extractionMessages,
+                    hintContext: assembly.channels.hintText || undefined,
+                }
+                : {
+                    batchId: batch.batchId,
+                    batchCategory: batch.category,
+                    range: batch.range,
+                    knownContext: buildTakeoverKnownContext(
+                        resolvePreviewKnownContextBatchResults(storedBatchResults, batch),
+                        existingKnownEntities,
+                    ),
+                    messages: assembly.extractionMessages,
+                    hintContext: assembly.channels.hintText || undefined,
+                };
             const request = await buildTakeoverStructuredTaskRequest({
                 systemSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SYSTEM' : 'TAKEOVER_BATCH_SYSTEM',
                 schemaSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SCHEMA' : 'TAKEOVER_BATCH_SCHEMA',
                 sampleSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_OUTPUT_SAMPLE' : 'TAKEOVER_BATCH_OUTPUT_SAMPLE',
-                payload: batch.category === 'active'
-                    ? {
-                        range: batch.range,
-                        messages: assembly.extractionMessages,
-                        hintContext: assembly.channels.hintText || undefined,
-                    }
-                    : {
-                        batchId: batch.batchId,
-                        batchCategory: batch.category,
-                        range: batch.range,
-                        knownContext: {
-                            actorHints: [],
-                            stableFacts: [],
-                            relationState: [],
-                            taskState: [],
-                            worldState: [],
-                            knownEntities: {
-                                actors: [],
-                                organizations: [],
-                                cities: [],
-                                nations: [],
-                                locations: [],
-                                tasks: [],
-                                worldStates: [],
-                            },
-                            updateHint: '',
-                        },
-                        messages: assembly.extractionMessages,
-                        hintContext: assembly.channels.hintText || undefined,
-                    },
+                payload: requestPayload,
             });
             const historyIndex = historyBatches.findIndex((item) => item.batchId === batch.batchId);
             previewBatches.push({
@@ -603,4 +586,43 @@ export class TakeoverService {
             applyConsolidation: input.applyConsolidation,
         });
     }
+}
+
+/**
+ * 功能：创建空的旧聊天接管已知实体集合。
+ * @returns 空实体集合。
+ */
+function createEmptyTakeoverKnownEntities(): TakeoverKnownEntities {
+    return {
+        actors: [],
+        organizations: [],
+        cities: [],
+        nations: [],
+        locations: [],
+        tasks: [],
+        worldStates: [],
+    };
+}
+
+/**
+ * 功能：为预览中的历史批次筛选当前批次之前已累计的批次结果。
+ * @param batchResults 已存储的批次结果。
+ * @param currentBatch 当前预览批次。
+ * @returns 可用于 knownContext 的前置批次结果。
+ */
+function resolvePreviewKnownContextBatchResults(
+    batchResults: MemoryTakeoverBatchResult[],
+    currentBatch: { range: { startFloor: number } },
+): MemoryTakeoverBatchResult[] {
+    const currentStartFloor = Math.max(1, Math.trunc(Number(currentBatch.range.startFloor) || 1));
+    return [...(batchResults ?? [])]
+        .filter((item: MemoryTakeoverBatchResult): boolean => {
+            const endFloor = Math.max(0, Math.trunc(Number(item.sourceRange?.endFloor) || 0));
+            return endFloor > 0 && endFloor < currentStartFloor;
+        })
+        .sort((left: MemoryTakeoverBatchResult, right: MemoryTakeoverBatchResult): number => {
+            const leftEnd = Math.max(0, Math.trunc(Number(left.sourceRange?.endFloor) || 0));
+            const rightEnd = Math.max(0, Math.trunc(Number(right.sourceRange?.endFloor) || 0));
+            return leftEnd - rightEnd;
+        });
 }

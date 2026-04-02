@@ -1,5 +1,5 @@
 import { escapeHtml } from '../editorShared';
-import { resolveRetrievalProviderLabel } from '../workbenchLocale';
+import { resolveRetrievalProviderLabel, resolveVectorWorkbenchText } from '../workbenchLocale';
 import {
     escapeAttr,
     formatDisplayValue,
@@ -23,12 +23,12 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
             <section class="stx-memory-workbench__view"${state.currentView !== 'vectors' ? ' hidden' : ''}>
                 <div class="stx-memory-workbench__view-head stx-vector-lab__hero">
                     <div class="stx-vector-lab__hero-copy">
-                        <div class="stx-memory-workbench__section-title">向量实验室</div>
-                        <div class="stx-vector-lab__hero-subtitle">浏览向量资产、测试召回链路、执行索引维护。</div>
+                        <div class="stx-memory-workbench__section-title">${escapeHtml(resolveVectorWorkbenchText('section_title'))}</div>
+                        <div class="stx-vector-lab__hero-subtitle">${escapeHtml(resolveVectorWorkbenchText('hero_subtitle'))}</div>
                     </div>
                 </div>
                 <div class="stx-memory-workbench__card">
-                    <div class="stx-memory-workbench__empty">${state.vectorTabLoading ? '正在加载向量运行时、文档与索引信息...' : '进入本页后将按需加载向量文档、索引和召回统计。'}</div>
+                    <div class="stx-memory-workbench__empty">${escapeHtml(state.vectorTabLoading ? resolveVectorWorkbenchText('loading_placeholder') : resolveVectorWorkbenchText('lazy_placeholder'))}</div>
                 </div>
             </section>
         `;
@@ -36,22 +36,22 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
     const sourceKindOptions = buildSelectOptions(
         ['all', ...Array.from(new Set(vectorSnapshot.documents.map((doc) => doc.sourceKind)))],
         state.vectorSourceKindFilter,
-        (value: string): string => value === 'all' ? '全部来源' : resolveSourceKindLabel(value),
+        (value: string): string => value === 'all' ? resolveVectorWorkbenchText('all_sources') : resolveSourceKindLabel(value),
     );
     const statusOptions = buildSelectOptions(
         ['all', 'ready', 'pending', 'failed'],
         state.vectorStatusFilter,
-        (value: string): string => value === 'all' ? '全部状态' : resolveStatusLabel(value),
+        (value: string): string => value === 'all' ? resolveVectorWorkbenchText('all_statuses') : resolveStatusLabel(value),
     );
     const schemaOptions = buildSelectOptions(
         ['all', ...Array.from(new Set(vectorSnapshot.documents.map((doc) => String(doc.schemaId ?? '').trim()).filter(Boolean)))],
         state.vectorSchemaFilter,
-        (value: string): string => value === 'all' ? '全部结构' : value,
+        (value: string): string => value === 'all' ? resolveVectorWorkbenchText('all_schemas') : value,
     );
     const actorOptions = buildSelectOptions(
         ['all', ...Array.from(new Set(vectorSnapshot.documents.flatMap((doc) => doc.actorKeys ?? []).filter(Boolean)))],
         state.vectorActorFilter,
-        (value: string): string => value === 'all' ? '全部角色' : value,
+        (value: string): string => value === 'all' ? resolveVectorWorkbenchText('all_actors') : value,
     );
     const filteredDocuments = vectorSnapshot.documents.filter((doc) => {
         if (state.vectorSourceKindFilter && state.vectorSourceKindFilter !== 'all' && doc.sourceKind !== state.vectorSourceKindFilter) {
@@ -97,35 +97,35 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
         <section class="stx-memory-workbench__view"${state.currentView !== 'vectors' ? ' hidden' : ''}>
             <div class="stx-memory-workbench__view-head stx-vector-lab__hero">
                 <div class="stx-vector-lab__hero-copy">
-                    <div class="stx-memory-workbench__section-title">向量实验室</div>
-                    <div class="stx-vector-lab__hero-subtitle">浏览向量资产、测试召回链路、执行索引维护。</div>
+                    <div class="stx-memory-workbench__section-title">${escapeHtml(resolveVectorWorkbenchText('section_title'))}</div>
+                    <div class="stx-vector-lab__hero-subtitle">${escapeHtml(resolveVectorWorkbenchText('hero_subtitle'))}</div>
                 </div>
                 <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
-                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-refresh"><i class="fa-solid fa-rotate"></i> 刷新</button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-rebuild-documents"><i class="fa-solid fa-layer-group"></i> 重建文档</button>
-                    <button class="stx-memory-workbench__button" data-action="vector-rebuild-embeddings"><i class="fa-solid fa-wave-square"></i> 重建索引</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-refresh"><i class="fa-solid fa-rotate"></i> ${escapeHtml(resolveVectorWorkbenchText('refresh'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-rebuild-documents"><i class="fa-solid fa-layer-group"></i> ${escapeHtml(resolveVectorWorkbenchText('rebuild_documents'))}</button>
+                    <button class="stx-memory-workbench__button" data-action="vector-rebuild-embeddings"><i class="fa-solid fa-wave-square"></i> ${escapeHtml(resolveVectorWorkbenchText('rebuild_embeddings'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="vector-clear-data" style="border-color:rgba(239,68,68,0.42); color:var(--mw-warn);">
-                        <i class="fa-solid fa-trash-can"></i> 清空向量数据
+                        <i class="fa-solid fa-trash-can"></i> ${escapeHtml(resolveVectorWorkbenchText('clear_vector_data'))}
                     </button>
                 </div>
             </div>
 
             <div class="stx-vector-lab__overview">
-                ${buildOverviewCard('运行时', vectorSnapshot.runtimeReady ? '已就绪' : '未就绪', vectorSnapshot.runtimeReady ? '可执行向量链路' : '尚未初始化向量运行时', vectorSnapshot.runtimeReady ? 'ok' : 'warn')}
-                ${buildOverviewCard('Embedding', vectorSnapshot.embeddingAvailable ? '可用' : '不可用', vectorSnapshot.embeddingAvailable ? (vectorSnapshot.embeddingModel || '已连接编码服务') : (vectorSnapshot.embeddingUnavailableReason || '当前无法编码'), vectorSnapshot.embeddingAvailable ? 'ok' : 'warn')}
-                ${buildOverviewCard('Store', vectorSnapshot.vectorStoreAvailable ? '可用' : '不可用', vectorSnapshot.vectorStoreAvailable ? '向量索引读写正常' : (vectorSnapshot.vectorStoreUnavailableReason || '当前无法访问存储'), vectorSnapshot.vectorStoreAvailable ? 'ok' : 'warn')}
-                ${buildOverviewCard('当前模式', resolveModeLabel(vectorSnapshot.retrievalMode), `策略路由 ${vectorSnapshot.vectorEnableStrategyRouting ? '开启' : '关闭'} / 重排 ${vectorSnapshot.vectorEnableRerank ? '开启' : '关闭'}`, 'accent')}
-                ${buildOverviewCard('文档总数', String(vectorSnapshot.documentCount), `Ready ${vectorSnapshot.readyCount} / Pending ${vectorSnapshot.pendingCount} / Failed ${vectorSnapshot.failedCount}`, 'accent')}
-                ${buildOverviewCard('索引记录', String(vectorSnapshot.indexCount), `召回统计 ${vectorSnapshot.recallStatCount} 条`, 'accent')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('runtime'), vectorSnapshot.runtimeReady ? resolveVectorWorkbenchText('runtime_ready') : resolveVectorWorkbenchText('runtime_not_ready'), vectorSnapshot.runtimeReady ? resolveVectorWorkbenchText('runtime_ready_detail') : resolveVectorWorkbenchText('runtime_not_ready_detail'), vectorSnapshot.runtimeReady ? 'ok' : 'warn')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('embedding'), vectorSnapshot.embeddingAvailable ? resolveVectorWorkbenchText('available') : resolveVectorWorkbenchText('unavailable'), vectorSnapshot.embeddingAvailable ? (vectorSnapshot.embeddingModel || resolveVectorWorkbenchText('embedding_connected')) : (vectorSnapshot.embeddingUnavailableReason || resolveVectorWorkbenchText('embedding_unavailable')), vectorSnapshot.embeddingAvailable ? 'ok' : 'warn')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('store'), vectorSnapshot.vectorStoreAvailable ? resolveVectorWorkbenchText('available') : resolveVectorWorkbenchText('unavailable'), vectorSnapshot.vectorStoreAvailable ? resolveVectorWorkbenchText('store_ready_detail') : (vectorSnapshot.vectorStoreUnavailableReason || resolveVectorWorkbenchText('store_unavailable')), vectorSnapshot.vectorStoreAvailable ? 'ok' : 'warn')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('current_mode'), resolveModeLabel(vectorSnapshot.retrievalMode), `${resolveVectorWorkbenchText('strategy_route')} ${vectorSnapshot.vectorEnableStrategyRouting ? resolveVectorWorkbenchText('strategy_route_on') : resolveVectorWorkbenchText('strategy_route_off')} / ${resolveVectorWorkbenchText('rerank_used')} ${vectorSnapshot.vectorEnableRerank ? resolveVectorWorkbenchText('rerank_on') : resolveVectorWorkbenchText('rerank_off')}`, 'accent')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('document_count'), String(vectorSnapshot.documentCount), `${resolveVectorWorkbenchText('ready_count')} ${vectorSnapshot.readyCount} / ${resolveVectorWorkbenchText('pending_count')} ${vectorSnapshot.pendingCount} / ${resolveVectorWorkbenchText('failed_count')} ${vectorSnapshot.failedCount}`, 'accent')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('index_count'), String(vectorSnapshot.indexCount), `${resolveVectorWorkbenchText('recall_stat_count')} ${vectorSnapshot.recallStatCount} ${resolveVectorWorkbenchText('item_count_unit')}`, 'accent')}
             </div>
 
             <div class="stx-vector-lab__layout">
                 <aside class="stx-vector-lab__rail">
                     <div class="stx-memory-workbench__card stx-vector-lab__panel">
-                        <div class="stx-memory-workbench__panel-title">向量文档</div>
+                        <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('vector_documents'))}</div>
                         <div class="stx-vector-lab__panel-body">
                             <div class="stx-vector-lab__filters">
-                                <input id="stx-vector-text-filter" class="stx-memory-workbench__input" placeholder="搜索标题、来源、文本" value="${escapeAttr(state.vectorTextFilter)}">
+                                <input id="stx-vector-text-filter" class="stx-memory-workbench__input" placeholder="${escapeAttr(resolveVectorWorkbenchText('search_doc_placeholder'))}" value="${escapeAttr(state.vectorTextFilter)}">
                                 <div class="stx-vector-lab__filter-grid">
                                     <select id="stx-vector-source-filter" class="stx-memory-workbench__select">${sourceKindOptions}</select>
                                     <select id="stx-vector-status-filter" class="stx-memory-workbench__select">${statusOptions}</select>
@@ -141,13 +141,13 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                             <span class="stx-vector-lab__status is-${escapeAttr(doc.embeddingStatus)}">${escapeHtml(resolveStatusLabel(doc.embeddingStatus))}</span>
                                         </div>
                                         <div class="stx-vector-lab__doc-meta">${escapeHtml(resolveSourceKindLabel(doc.sourceKind))} / ${escapeHtml(doc.sourceId)}</div>
-                                        <div class="stx-vector-lab__doc-meta">${escapeHtml(truncateText(doc.compareKey || '无 compareKey', 42) || '无 compareKey')}</div>
+                                        <div class="stx-vector-lab__doc-meta">${escapeHtml(truncateText(doc.compareKey || resolveVectorWorkbenchText('empty_value'), 42) || resolveVectorWorkbenchText('empty_value'))}</div>
                                         <div class="stx-vector-lab__doc-foot">
-                                            <span>${escapeHtml(String(doc.embeddingDim ?? 0))} 维</span>
+                                            <span>${escapeHtml(String(doc.embeddingDim ?? 0))} ${escapeHtml(resolveVectorWorkbenchText('dimension'))}</span>
                                             <span>${escapeHtml(formatTimestamp(doc.updatedAt))}</span>
                                         </div>
                                     </button>
-                                `).join('') || '<div class="stx-memory-workbench__empty">当前过滤条件下没有向量文档。</div>'}
+                                `).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_filtered_documents'))}</div>`}
                             </div>
                         </div>
                     </div>
@@ -157,13 +157,13 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     <div class="stx-memory-workbench__card stx-vector-lab__panel">
                         <div class="stx-vector-lab__detail-head">
                             <div>
-                                <div class="stx-memory-workbench__panel-title">文档详情</div>
-                                <div class="stx-vector-lab__detail-subtitle">${selectedDoc ? escapeHtml(selectedDoc.vectorDocId) : '请选择一条向量文档查看详情'}</div>
+                                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('document_detail'))}</div>
+                                <div class="stx-vector-lab__detail-subtitle">${selectedDoc ? escapeHtml(selectedDoc.vectorDocId) : escapeHtml(resolveVectorWorkbenchText('select_document_hint'))}</div>
                             </div>
                             ${selectedDoc ? `
                                 <div class="stx-memory-workbench__toolbar">
-                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-reindex-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}">重新索引</button>
-                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-remove-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}" style="border-color:rgba(239,68,68,0.42); color:var(--mw-warn);">删除文档</button>
+                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-reindex-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}">${escapeHtml(resolveVectorWorkbenchText('reindex_document'))}</button>
+                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-remove-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}" style="border-color:rgba(239,68,68,0.42); color:var(--mw-warn);">${escapeHtml(resolveVectorWorkbenchText('remove_document'))}</button>
                                 </div>
                             ` : ''}
                         </div>
@@ -171,85 +171,85 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                             ${selectedDoc ? `
                                 <div class="stx-vector-lab__detail-grid">
                                     <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">基本信息</div>
-                                        ${buildInfoRow('来源类型', resolveSourceKindLabel(selectedDoc.sourceKind))}
-                                        ${buildInfoRow('来源 ID', selectedDoc.sourceId)}
-                                        ${buildInfoRow('结构 ID', selectedDoc.schemaId || '暂无')}
-                                        ${buildInfoRow('CompareKey', selectedDoc.compareKey || '暂无')}
-                                        ${buildInfoRow('更新时间', formatTimestamp(selectedDoc.updatedAt))}
+                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('basic_info'))}</div>
+                                        ${buildInfoRow(resolveVectorWorkbenchText('source_type'), resolveSourceKindLabel(selectedDoc.sourceKind))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('source_id'), selectedDoc.sourceId)}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('schema_id'), selectedDoc.schemaId || resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('compare_key'), selectedDoc.compareKey || resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('updated_at'), formatTimestamp(selectedDoc.updatedAt))}
                                     </div>
                                     <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">向量状态</div>
-                                        ${buildInfoRow('Embedding 状态', resolveStatusLabel(selectedDoc.embeddingStatus))}
-                                        ${buildInfoRow('模型', selectedDoc.embeddingModel || '暂无')}
-                                        ${buildInfoRow('版本', selectedDoc.embeddingVersion || '暂无')}
-                                        ${buildInfoRow('维度', String(selectedDoc.embeddingDim ?? 0))}
-                                        ${buildInfoRow('索引写入', hasIndex ? '已写入' : '未写入')}
-                                        ${buildInfoRow('最近召回', recallStat ? `${recallStat.recallCount} 次` : '暂无')}
-                                        ${buildInfoRow('最近模式', recallStat?.lastRecallMode || '暂无')}
-                                        ${buildInfoRow('最近时间', formatTimestamp(recallStat?.lastRecalledAt))}
-                                        ${selectedDoc.lastError ? buildInfoRow('错误信息', selectedDoc.lastError) : ''}
+                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_status'))}</div>
+                                        ${buildInfoRow(resolveVectorWorkbenchText('embedding_status'), resolveStatusLabel(selectedDoc.embeddingStatus))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('model'), selectedDoc.embeddingModel || resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('version'), selectedDoc.embeddingVersion || resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('dimension'), String(selectedDoc.embeddingDim ?? 0))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('index_written'), hasIndex ? resolveVectorWorkbenchText('indexed') : resolveVectorWorkbenchText('not_indexed'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_recall'), recallStat ? `${recallStat.recallCount} ${resolveVectorWorkbenchText('recall_count_suffix')}` : resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_mode'), recallStat?.lastRecallMode || resolveVectorWorkbenchText('empty_value'))}
+                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_time'), formatTimestamp(recallStat?.lastRecalledAt))}
+                                        ${selectedDoc.lastError ? buildInfoRow(resolveVectorWorkbenchText('error_message'), selectedDoc.lastError) : ''}
                                     </div>
                                 </div>
                                 <div class="stx-vector-lab__detail-grid">
                                     <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">结构标签</div>
-                                        ${buildTagBlock('角色', selectedDoc.actorKeys)}
-                                        ${buildTagBlock('关系', selectedDoc.relationKeys)}
-                                        ${buildTagBlock('世界', selectedDoc.worldKeys)}
-                                        ${buildTagBlock('地点', selectedDoc.locationKey ? [selectedDoc.locationKey] : [])}
+                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('structure_tags'))}</div>
+                                        ${buildTagBlock(resolveVectorWorkbenchText('source_actor'), selectedDoc.actorKeys)}
+                                        ${buildTagBlock(resolveVectorWorkbenchText('source_relationship'), selectedDoc.relationKeys)}
+                                        ${buildTagBlock(resolveVectorWorkbenchText('world_tag'), selectedDoc.worldKeys)}
+                                        ${buildTagBlock(resolveVectorWorkbenchText('location_tag'), selectedDoc.locationKey ? [selectedDoc.locationKey] : [])}
                                     </div>
                                     <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">文本内容</div>
+                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('text_content'))}</div>
                                         <div class="stx-vector-lab__detail-text">
-                                            <strong>${escapeHtml(selectedDoc.title || '未命名文档')}</strong>
-                                            <div>${escapeHtml(selectedDoc.text || '暂无文本内容')}</div>
+                                            <strong>${escapeHtml(selectedDoc.title || resolveVectorWorkbenchText('untitled_document'))}</strong>
+                                            <div>${escapeHtml(selectedDoc.text || resolveVectorWorkbenchText('no_text_content'))}</div>
                                         </div>
                                     </div>
                                 </div>
-                            ` : '<div class="stx-memory-workbench__empty">左侧选择一条向量文档后，这里会显示索引与文本详情。</div>'}
+                            ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('select_document_empty'))}</div>`}
                         </div>
                     </div>
 
                     <div class="stx-memory-workbench__card stx-vector-lab__panel">
                         <div class="stx-vector-lab__detail-head">
                             <div>
-                                <div class="stx-memory-workbench__panel-title">召回测试台</div>
-                                <div class="stx-vector-lab__detail-subtitle">手动验证 lexical / vector / hybrid 三种模式下的最终链路。</div>
+                                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('retrieval_testbench'))}</div>
+                                <div class="stx-vector-lab__detail-subtitle">${escapeHtml(resolveVectorWorkbenchText('retrieval_testbench_subtitle'))}</div>
                             </div>
                             <button class="stx-memory-workbench__button" data-action="vector-run-test"${state.vectorTestRunning ? ' disabled' : ''}>
-                                <i class="fa-solid fa-play"></i> ${state.vectorTestRunning ? '测试中…' : '开始测试'}
+                                <i class="fa-solid fa-play"></i> ${escapeHtml(state.vectorTestRunning ? resolveVectorWorkbenchText('testing') : resolveVectorWorkbenchText('start_test'))}
                             </button>
                         </div>
                         <div class="stx-vector-lab__panel-body">
                             <div class="stx-vector-lab__test-grid">
                                 <div class="stx-vector-lab__test-form">
-                                    <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="输入要测试的查询文本">${escapeHtml(state.vectorQuery)}</textarea>
+                                    <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="${escapeAttr(resolveVectorWorkbenchText('query_placeholder'))}">${escapeHtml(state.vectorQuery)}</textarea>
                                     <div class="stx-vector-lab__filter-grid">
                                         <select id="stx-vector-mode" class="stx-memory-workbench__select">
-                                            <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>仅词法</option>
-                                            <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>仅向量</option>
-                                            <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>混合模式</option>
+                                            <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
+                                            <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
+                                            <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
                                         </select>
-                                        <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="TopK">
-                                        <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="DeepWindow">
-                                        <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="FinalTopK">
+                                        <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('topk_placeholder'))}">
+                                        <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('deep_window_placeholder'))}">
+                                        <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('final_topk_placeholder'))}">
                                     </div>
                                     <div class="stx-vector-lab__switches">
-                                        ${buildSwitch('stx-vector-enable-routing', '策略路由', state.vectorEnableStrategyRoutingTest)}
-                                        ${buildSwitch('stx-vector-enable-rerank', '规则重排', state.vectorEnableRerankTest)}
-                                        ${buildSwitch('stx-vector-enable-llmhub-rerank', 'LLMHub 重排', state.vectorEnableLLMHubRerankTest)}
-                                        ${buildSwitch('stx-vector-enable-graph-expansion', '图扩展', state.vectorEnableGraphExpansionTest)}
+                                        ${buildSwitch('stx-vector-enable-routing', resolveVectorWorkbenchText('enable_strategy_routing'), state.vectorEnableStrategyRoutingTest)}
+                                        ${buildSwitch('stx-vector-enable-rerank', resolveVectorWorkbenchText('enable_rule_rerank'), state.vectorEnableRerankTest)}
+                                        ${buildSwitch('stx-vector-enable-llmhub-rerank', resolveVectorWorkbenchText('enable_llmhub_rerank'), state.vectorEnableLLMHubRerankTest)}
+                                        ${buildSwitch('stx-vector-enable-graph-expansion', resolveVectorWorkbenchText('enable_graph_expansion'), state.vectorEnableGraphExpansionTest)}
                                     </div>
                                 </div>
                                 <div class="stx-vector-lab__test-result">
                                     ${state.vectorTestRunning || testProgress ? `
                                         <div class="stx-vector-lab__progress-card${state.vectorTestRunning ? ' is-running' : ''}${testProgress?.stage === 'failed' ? ' is-failed' : ''}">
                                             <div class="stx-vector-lab__progress-head">
-                                                <span>当前步骤</span>
-                                                <strong>${escapeHtml(testProgress?.title || (state.vectorTestRunning ? '测试进行中' : '最近步骤'))}</strong>
+                                                <span>${escapeHtml(resolveVectorWorkbenchText('current_step'))}</span>
+                                                <strong>${escapeHtml(testProgress?.title || (state.vectorTestRunning ? resolveVectorWorkbenchText('test_running') : resolveVectorWorkbenchText('latest_step')))}</strong>
                                             </div>
-                                            <div class="stx-vector-lab__progress-message">${escapeHtml(testProgress?.message || '正在执行召回测试。')}</div>
+                                            <div class="stx-vector-lab__progress-message">${escapeHtml(testProgress?.message || resolveVectorWorkbenchText('test_running_message'))}</div>
                                             ${typeof testProgress?.progress === 'number' ? `
                                                 <div class="stx-vector-lab__progress-bar">
                                                     <span style="width:${escapeAttr(String(Math.max(0, Math.min(100, Math.round(testProgress.progress * 100)))))}%"></span>
@@ -259,24 +259,53 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                     ` : ''}
                                     ${testResult ? `
                                         <div class="stx-vector-lab__result-block">
-                                            <div class="stx-vector-lab__detail-title">链路诊断</div>
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('chain_diagnostics'))}</div>
                                             <div class="stx-vector-lab__result-grid">
-                                                ${buildMetricChip('最终链路', resolveRetrievalProviderLabel(testResult.diagnostics.finalProviderId || testResult.providerId))}
-                                                ${buildMetricChip('基线种子', resolveRetrievalProviderLabel(testResult.diagnostics.seedProviderId || 'none'))}
-                                                ${buildMetricChip('策略路由', resolveStrategyRouteLabel(testResult.diagnostics.strategyDecision?.route))}
-                                                ${buildMetricChip('向量命中', String(testResult.diagnostics.vectorHitCount ?? 0))}
-                                                ${buildMetricChip('执行融合', testResult.diagnostics.mergeUsed ? '是' : '否')}
-                                                ${buildMetricChip('执行重排', testResult.diagnostics.rerankUsed ? '是' : '否')}
-                                                ${buildMetricChip('重排来源', resolveRerankSourceLabel(testResult.diagnostics.rerankSource))}
-                                                ${buildMetricChip('结果数量', String(testResult.items.length))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('final_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.finalProviderId || testResult.providerId))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('seed_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.seedProviderId || 'none'))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('strategy_route'), resolveStrategyRouteLabel(testResult.diagnostics.strategyDecision?.route))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('vector_hit_count'), String(testResult.diagnostics.vectorHitCount ?? 0))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('merge_used'), testResult.diagnostics.mergeUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('rerank_used'), testResult.diagnostics.rerankUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('rerank_source'), resolveRerankSourceLabel(testResult.diagnostics.rerankSource))}
+                                                ${buildMetricChip(resolveVectorWorkbenchText('result_count'), String(testResult.items.length))}
                                             </div>
                                             <div class="stx-vector-lab__reason-row">
-                                                <span>原因码</span>
-                                                <strong>${escapeHtml((testResult.diagnostics.rerankReasonCodes ?? []).join('、') || '暂无')}</strong>
+                                                <span>${escapeHtml(resolveVectorWorkbenchText('reason_codes'))}</span>
+                                                <strong>${escapeHtml((testResult.diagnostics.rerankReasonCodes ?? []).join('、') || resolveVectorWorkbenchText('empty_value'))}</strong>
                                             </div>
                                         </div>
                                         <div class="stx-vector-lab__result-block">
-                                            <div class="stx-vector-lab__detail-title">最终结果</div>
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('ranking_diff'))}</div>
+                                            <div class="stx-vector-lab__detail-grid">
+                                                <div class="stx-vector-lab__detail-card">
+                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_top_hits'))}</div>
+                                                    ${buildRankingStageList(
+                                                        testResult.diagnostics.vectorTopHits?.map((item) => ({
+                                                            rank: item.rank,
+                                                            title: item.sourceId,
+                                                            score: item.score,
+                                                            source: 'vector',
+                                                        })) ?? [],
+                                                        true,
+                                                    )}
+                                                </div>
+                                                <div class="stx-vector-lab__detail-card">
+                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('merged_ranking'))}</div>
+                                                    ${buildRankingStageList(testResult.diagnostics.mergedRanking ?? [])}
+                                                </div>
+                                                <div class="stx-vector-lab__detail-card">
+                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('reranked_ranking'))}</div>
+                                                    ${buildRankingStageList(testResult.diagnostics.rerankedRanking ?? [])}
+                                                </div>
+                                            </div>
+                                            <div class="stx-vector-lab__detail-card" style="margin-top:12px;">
+                                                <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('ranking_changes'))}</div>
+                                                ${buildRankingChangeList(testResult.diagnostics.rankingChanges ?? [])}
+                                            </div>
+                                        </div>
+                                        <div class="stx-vector-lab__result-block">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('final_results'))}</div>
                                             <div class="stx-vector-lab__result-list">
                                                 ${testResult.items.map((item, index) => {
                                                     const sourceLabel = testResult.diagnostics.resultSourceLabels.find((label) => label.candidateId === item.candidate.candidateId)?.source ?? 'lexical';
@@ -287,14 +316,14 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                                                 <span>${escapeHtml(resolveResultSourceLabel(sourceLabel))}</span>
                                                             </div>
                                                             <div class="stx-vector-lab__result-meta">${escapeHtml(item.candidate.schemaId)} / ${escapeHtml(item.candidate.entryId)}</div>
-                                                            <div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(item.candidate.summary || '暂无摘要', 180) || '暂无摘要')}</div>
-                                                            <div class="stx-vector-lab__result-meta">得分 ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
+                                                            <div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(item.candidate.summary || resolveVectorWorkbenchText('empty_value'), 180) || resolveVectorWorkbenchText('empty_value'))}</div>
+                                                            <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
                                                         </article>
                                                     `;
-                                                }).join('') || '<div class="stx-memory-workbench__empty">本次测试没有命中任何结果。</div>'}
+                                                }).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_result_hits'))}</div>`}
                                             </div>
                                         </div>
-                                    ` : '<div class="stx-memory-workbench__empty">填写查询文本后执行测试，这里会展示最终链路、重排信息和结果列表。</div>'}
+                                    ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('test_result_empty'))}</div>`}
                                 </div>
                             </div>
                         </div>
@@ -302,6 +331,81 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
             </div>
         </section>
     `;
+}
+
+/**
+ * 功能：渲染单个排序阶段列表。
+ * @param items 排序列表。
+ * @param compact 是否使用紧凑显示。
+ * @returns HTML。
+ */
+function buildRankingStageList(
+    items: Array<{ rank: number; title: string; score: number; source?: string }>,
+    compact: boolean = false,
+): string {
+    if (!Array.isArray(items) || items.length <= 0) {
+        return `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_ranking_data'))}</div>`;
+    }
+    return `
+        <div class="stx-vector-lab__result-list"${compact ? ' style="max-height:220px;"' : ''}>
+            ${items.map((item) => `
+                <article class="stx-vector-lab__result-item">
+                    <div class="stx-vector-lab__result-head">
+                        <strong>#${escapeHtml(String(item.rank))} ${escapeHtml(truncateText(item.title || resolveVectorWorkbenchText('untitled_candidate'), 26) || resolveVectorWorkbenchText('untitled_candidate'))}</strong>
+                        ${item.source ? `<span>${escapeHtml(resolveResultSourceLabel(item.source))}</span>` : ''}
+                    </div>
+                    <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
+                </article>
+            `).join('')}
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染排序变化说明列表。
+ * @param items 变化列表。
+ * @returns HTML。
+ */
+function buildRankingChangeList(items: Array<{
+    title: string;
+    source: string;
+    lexicalRank?: number;
+    mergedRank?: number;
+    rerankedRank?: number;
+    finalRank?: number;
+    changeReason: string;
+}>): string {
+    if (!Array.isArray(items) || items.length <= 0) {
+        return `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_ranking_changes'))}</div>`;
+    }
+    return `
+        <div class="stx-vector-lab__result-list" style="max-height:320px;">
+            ${items.map((item) => `
+                <article class="stx-vector-lab__result-item">
+                    <div class="stx-vector-lab__result-head">
+                        <strong>${escapeHtml(truncateText(item.title || resolveVectorWorkbenchText('untitled_candidate'), 30) || resolveVectorWorkbenchText('untitled_candidate'))}</strong>
+                        <span>${escapeHtml(resolveResultSourceLabel(item.source))}</span>
+                    </div>
+                    <div class="stx-vector-lab__result-meta">
+                        ${escapeHtml(resolveVectorWorkbenchText('rank_lexical'))} ${escapeHtml(formatRankValue(item.lexicalRank))}
+                        / ${escapeHtml(resolveVectorWorkbenchText('rank_merged'))} ${escapeHtml(formatRankValue(item.mergedRank))}
+                        / ${escapeHtml(resolveVectorWorkbenchText('rank_reranked'))} ${escapeHtml(formatRankValue(item.rerankedRank))}
+                        / ${escapeHtml(resolveVectorWorkbenchText('rank_final'))} ${escapeHtml(formatRankValue(item.finalRank))}
+                    </div>
+                    <div class="stx-vector-lab__result-summary">${escapeHtml(item.changeReason || resolveVectorWorkbenchText('no_explanation'))}</div>
+                </article>
+            `).join('')}
+        </div>
+    `;
+}
+
+/**
+ * 功能：格式化排名值。
+ * @param value 排名。
+ * @returns 展示文本。
+ */
+function formatRankValue(value?: number): string {
+    return Number.isFinite(value) ? `#${value}` : resolveVectorWorkbenchText('rank_not_listed');
 }
 
 /**
@@ -345,7 +449,7 @@ function buildTagBlock(label: string, values: string[]): string {
             <div class="stx-vector-lab__tag-row">
                 ${(values ?? []).length > 0
                     ? (values ?? []).map((value: string): string => `<span class="stx-vector-lab__tag">${escapeHtml(value)}</span>`).join('')
-                    : '<span class="stx-vector-lab__tag is-empty">暂无</span>'}
+                    : `<span class="stx-vector-lab__tag is-empty">${escapeHtml(resolveVectorWorkbenchText('empty_value'))}</span>`}
             </div>
         </div>
     `;
@@ -383,7 +487,7 @@ function buildMetricChip(label: string, value: string): string {
     return `
         <div class="stx-vector-lab__metric-chip">
             <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(value || '暂无')}</strong>
+            <strong>${escapeHtml(value || resolveVectorWorkbenchText('empty_value'))}</strong>
         </div>
     `;
 }
@@ -409,12 +513,12 @@ function buildSelectOptions(values: string[], selected: string, labelResolver: (
  */
 function resolveSourceKindLabel(value: string): string {
     const mapping: Record<string, string> = {
-        entry: '条目',
-        relationship: '关系',
-        actor: '角色',
-        summary: '总结',
+        entry: resolveVectorWorkbenchText('source_entry'),
+        relationship: resolveVectorWorkbenchText('source_relationship'),
+        actor: resolveVectorWorkbenchText('source_actor'),
+        summary: resolveVectorWorkbenchText('source_summary'),
     };
-    return mapping[String(value ?? '').trim()] || '未知来源';
+    return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('source_unknown');
 }
 
 /**
@@ -424,12 +528,12 @@ function resolveSourceKindLabel(value: string): string {
  */
 function resolveStatusLabel(value: string): string {
     const mapping: Record<string, string> = {
-        ready: '已就绪',
-        pending: '待编码',
-        processing: '处理中',
-        failed: '失败',
+        ready: resolveVectorWorkbenchText('status_ready'),
+        pending: resolveVectorWorkbenchText('status_pending'),
+        processing: resolveVectorWorkbenchText('status_processing'),
+        failed: resolveVectorWorkbenchText('status_failed'),
     };
-    return mapping[String(value ?? '').trim()] || '未知状态';
+    return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('status_unknown');
 }
 
 /**
@@ -439,11 +543,11 @@ function resolveStatusLabel(value: string): string {
  */
 function resolveModeLabel(value: string): string {
     const mapping: Record<string, string> = {
-        lexical_only: '仅词法',
-        vector_only: '仅向量',
-        hybrid: '混合模式',
+        lexical_only: resolveVectorWorkbenchText('lexical_only'),
+        vector_only: resolveVectorWorkbenchText('vector_only'),
+        hybrid: resolveVectorWorkbenchText('hybrid_mode'),
     };
-    return mapping[String(value ?? '').trim()] || '未知模式';
+    return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('mode_unknown');
 }
 
 /**
@@ -453,12 +557,12 @@ function resolveModeLabel(value: string): string {
  */
 function resolveStrategyRouteLabel(value?: string): string {
     if (value === 'deep_vector') {
-        return '深路径';
+        return resolveVectorWorkbenchText('route_deep_vector');
     }
     if (value === 'fast_vector') {
-        return '快路径';
+        return resolveVectorWorkbenchText('route_fast_vector');
     }
-    return '暂无';
+    return resolveVectorWorkbenchText('route_none');
 }
 
 /**
@@ -468,12 +572,12 @@ function resolveStrategyRouteLabel(value?: string): string {
  */
 function resolveRerankSourceLabel(value?: 'none' | 'rule' | 'llmhub'): string {
     if (value === 'llmhub') {
-        return 'LLMHub';
+        return resolveVectorWorkbenchText('rerank_source_llmhub');
     }
     if (value === 'rule') {
-        return '规则重排';
+        return resolveVectorWorkbenchText('rerank_source_rule');
     }
-    return '无';
+    return resolveVectorWorkbenchText('rerank_source_none');
 }
 
 /**
@@ -483,10 +587,10 @@ function resolveRerankSourceLabel(value?: 'none' | 'rule' | 'llmhub'): string {
  */
 function resolveResultSourceLabel(value: string): string {
     const mapping: Record<string, string> = {
-        lexical: '词法',
-        vector: '向量',
-        graph_expansion: '图扩展',
-        coverage_supplement: '补召回',
+        lexical: resolveVectorWorkbenchText('result_source_lexical'),
+        vector: resolveVectorWorkbenchText('result_source_vector'),
+        graph_expansion: resolveVectorWorkbenchText('result_source_graph_expansion'),
+        coverage_supplement: resolveVectorWorkbenchText('result_source_coverage_supplement'),
     };
-    return mapping[String(value ?? '').trim()] || '未知来源';
+    return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('source_unknown');
 }

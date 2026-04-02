@@ -2,7 +2,7 @@ export { detectTakeoverNeeded } from './takeover-detector';
 export { buildTakeoverPlan, buildTakeoverBatches, normalizeTakeoverRange, validateTakeoverBatchCoverage } from './takeover-planner';
 export { runTakeoverBaseline } from './takeover-baseline';
 export { runTakeoverActiveSnapshot } from './takeover-active-snapshot';
-export { runTakeoverBatch, assembleTakeoverBatchPromptAssembly } from './takeover-batch-runner';
+export { runTakeoverBatch, assembleTakeoverBatchPromptAssembly, buildTakeoverKnownContext } from './takeover-batch-runner';
 export { admitTakeoverBatchResult } from './takeover-batch-admission';
 export { runTakeoverConsolidation } from './takeover-consolidator';
 export {

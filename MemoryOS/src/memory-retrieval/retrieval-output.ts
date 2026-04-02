@@ -65,6 +65,56 @@ export interface RetrievalOutputDiagnostics {
     rerankReasonCodes?: string[];
     /** 重排来源 */
     rerankSource?: 'none' | 'rule' | 'llmhub';
+    /** 向量原始 TopN 命中 */
+    vectorTopHits?: RetrievalVectorTopHit[];
+    /** 词法阶段排序 */
+    lexicalRanking?: RetrievalStageRankingItem[];
+    /** 融合后、重排前排序 */
+    mergedRanking?: RetrievalStageRankingItem[];
+    /** 重排后排序 */
+    rerankedRanking?: RetrievalStageRankingItem[];
+    /** 结果排序变化解释 */
+    rankingChanges?: RetrievalRankingChangeItem[];
+}
+
+/**
+ * 功能：定义向量原始 TopN 命中快照。
+ */
+export interface RetrievalVectorTopHit {
+    rank: number;
+    sourceId: string;
+    score: number;
+}
+
+/**
+ * 功能：定义单个阶段的排序快照项。
+ */
+export interface RetrievalStageRankingItem {
+    rank: number;
+    candidateId: string;
+    entryId: string;
+    title: string;
+    score: number;
+    source: 'lexical' | 'vector' | 'graph_expansion' | 'coverage_supplement';
+}
+
+/**
+ * 功能：定义结果在不同排序阶段中的变化项。
+ */
+export interface RetrievalRankingChangeItem {
+    candidateId: string;
+    entryId: string;
+    title: string;
+    source: 'lexical' | 'vector' | 'graph_expansion' | 'coverage_supplement';
+    lexicalRank?: number;
+    mergedRank?: number;
+    rerankedRank?: number;
+    finalRank?: number;
+    lexicalScore?: number;
+    mergedScore?: number;
+    rerankedScore?: number;
+    finalScore?: number;
+    changeReason: string;
 }
 
 /**

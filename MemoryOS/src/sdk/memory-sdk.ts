@@ -578,7 +578,10 @@ export class MemorySDKImpl {
                 return this.takeoverService.previewEstimate(config);
             },
             previewActualTakeoverPayload: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPayloadPreview> => {
-                return this.takeoverService.previewActualTakeoverPayload(config);
+                return this.takeoverService.previewActualTakeoverPayload(
+                    config,
+                    await this.readTakeoverExistingKnownEntities(),
+                );
             },
             createTakeoverPlan: async (config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> => {
                 return this.takeoverService.createPlanSnapshot(await this.readCurrentSummaryFloorCount(), config);

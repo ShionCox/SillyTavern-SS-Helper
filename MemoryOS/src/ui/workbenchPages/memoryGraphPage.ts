@@ -316,7 +316,7 @@ function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graph: WorkbenchMe
             </div>
             <div class="stx-memory-graph-detail__chip-row">
                 ${buildGraphChipMarkup(resolveTypeLabel(node.type), 'fa-solid fa-cubes', color)}
-                ${node.status ? buildGraphChipMarkup(node.status, 'fa-solid fa-signal', '#93c5fd') : ''}
+                ${node.status ? buildGraphChipMarkup(resolveMemoryGraphFieldValue(node.status), 'fa-solid fa-signal', '#93c5fd') : ''}
                 ${node.placeholder ? buildGraphChipMarkup(resolveMemoryGraphText('unresolved'), 'fa-solid fa-triangle-exclamation', '#fca5a5') : ''}
             </div>
         </div>
@@ -495,9 +495,7 @@ function renderSections(
     graphMode: MemoryGraphMode,
     currentNodeId?: string,
 ): string {
-    const jumpButtonLabel = resolveMemoryGraphText('jump_to_node') === 'jump_to_node'
-        ? '跳转并聚焦节点'
-        : resolveMemoryGraphText('jump_to_node');
+    const jumpButtonLabel = resolveMemoryGraphText('jump_to_node');
     return sections
         .filter((section: WorkbenchMemoryGraphSection): boolean => isVisibleInMode(section.visibleInModes, graphMode))
         .map((section: WorkbenchMemoryGraphSection): string => {

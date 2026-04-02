@@ -47,6 +47,7 @@ export { resolveEntriesWorkbenchText } from './entriesLocale';
 export { resolveActorsWorkbenchText } from './actorsWorkbenchLocale';
 export { resolvePreviewWorkbenchText } from './previewWorkbenchLocale';
 export { resolveTakeoverWorkbenchText } from './takeoverWorkbenchLocale';
+export { resolveVectorWorkbenchText } from './vectorWorkbenchLocale';
 export {
     resolveContentLabKindLabel,
     resolveContentLabReasonCodeLabel,

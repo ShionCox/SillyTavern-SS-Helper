@@ -5,9 +5,9 @@
 
 import type { ContentBlockKind } from '../config/content-tag-registry';
 import {
+    getContentClassificationRuntimeSnapshot,
     lookupTagPolicy,
-    getUnknownTagPolicy,
-    getClassifierToggles,
+    type ContentClassificationRuntimeSnapshot,
 } from '../config/content-tag-registry';
 import type { ParsedContentBlock } from './content-block-parser';
 
@@ -48,6 +48,21 @@ const DIALOGUE_KEYWORDS = /["""''「」]|说道|问道|低声|开口|答道|回�
  * @returns 分类后的内容块。
  */
 export function classifyContentBlock(block: ParsedContentBlock, role: string): ClassifiedContentBlock {
+    return classifyContentBlockWithRuntime(block, role, getContentClassificationRuntimeSnapshot());
+}
+
+/**
+ * 功能：使用已缓存的运行时快照对单个内容块做分类。
+ * @param block 解析后的内容块。
+ * @param role 消息角色。
+ * @param runtime 分类器运行时快照。
+ * @returns 分类后的内容块。
+ */
+function classifyContentBlockWithRuntime(
+    block: ParsedContentBlock,
+    role: string,
+    runtime: ContentClassificationRuntimeSnapshot,
+): ClassifiedContentBlock {
     const reasonCodes: string[] = [];
 
     /** 1. 先走标签注册表 */
@@ -66,7 +81,7 @@ export function classifyContentBlock(block: ParsedContentBlock, role: string): C
             };
         }
         /** 有标签但未命中注册表 → 走未知标签策略 */
-        const unknownPolicy = getUnknownTagPolicy();
+        const unknownPolicy = runtime.unknownTagPolicy;
         reasonCodes.push('unknown_tag', `tag:${block.rawTagName}`);
         return {
             ...block,
@@ -80,7 +95,7 @@ export function classifyContentBlock(block: ParsedContentBlock, role: string): C
     }
 
     /** 2. 无标签文本 → 走规则分类器 */
-    const toggles = getClassifierToggles();
+    const toggles = runtime.classifierToggles;
     const text = block.rawText;
 
     if (toggles.enableToolArtifactDetection && TOOL_KEYWORDS.test(text)) {
@@ -158,5 +173,6 @@ export function classifyContentBlock(block: ParsedContentBlock, role: string): C
  * @returns 分类后的内容块列表。
  */
 export function classifyContentBlocks(blocks: ParsedContentBlock[], role: string): ClassifiedContentBlock[] {
-    return blocks.map((block) => classifyContentBlock(block, role));
+    const runtime = getContentClassificationRuntimeSnapshot();
+    return blocks.map((block) => classifyContentBlockWithRuntime(block, role, runtime));
 }
