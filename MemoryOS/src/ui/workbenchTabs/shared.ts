@@ -146,7 +146,6 @@ export interface WorkbenchState {
     selectedActorKey: string;
     entryQuery: string;
     previewQuery: string;
-    previewLoading: boolean;
     previewTabLoaded: boolean;
     previewTabLoading: boolean;
     bindEntryId: string;
@@ -216,12 +215,10 @@ export interface WorkbenchSnapshot {
     roleMemories: RoleEntryMemory[];
     summaries: SummarySnapshot[];
     preview: PromptAssemblySnapshot | null;
-    previewLoaded: boolean;
     worldProfileBinding: WorldProfileBinding | null;
     mutationHistory: MemoryMutationHistoryRecord[];
     entryAuditRecords: MemoryEntryAuditRecord[];
     recallExplanation: WorkbenchRecallExplanation | null;
-    recallExplanationLoaded: boolean;
     actorGraph: WorkbenchActorGraph;
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
     takeoverProgress: MemoryTakeoverProgressSnapshot | null;

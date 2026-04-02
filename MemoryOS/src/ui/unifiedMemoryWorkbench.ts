@@ -285,7 +285,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         selectedActorKey: '',
         entryQuery: '',
         previewQuery: '',
-        previewLoading: false,
         previewTabLoaded: false,
         previewTabLoading: false,
         bindEntryId: '',
@@ -450,12 +449,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             roleMemories,
             summaries,
             preview: previewCache,
-            previewLoaded: state.previewTabLoaded,
             worldProfileBinding,
             mutationHistory,
             entryAuditRecords,
             recallExplanation: previewRecallExplanationCache,
-            recallExplanationLoaded: state.previewTabLoaded,
             actorGraph: buildActorGraph(actors, relationships, entries),
             memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
             takeoverProgress,
@@ -1369,11 +1366,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      */
     const refreshPreviewSnapshot = async (): Promise<void> => {
         if (state.currentView !== 'preview') {
-            state.previewLoading = false;
             state.previewTabLoading = false;
             return;
         }
-        state.previewLoading = true;
         state.previewTabLoading = true;
         try {
             const [preview, recallExplanation] = await Promise.all([
@@ -1387,7 +1382,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             logger.error('加载诊断中心预览失败', error);
             toast.error(`诊断加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
-            state.previewLoading = false;
             state.previewTabLoading = false;
             if (state.currentView === 'preview') {
                 await render();
@@ -1564,7 +1558,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 异步完成。
      */
     const loadDeferredTabData = async (view: WorkbenchView): Promise<void> => {
-        if (view === 'preview' && !state.previewTabLoaded && !state.previewTabLoading && !state.previewLoading) {
+        if (view === 'preview' && !state.previewTabLoaded && !state.previewTabLoading) {
             await refreshPreviewSnapshot();
             return;
         }

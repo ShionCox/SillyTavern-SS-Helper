@@ -77,8 +77,8 @@ type EntryUpdateRecord = {
  * @returns 页面 HTML。
  */
 export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
-    const previewNotReady = !snapshot.previewLoaded && !snapshot.recallExplanationLoaded;
-    const previewLoading = state.previewTabLoading || (state.previewLoading && !snapshot.preview);
+    const previewNotReady = !state.previewTabLoaded;
+    const previewLoading = state.previewTabLoading;
     const entryUpdateCards = buildEntryUpdateCards(snapshot);
     const previewDiagnostics = snapshot.preview?.diagnostics ?? null;
     const currentTraceRecords = previewDiagnostics?.traceRecords ?? [];
@@ -101,7 +101,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     </button>
                 </div>
             </div>
-            ${previewNotReady ? `
+            ${previewNotReady && !previewLoading ? `
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__empty">进入本页后将按需加载诊断快照与最近注入说明。</div>
                 </div>

@@ -237,6 +237,7 @@ function insertManagedSystemMessageEvent(
   template: TavernMessageEvent | undefined
 ): TavernMessageEvent {
   return insertSdkTavernPromptSystemMessageEvent(chat, {
+    role: "system",
     insertMode: "before_index",
     insertBeforeIndex,
     template,
