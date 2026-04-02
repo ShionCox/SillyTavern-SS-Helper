@@ -323,7 +323,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         vectorTopKTest: String(settings.vectorTopK),
         vectorDeepWindowTest: String(settings.vectorDeepWindow),
         vectorFinalTopKTest: String(settings.vectorFinalTopK),
-        vectorLoading: false,
         vectorTabLoaded: false,
         vectorTabLoading: false,
         vectorTestRunning: false,
@@ -336,7 +335,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         contentLabPreviewLoading: false,
         contentLabTabLoaded: false,
         contentLabTabLoading: false,
-        contentLabRawText: '',
         contentLabBlocks: [],
         contentLabPrimaryPreview: '',
         contentLabHintPreview: '',
@@ -465,12 +463,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             contentLabSnapshot: buildContentLabSnapshot(),
         };
     };
-
-    /**
-     * 功能：读取当前渲染所需快照。
-     * @returns 工作台快照。
-     */
-    const loadSnapshot = async (): Promise<WorkbenchSnapshot> => loadCoreSnapshot();
 
     /**
      * 功能：保证当前选择始终有效。
@@ -937,7 +929,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     });
                     contentLabPreviewFloor = record;
                     state.contentLabBlocks = record.parsedBlocks;
-                    state.contentLabRawText = record.originalText;
                     const channels = assembleContentChannels([record]);
                     state.contentLabPrimaryPreview = channels.primaryText;
                     state.contentLabHintPreview = channels.hintText;
@@ -975,7 +966,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor))
                         ?? records[0];
                     state.contentLabBlocks = contentLabPreviewFloor?.parsedBlocks ?? [];
-                    state.contentLabRawText = contentLabPreviewFloor?.originalText ?? '';
                     state.contentLabPrimaryPreview = channels.primaryText;
                     state.contentLabHintPreview = channels.hintText;
                     state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
@@ -1628,7 +1618,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const preservedWorldEntityListScrollTop = worldEntityList?.scrollTop ?? 0;
         const vectorDocList = root.querySelector('[data-vector-doc-list-scroll="true"]') as HTMLElement | null;
         const preservedVectorDocListScrollTop = vectorDocList?.scrollTop ?? 0;
-        const snapshot = await loadSnapshot();
+        const snapshot = await loadCoreSnapshot();
         normalizeSelection(snapshot);
         destroyMemoryGraphPage();
         root.innerHTML = buildWorkbenchMarkup(snapshot, state);

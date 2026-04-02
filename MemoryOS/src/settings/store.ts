@@ -58,8 +58,6 @@ export type MemoryOSSettings = {
     retrievalEnableGraphExpansion: boolean;
     /** 是否启用图扩展热点降权 */
     retrievalEnableGraphPenalty: boolean;
-    /** 是否启用 QueryContextBuilder */
-    retrievalEnableQueryContextBuilder: boolean;
     /** 向量检索 topK */
     vectorTopK: number;
     /** 向量深路径候选窗口 */
@@ -144,7 +142,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalEnablePayloadFilter: true,
     retrievalEnableGraphExpansion: true,
     retrievalEnableGraphPenalty: true,
-    retrievalEnableQueryContextBuilder: false,
     vectorTopK: 5,
     vectorDeepWindow: 25,
     vectorFinalTopK: 5,
@@ -171,11 +168,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
  */
 export function resolveRetrievalEnableQueryContextBuilder(
     retrievalMode: RetrievalMode,
-    explicitFlag?: boolean,
 ): boolean {
-    if (explicitFlag === true) {
-        return true;
-    }
     return retrievalMode === 'vector_only' || retrievalMode === 'hybrid';
 }
 
@@ -367,10 +360,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         retrievalEnablePayloadFilter: candidate.retrievalEnablePayloadFilter !== false,
         retrievalEnableGraphExpansion: candidate.retrievalEnableGraphExpansion !== false,
         retrievalEnableGraphPenalty: candidate.retrievalEnableGraphPenalty !== false,
-        retrievalEnableQueryContextBuilder: resolveRetrievalEnableQueryContextBuilder(
-            retrievalMode,
-            candidate.retrievalEnableQueryContextBuilder === true,
-        ),
         vectorTopK,
         vectorDeepWindow,
         vectorFinalTopK,

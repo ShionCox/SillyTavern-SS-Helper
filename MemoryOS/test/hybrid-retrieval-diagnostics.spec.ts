@@ -24,7 +24,6 @@ function buildSettings(overrides: Record<string, unknown> = {}): Record<string, 
         retrievalEnablePayloadFilter: false,
         retrievalEnableGraphExpansion: true,
         retrievalEnableGraphPenalty: true,
-        retrievalEnableQueryContextBuilder: false,
         retrievalRulePack: 'hybrid',
         contextMaxTokens: 1200,
         vectorTopK: 3,
@@ -197,7 +196,6 @@ describe('MemoryRetrievalService final provider semantics', () => {
     it('hybrid 模式下即使设置值为 false 也会默认构建 QueryContextBundle', async () => {
         mockedReadMemoryOSSettings.mockReturnValue(buildSettings({
             retrievalMode: 'hybrid',
-            retrievalEnableQueryContextBuilder: false,
         }));
 
         const orchestratorResult: RetrievalOrchestratorResult = {

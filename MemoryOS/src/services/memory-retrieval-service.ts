@@ -109,10 +109,7 @@ export class MemoryRetrievalService {
         let hybridRerankSource: 'none' | 'rule' | 'llmhub' = 'none';
 
         if (needsVectorChain && this.hybridService) {
-            const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(
-                config.retrievalMode,
-                settings.retrievalEnableQueryContextBuilder,
-            );
+            const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(config.retrievalMode);
             const queryContext = enableQueryContextBuilder
                 ? buildQueryContextBundle({
                     query: input.query,

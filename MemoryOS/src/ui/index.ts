@@ -51,7 +51,6 @@ const RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID = 'stx-memoryos-retrieval-default-expand
 const RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID = 'stx-memoryos-retrieval-enable-payload-filter';
 const RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID = 'stx-memoryos-retrieval-enable-graph-expansion';
 const RETRIEVAL_ENABLE_GRAPH_PENALTY_ID = 'stx-memoryos-retrieval-enable-graph-penalty';
-const RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID = 'stx-memoryos-retrieval-enable-query-context-builder';
 const RETRIEVAL_LOG_ENABLED_ID = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID = 'stx-memoryos-retrieval-log-level';
@@ -237,7 +236,6 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展</div><div class="stx-ui-item-desc">控制是否沿关系图扩散种子节点，把相关上下文一起召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, '启用图扩展')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 QueryContextBuilder</div><div class="stx-ui-item-desc">预留：为后续 embedding 查询构造统一上下文输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, '启用 QueryContextBuilder')}</div></div>
             ${divider('向量检索')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用写入自动建索引</div><div class="stx-ui-item-desc">写入条目、关系、角色和总结后立即刷新向量文档，不再依赖当前检索模式。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_AUTO_INDEX_ON_WRITE_ID, '启用写入自动建索引')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量策略路由</div><div class="stx-ui-item-desc">根据查询复杂度决定走快路径还是深路径，并使用不同候选窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_STRATEGY_ROUTING_ID, '启用向量策略路由')}</div></div>
@@ -364,7 +362,6 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, settings.retrievalEnablePayloadFilter],
         [RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, settings.retrievalEnableGraphExpansion],
         [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, settings.retrievalEnableGraphPenalty],
-        [RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, settings.retrievalEnableQueryContextBuilder],
         [VECTOR_TOPK_ID, String(settings.vectorTopK)],
         [VECTOR_DEEP_WINDOW_ID, String(settings.vectorDeepWindow)],
         [VECTOR_FINAL_TOPK_ID, String(settings.vectorFinalTopK)],
@@ -436,7 +433,6 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         retrievalEnablePayloadFilter: checked(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnablePayloadFilter),
         retrievalEnableGraphExpansion: checked(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphExpansion),
         retrievalEnableGraphPenalty: checked(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphPenalty),
-        retrievalEnableQueryContextBuilder: checked(RETRIEVAL_ENABLE_QUERY_CONTEXT_BUILDER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableQueryContextBuilder),
         vectorTopK: Number(text(VECTOR_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorTopK))),
         vectorDeepWindow: Number(text(VECTOR_DEEP_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorDeepWindow))),
         vectorFinalTopK: Number(text(VECTOR_FINAL_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorFinalTopK))),

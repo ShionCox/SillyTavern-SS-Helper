@@ -184,7 +184,6 @@ export interface WorkbenchState {
     vectorTopKTest: string;
     vectorDeepWindowTest: string;
     vectorFinalTopKTest: string;
-    vectorLoading: boolean;
     vectorTabLoaded: boolean;
     vectorTabLoading: boolean;
     vectorTestRunning: boolean;
@@ -197,7 +196,6 @@ export interface WorkbenchState {
     contentLabPreviewLoading: boolean;
     contentLabTabLoaded: boolean;
     contentLabTabLoading: boolean;
-    contentLabRawText: string;
     contentLabBlocks: import('../../memory-takeover/content-block-classifier').ClassifiedContentBlock[];
     contentLabPrimaryPreview: string;
     contentLabHintPreview: string;

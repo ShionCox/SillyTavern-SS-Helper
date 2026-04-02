@@ -175,6 +175,7 @@ export class TakeoverService {
         const records = await this.previewFloorRangeContentBlocks({
             startFloor: floor,
             endFloor: floor,
+            previewSourceMode: input.previewSourceMode,
             llm: input.llm,
             pluginId: input.pluginId,
         });

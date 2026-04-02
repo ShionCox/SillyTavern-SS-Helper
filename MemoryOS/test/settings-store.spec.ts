@@ -26,26 +26,9 @@ describe('normalizeMemoryOSSettings', () => {
         expect(tooLarge.summarySecondStageCandidateSummaryMaxChars).toBe(10000);
     });
 
-    it('在向量模式下默认启用 QueryContextBuilder', () => {
-        const hybridSettings = normalizeMemoryOSSettings({
-            retrievalMode: 'hybrid',
-        });
-        const vectorSettings = normalizeMemoryOSSettings({
-            retrievalMode: 'vector_only',
-        });
-        const lexicalSettings = normalizeMemoryOSSettings({
-            retrievalMode: 'lexical_only',
-        });
-
-        expect(hybridSettings.retrievalEnableQueryContextBuilder).toBe(true);
-        expect(vectorSettings.retrievalEnableQueryContextBuilder).toBe(true);
-        expect(lexicalSettings.retrievalEnableQueryContextBuilder).toBe(false);
-    });
-
     it('QueryContextBuilder helper 会按检索模式回落默认值', () => {
-        expect(resolveRetrievalEnableQueryContextBuilder('lexical_only', false)).toBe(false);
-        expect(resolveRetrievalEnableQueryContextBuilder('hybrid', false)).toBe(true);
-        expect(resolveRetrievalEnableQueryContextBuilder('vector_only', false)).toBe(true);
-        expect(resolveRetrievalEnableQueryContextBuilder('lexical_only', true)).toBe(true);
+        expect(resolveRetrievalEnableQueryContextBuilder('lexical_only')).toBe(false);
+        expect(resolveRetrievalEnableQueryContextBuilder('hybrid')).toBe(true);
+        expect(resolveRetrievalEnableQueryContextBuilder('vector_only')).toBe(true);
     });
 });
