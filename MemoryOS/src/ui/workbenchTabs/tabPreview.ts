@@ -77,6 +77,8 @@ type EntryUpdateRecord = {
  * @returns 页面 HTML。
  */
 export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
+    const previewNotReady = !snapshot.previewLoaded && !snapshot.recallExplanationLoaded;
+    const previewLoading = state.previewTabLoading || (state.previewLoading && !snapshot.preview);
     const entryUpdateCards = buildEntryUpdateCards(snapshot);
     const previewDiagnostics = snapshot.preview?.diagnostics ?? null;
     const currentTraceRecords = previewDiagnostics?.traceRecords ?? [];
@@ -99,11 +101,17 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     </button>
                 </div>
             </div>
-            ${state.previewLoading && !snapshot.preview ? `
+            ${previewNotReady ? `
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">进入本页后将按需加载诊断快照与最近注入说明。</div>
+                </div>
+            ` : ''}
+            ${previewLoading ? `
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__empty">正在加载诊断快照...</div>
                 </div>
             ` : ''}
+            ${previewNotReady || previewLoading ? '' : `
             <div class="stx-memory-workbench__diagnostics">
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('basic_info'))}</div>
@@ -228,6 +236,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     </div>
                 </div>
             </div>
+            `}
         </section>
     `;
 }

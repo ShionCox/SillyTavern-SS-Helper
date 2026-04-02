@@ -101,18 +101,21 @@ export async function assembleTakeoverBatchPromptAssembly(input: {
         });
     }
     const channels = assembleContentChannels(floorRecords);
-    const extractionMessages: MemoryTakeoverMessageSlice[] = floorRecords.map((floor: RawFloorRecord) => ({
-        floor: floor.floor,
-        sourceFloor: floor.sourceFloor ?? floor.floor,
-        role: floor.originalRole as 'user' | 'assistant' | 'system',
-        name: input.messages.find((message: MemoryTakeoverMessageSlice) => message.floor === floor.floor)?.name ?? '',
-        content: (
-            floor.parsedBlocks
+    const messageNameMap = new Map(
+        input.messages.map((message: MemoryTakeoverMessageSlice): [number, string] => [message.floor, message.name ?? '']),
+    );
+    const extractionMessages: MemoryTakeoverMessageSlice[] = floorRecords
+        .filter((floor: RawFloorRecord): boolean => floor.hasPrimaryStory)
+        .map((floor: RawFloorRecord) => ({
+            floor: floor.floor,
+            sourceFloor: floor.sourceFloor ?? floor.floor,
+            role: floor.originalRole as 'user' | 'assistant' | 'system',
+            name: messageNameMap.get(floor.floor) ?? '',
+            content: floor.parsedBlocks
                 .filter((block) => block.includeInPrimaryExtraction)
                 .map((block) => block.rawText)
-                .join('\n\n')
-        ) || '（本层没有可纳入主正文的内容，详见 floorManifest 与 hintContext）',
-    }));
+                .join('\n\n'),
+        }));
     const sourceSegments = floorRecords.flatMap((floor: RawFloorRecord) =>
         floor.parsedBlocks.map((block) => ({
             kind: block.resolvedKind === 'story_primary' ? 'story_narrative' as const

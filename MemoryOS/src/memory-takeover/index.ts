@@ -23,7 +23,7 @@ export { runTakeoverScheduler, buildProgressSnapshot } from './takeover-schedule
 export { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
 export { buildTakeoverPreviewEstimate, estimateChatMessageTokens, TAKEOVER_TOKEN_WARNING_THRESHOLD } from './takeover-preview';
 export { buildTakeoverStructuredTaskRequest } from './takeover-llm';
-export { buildFloorRecord, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
+export { buildFloorRecord, assembleContentChannels, type ContentPreviewSourceMode, type RawFloorRecord } from './content-block-pipeline';
 export { buildFloorRecords } from './content-block-pipeline';
 export { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
 export { runTakeoverRepairService } from './takeover-repair-service';

@@ -22,6 +22,7 @@ function buildSettings(overrides: Record<string, unknown> = {}): Record<string, 
         retrievalDefaultTopK: 10,
         retrievalDefaultExpandDepth: 1,
         retrievalEnablePayloadFilter: false,
+        retrievalEnableGraphExpansion: true,
         retrievalEnableGraphPenalty: true,
         retrievalEnableQueryContextBuilder: false,
         retrievalRulePack: 'hybrid',
@@ -191,5 +192,83 @@ describe('MemoryRetrievalService final provider semantics', () => {
         expect(output.diagnostics.vectorHitCount).toBe(1);
         expect(output.diagnostics.mergeUsed).toBe(true);
         expect(output.diagnostics.rerankSource).toBe('rule');
+    });
+
+    it('hybrid 模式下即使设置值为 false 也会默认构建 QueryContextBundle', async () => {
+        mockedReadMemoryOSSettings.mockReturnValue(buildSettings({
+            retrievalMode: 'hybrid',
+            retrievalEnableQueryContextBuilder: false,
+        }));
+
+        const orchestratorResult: RetrievalOrchestratorResult = {
+            providerId: 'lexical_bm25',
+            contextRoute: {
+                facets: ['actor', 'relationship', 'world'],
+                entityAnchors: {
+                    actorKeys: ['queen'],
+                    relationKeys: ['law'],
+                    worldKeys: ['capital'],
+                },
+                topicHints: [],
+                confidence: 0.8,
+            },
+            items: [],
+            diagnostics: {
+                contextRoute: null,
+                retrievalMode: 'hybrid',
+                seedProviderId: 'lexical_bm25',
+                seedCount: 1,
+                expandedCount: 1,
+                coverageTriggeredFacets: [],
+                diversityDroppedCount: 0,
+                finalCount: 0,
+                seedQueryText: '测试查询',
+                boostSchemaIds: [],
+                coverageSubQueries: {},
+                traceRecords: [],
+                vectorProviderAvailable: false,
+                vectorUnavailableReason: '向量链已迁移至 HybridRetrievalService',
+            } as RetrievalOutputDiagnostics,
+        };
+
+        const retrievalService = new MemoryRetrievalService({
+            retrieve: vi.fn(async () => orchestratorResult),
+            isVectorProviderAvailable: vi.fn(() => false),
+            getVectorUnavailableReason: vi.fn(() => '向量链已迁移至 HybridRetrievalService'),
+        } as unknown as ConstructorParameters<typeof MemoryRetrievalService>[0]);
+
+        const hybridSearch = vi.fn(async (input: Record<string, unknown>) => ({
+            items: [],
+            strategyDecision: null,
+            finalProviderId: 'hybrid_vector',
+            vectorHits: [],
+            mergeUsed: false,
+            rerankUsed: false,
+            rerankReasonCodes: [],
+            rerankSource: 'none',
+            vectorAvailable: true,
+            vectorUnavailableReason: null,
+            echoQueryContext: input.queryContext,
+        }));
+
+        retrievalService.setHybridService({
+            search: hybridSearch,
+        } as unknown as HybridRetrievalService);
+
+        await retrievalService.searchHybrid({
+            query: '测试查询',
+            chatKey: 'chat-1',
+            candidates: buildCandidates(),
+        });
+
+        expect(hybridSearch).toHaveBeenCalledTimes(1);
+        expect(hybridSearch.mock.calls[0]?.[0]).toMatchObject({
+            queryContext: {
+                queryText: '测试查询',
+                actorBiasKeys: ['queen'],
+                relationBiasKeys: ['law'],
+                worldBiasKeys: ['capital'],
+            },
+        });
     });
 });

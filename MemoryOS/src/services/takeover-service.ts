@@ -34,6 +34,7 @@ import {
     buildFloorRecords,
     classifyFloorRecordsWithAI,
     sliceTakeoverMessages,
+    type ContentPreviewSourceMode,
     type RawFloorRecord,
 } from '../memory-takeover';
 import type {
@@ -96,6 +97,7 @@ export interface TakeoverRetryExecutionInput extends Omit<TakeoverSchedulerExecu
  */
 export interface ContentLabFloorPreviewInput {
     floor: number;
+    previewSourceMode?: ContentPreviewSourceMode;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
@@ -106,6 +108,7 @@ export interface ContentLabFloorPreviewInput {
 export interface ContentLabRangePreviewInput {
     startFloor: number;
     endFloor: number;
+    previewSourceMode?: ContentPreviewSourceMode;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
@@ -190,12 +193,15 @@ export class TakeoverService {
     async previewFloorRangeContentBlocks(input: ContentLabRangePreviewInput): Promise<RawFloorRecord[]> {
         const settings = await this.readContentLabSettings();
         const sourceBundle = collectTakeoverSourceBundle();
+        const previewSourceMode: ContentPreviewSourceMode = input.previewSourceMode === 'raw_visible_text'
+            ? 'raw_visible_text'
+            : 'content';
         const range = {
             startFloor: Math.max(1, Math.trunc(Number(input.startFloor) || 1)),
             endFloor: Math.max(Math.trunc(Number(input.startFloor) || 1), Math.trunc(Number(input.endFloor) || Number(input.startFloor) || 1)),
         };
         const messages = sliceTakeoverMessages(sourceBundle, range);
-        let records = buildFloorRecords(messages);
+        let records = buildFloorRecords(messages, previewSourceMode);
         if (settings.enableAIClassifier) {
             records = await classifyFloorRecordsWithAI({
                 llm: input.llm ?? readMemoryLLMApi(),

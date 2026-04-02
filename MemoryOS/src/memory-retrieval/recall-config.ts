@@ -18,6 +18,8 @@ export type RecallConfig = {
     enableHybridText: boolean;
     /** 是否启用图扩展 */
     enableGraphExpansion: boolean;
+    /** 是否启用图扩展热点降权 */
+    enableGraphPenalty: boolean;
     /** 是否启用多样性裁剪 */
     enableDiversity: boolean;
     /** 候选预过滤 */
@@ -44,6 +46,7 @@ export function buildDefaultRecallConfig(): RecallConfig {
         expandDepth: 1,
         enableHybridText: true,
         enableGraphExpansion: true,
+        enableGraphPenalty: true,
         enableDiversity: true,
     };
 }
@@ -68,6 +71,7 @@ export function mergeRecallConfig(
         expandDepth: overrides.expandDepth ?? base.expandDepth,
         enableHybridText: overrides.enableHybridText ?? base.enableHybridText,
         enableGraphExpansion: overrides.enableGraphExpansion ?? base.enableGraphExpansion,
+        enableGraphPenalty: overrides.enableGraphPenalty ?? base.enableGraphPenalty,
         enableDiversity: overrides.enableDiversity ?? base.enableDiversity,
         payloadFilter: overrides.payloadFilter ?? base.payloadFilter,
         actorScope: overrides.actorScope ?? base.actorScope,

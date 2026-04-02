@@ -17,6 +17,11 @@ export type ContentBlockKind =
     | 'unknown';
 
 /**
+ * 功能：定义标签模式匹配方式。
+ */
+export type ContentTagPatternMode = 'prefix' | 'regex';
+
+/**
  * 功能：定义单条内容标签策略。
  */
 export interface ContentBlockPolicy {
@@ -24,6 +29,12 @@ export interface ContentBlockPolicy {
     tagName: string;
     /** 标签名别名列表 */
     aliases: string[];
+    /** 模式匹配文本 */
+    pattern?: string;
+    /** 模式匹配方式 */
+    patternMode?: ContentTagPatternMode;
+    /** 多规则命中时的优先级 */
+    priority?: number;
     /** 内容块分类 */
     kind: ContentBlockKind;
     /** 是否参与主正文抽取 */
@@ -65,6 +76,9 @@ export const DEFAULT_CONTENT_TAG_REGISTRY: ContentBlockPolicy[] = [
     {
         tagName: 'summary',
         aliases: ['recap', 'memo'],
+        pattern: '^summary(?:[-_].+)?$',
+        patternMode: 'regex',
+        priority: 80,
         kind: 'summary',
         includeInPrimaryExtraction: false,
         includeAsHint: true,
@@ -75,6 +89,9 @@ export const DEFAULT_CONTENT_TAG_REGISTRY: ContentBlockPolicy[] = [
     {
         tagName: 'tableEdit',
         aliases: ['sheetEdit', 'dbPatch'],
+        pattern: 'tableedit',
+        patternMode: 'prefix',
+        priority: 90,
         kind: 'tool_artifact',
         includeInPrimaryExtraction: false,
         includeAsHint: true,
@@ -95,6 +112,9 @@ export const DEFAULT_CONTENT_TAG_REGISTRY: ContentBlockPolicy[] = [
     {
         tagName: 'think',
         aliases: ['think_nya~', 'analysis', 'plan', 'thinking'],
+        pattern: '^think(?:[_~-].+|\\d+.*)?$',
+        patternMode: 'regex',
+        priority: 90,
         kind: 'thought',
         includeInPrimaryExtraction: false,
         includeAsHint: false,
@@ -273,12 +293,38 @@ export function lookupTagPolicy(tagName: string): ContentBlockPolicy | undefined
     if (!normalized) {
         return undefined;
     }
-    return getContentTagRegistry().find((policy) => {
-        if (policy.tagName.toLowerCase() === normalized) {
-            return true;
+    const matches = getContentTagRegistry()
+        .map((policy, index) => {
+            const match = resolvePolicyMatch(policy, normalized);
+            if (!match) {
+                return null;
+            }
+            return {
+                policy,
+                index,
+                priority: Number.isFinite(policy.priority) ? Number(policy.priority) : 0,
+                specificity: match,
+            };
+        })
+        .filter(Boolean) as Array<{
+            policy: ContentBlockPolicy;
+            index: number;
+            priority: number;
+            specificity: number;
+        }>;
+    if (matches.length === 0) {
+        return undefined;
+    }
+    matches.sort((left, right) => {
+        if (right.priority !== left.priority) {
+            return right.priority - left.priority;
         }
-        return policy.aliases.some((alias) => alias.toLowerCase() === normalized);
+        if (right.specificity !== left.specificity) {
+            return right.specificity - left.specificity;
+        }
+        return left.index - right.index;
     });
+    return matches[0]?.policy;
 }
 
 /**
@@ -292,6 +338,9 @@ export function normalizeContentLabSettings(settings: Partial<ContentLabSettings
         ? source.tagRegistry.map((rule: ContentBlockPolicy): ContentBlockPolicy => ({
             tagName: String(rule.tagName ?? '').trim(),
             aliases: Array.isArray(rule.aliases) ? rule.aliases.map((alias: string): string => String(alias ?? '').trim()).filter(Boolean) : [],
+            pattern: String(rule.pattern ?? '').trim() || undefined,
+            patternMode: normalizePatternMode(rule.patternMode),
+            priority: normalizePriority(rule.priority),
             kind: rule.kind ?? 'unknown',
             includeInPrimaryExtraction: rule.includeInPrimaryExtraction === true,
             includeAsHint: rule.includeAsHint === true,
@@ -325,9 +374,63 @@ function cloneContentLabSettings(settings: ContentLabSettings): ContentLabSettin
         tagRegistry: settings.tagRegistry.map((rule: ContentBlockPolicy): ContentBlockPolicy => ({
             ...rule,
             aliases: [...rule.aliases],
+            pattern: String(rule.pattern ?? '').trim() || undefined,
+            patternMode: normalizePatternMode(rule.patternMode),
+            priority: normalizePriority(rule.priority),
         })),
         unknownTagPolicy: { ...settings.unknownTagPolicy },
         classifierToggles: { ...settings.classifierToggles },
         enableAIClassifier: settings.enableAIClassifier,
     };
+}
+
+/**
+ * 功能：解析单条策略对标签的命中强度。
+ * @param policy 标签策略。
+ * @param normalizedTag 已归一化标签。
+ * @returns 命中强度；未命中时返回 0。
+ */
+function resolvePolicyMatch(policy: ContentBlockPolicy, normalizedTag: string): number {
+    if (String(policy.tagName ?? '').trim().toLowerCase() === normalizedTag) {
+        return 400;
+    }
+    if (policy.aliases.some((alias) => String(alias ?? '').trim().toLowerCase() === normalizedTag)) {
+        return 300;
+    }
+    const pattern = String(policy.pattern ?? '').trim();
+    if (!pattern) {
+        return 0;
+    }
+    const patternMode = normalizePatternMode(policy.patternMode);
+    if (patternMode === 'prefix') {
+        return normalizedTag.startsWith(pattern.toLowerCase()) ? 200 : 0;
+    }
+    try {
+        return new RegExp(pattern, 'i').test(normalizedTag) ? 100 : 0;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * 功能：归一化模式匹配方式。
+ * @param value 原始值。
+ * @returns 规范后的模式。
+ */
+function normalizePatternMode(value: unknown): ContentTagPatternMode | undefined {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'prefix' || normalized === 'regex') {
+        return normalized;
+    }
+    return undefined;
+}
+
+/**
+ * 功能：归一化优先级。
+ * @param value 原始值。
+ * @returns 规范化优先级。
+ */
+function normalizePriority(value: unknown): number {
+    const priority = Math.trunc(Number(value));
+    return Number.isFinite(priority) ? priority : 0;
 }

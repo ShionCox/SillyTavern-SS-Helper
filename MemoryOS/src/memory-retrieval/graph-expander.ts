@@ -11,6 +11,7 @@ export interface GraphExpansionInput {
     allCandidates: RetrievalCandidate[];
     maxDepth?: number;
     decay?: number;
+    enableHubPenalty?: boolean;
     /** 可选语境路由，用于语境感知边权重调整 */
     contextRoute?: RetrievalContextRoute;
     onTrace?: (record: MemoryDebugLogRecord) => void;
@@ -88,7 +89,7 @@ function computeRawGraphBoost(seedScore: number, edgeWeight: number, decay: numb
  * @returns 合并种子与扩散结果后的列表和诊断信息。
  */
 export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResult {
-    const { seeds, allCandidates, maxDepth = 1, decay = 0.65, contextRoute, onTrace } = input;
+    const { seeds, allCandidates, maxDepth = 1, decay = 0.65, enableHubPenalty = true, contextRoute, onTrace } = input;
     if (seeds.length <= 0 || allCandidates.length <= 0) {
         return {
             items: seeds,
@@ -146,8 +147,8 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
                 }
                 const adjustedEdgeWeight = edge.edgeWeight * contextMultiplier;
                 const targetDegree = degreeMap.get(edge.targetId) ?? 0;
-                const hubPenalty = 1 / Math.sqrt(1 + targetDegree);
-                if (targetDegree >= 4) {
+                const hubPenalty = enableHubPenalty ? 1 / Math.sqrt(1 + targetDegree) : 1;
+                if (enableHubPenalty && targetDegree >= 4) {
                     hubPenaltyAppliedCount += 1;
                 }
                 const boost = computeRawGraphBoost(sourceItem.score, adjustedEdgeWeight, decay) * hubPenalty;
@@ -209,6 +210,10 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
     if (hubPenaltyAppliedCount > 0) {
         emitGraphTrace(onTrace, '中心惩罚', '检测到高中心度节点，已应用 hub penalty。', {
             hubPenaltyAppliedCount,
+        });
+    } else if (!enableHubPenalty) {
+        emitGraphTrace(onTrace, '中心惩罚关闭', '当前检索已关闭图扩展热点降权，Hub 节点不再额外降权。', {
+            enableHubPenalty,
         });
     }
     emitGraphTrace(onTrace, '扩散完成', `图扩散结束，本轮共新增 ${addedCount} 个非种子节点。`, {

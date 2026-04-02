@@ -20,6 +20,7 @@ import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../../types/vector-document';
 import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
+import type { ContentPreviewSourceMode, RawFloorRecord } from '../../memory-takeover/content-block-pipeline';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'content-lab';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
@@ -106,6 +107,7 @@ export interface WorkbenchVectorRuntimeStatus {
 }
 
 export interface WorkbenchVectorSnapshot extends WorkbenchVectorRuntimeStatus {
+    loaded: boolean;
     documentCount: number;
     readyCount: number;
     pendingCount: number;
@@ -145,6 +147,8 @@ export interface WorkbenchState {
     entryQuery: string;
     previewQuery: string;
     previewLoading: boolean;
+    previewTabLoaded: boolean;
+    previewTabLoading: boolean;
     bindEntryId: string;
     actorQuery: string;
     actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
@@ -181,13 +185,18 @@ export interface WorkbenchState {
     vectorDeepWindowTest: string;
     vectorFinalTopKTest: string;
     vectorLoading: boolean;
+    vectorTabLoaded: boolean;
+    vectorTabLoading: boolean;
     vectorTestRunning: boolean;
     vectorTestResult: WorkbenchVectorTestResult | null;
     vectorTestProgress: WorkbenchVectorTestProgress | null;
     contentLabStartFloor: string;
     contentLabEndFloor: string;
     contentLabSelectedFloor: string;
+    contentLabPreviewSourceMode: ContentPreviewSourceMode;
     contentLabPreviewLoading: boolean;
+    contentLabTabLoaded: boolean;
+    contentLabTabLoading: boolean;
     contentLabRawText: string;
     contentLabBlocks: import('../../memory-takeover/content-block-classifier').ClassifiedContentBlock[];
     contentLabPrimaryPreview: string;
@@ -209,18 +218,21 @@ export interface WorkbenchSnapshot {
     roleMemories: RoleEntryMemory[];
     summaries: SummarySnapshot[];
     preview: PromptAssemblySnapshot | null;
+    previewLoaded: boolean;
     worldProfileBinding: WorldProfileBinding | null;
     mutationHistory: MemoryMutationHistoryRecord[];
     entryAuditRecords: MemoryEntryAuditRecord[];
     recallExplanation: WorkbenchRecallExplanation | null;
+    recallExplanationLoaded: boolean;
     actorGraph: WorkbenchActorGraph;
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
     takeoverProgress: MemoryTakeoverProgressSnapshot | null;
     vectorSnapshot: WorkbenchVectorSnapshot;
     contentLabSnapshot: {
+        loaded: boolean;
         tagRegistry: import('../../config/content-tag-registry').ContentBlockPolicy[];
         availableFloors: Array<{ floor: number; role: string; charCount: number }>;
-        previewFloor?: import('../../memory-takeover/content-block-pipeline').RawFloorRecord;
+        previewFloor?: RawFloorRecord;
     };
 }
 

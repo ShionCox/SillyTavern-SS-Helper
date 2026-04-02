@@ -18,6 +18,21 @@ import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbo
  */
 export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const vectorSnapshot = snapshot.vectorSnapshot;
+    if (!vectorSnapshot.loaded) {
+        return `
+            <section class="stx-memory-workbench__view"${state.currentView !== 'vectors' ? ' hidden' : ''}>
+                <div class="stx-memory-workbench__view-head stx-vector-lab__hero">
+                    <div class="stx-vector-lab__hero-copy">
+                        <div class="stx-memory-workbench__section-title">向量实验室</div>
+                        <div class="stx-vector-lab__hero-subtitle">浏览向量资产、测试召回链路、执行索引维护。</div>
+                    </div>
+                </div>
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">${state.vectorTabLoading ? '正在加载向量运行时、文档与索引信息...' : '进入本页后将按需加载向量文档、索引和召回统计。'}</div>
+                </div>
+            </section>
+        `;
+    }
     const sourceKindOptions = buildSelectOptions(
         ['all', ...Array.from(new Set(vectorSnapshot.documents.map((doc) => doc.sourceKind)))],
         state.vectorSourceKindFilter,

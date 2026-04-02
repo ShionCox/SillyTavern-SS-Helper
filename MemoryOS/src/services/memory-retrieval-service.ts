@@ -6,7 +6,7 @@ import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { buildDefaultRecallConfig, mergeRecallConfig } from '../memory-retrieval/recall-config';
 import { applyPayloadFilter } from '../memory-retrieval/payload-filter';
 import { RetrievalOrchestrator } from '../memory-retrieval/retrieval-orchestrator';
-import { readMemoryOSSettings } from '../settings/store';
+import { readMemoryOSSettings, resolveRetrievalEnableQueryContextBuilder } from '../settings/store';
 import { HybridRetrievalService } from './hybrid-retrieval-service';
 import { buildQueryContextBundle } from './query-context-builder';
 
@@ -51,7 +51,8 @@ export class MemoryRetrievalService {
         baseConfig.retrievalMode = settings.retrievalMode;
         baseConfig.topK = settings.retrievalDefaultTopK;
         baseConfig.expandDepth = settings.retrievalDefaultExpandDepth;
-        baseConfig.enableGraphExpansion = settings.retrievalEnableGraphPenalty;
+        baseConfig.enableGraphExpansion = settings.retrievalEnableGraphExpansion;
+        baseConfig.enableGraphPenalty = settings.retrievalEnableGraphPenalty;
 
         const config = mergeRecallConfig(baseConfig, input.recallConfig);
 
@@ -108,7 +109,11 @@ export class MemoryRetrievalService {
         let hybridRerankSource: 'none' | 'rule' | 'llmhub' = 'none';
 
         if (needsVectorChain && this.hybridService) {
-            const queryContext = settings.retrievalEnableQueryContextBuilder
+            const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(
+                config.retrievalMode,
+                settings.retrievalEnableQueryContextBuilder,
+            );
+            const queryContext = enableQueryContextBuilder
                 ? buildQueryContextBundle({
                     query: input.query,
                     knownActorKeys: result.contextRoute?.entityAnchors?.actorKeys,

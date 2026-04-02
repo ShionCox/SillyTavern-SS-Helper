@@ -25,6 +25,18 @@ import {
  */
 export function buildContentLabViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const lab = snapshot.contentLabSnapshot;
+    if (!lab.loaded) {
+        return `
+            <section class="stx-memory-workbench__view stx-content-lab"${state.currentView !== 'content-lab' ? ' hidden' : ''}>
+                <div class="stx-memory-workbench__view-head">
+                    <div class="stx-memory-workbench__section-title">${escapeHtml(resolveContentLabText('section_title'))}</div>
+                </div>
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">${state.contentLabTabLoading ? '正在加载内容实验室配置与楼层快照...' : '进入本页后将按需加载内容拆分规则与聊天楼层。'}</div>
+                </div>
+            </section>
+        `;
+    }
     const registry = lab.tagRegistry;
     const floors = lab.availableFloors;
 
@@ -86,6 +98,16 @@ function buildTagRegistryTable(registry: ContentBlockPolicy[], state: WorkbenchS
                 ${kindOptions.map((kind) => `<option value="${escapeAttr(kind)}"${rule.kind === kind ? ' selected' : ''}>${escapeHtml(resolveContentLabKindLabel(kind))}</option>`).join('')}
             </select>
         `;
+        const patternModeValue = rule.patternMode === 'regex' || rule.patternMode === 'prefix'
+            ? rule.patternMode
+            : '';
+        const patternModeSelect = `
+            <select class="stx-memory-workbench__select stx-content-lab__table-select" data-rule-pattern-mode="${idx}">
+                <option value="">${escapeHtml(resolveContentLabText('pattern_mode_none'))}</option>
+                <option value="prefix"${patternModeValue === 'prefix' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('pattern_mode_prefix'))}</option>
+                <option value="regex"${patternModeValue === 'regex' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('pattern_mode_regex'))}</option>
+            </select>
+        `;
         const primaryCheckboxId = `stx-content-lab-rule-primary-${idx}`;
         const hintCheckboxId = `stx-content-lab-rule-hint-${idx}`;
         return `
@@ -109,6 +131,27 @@ function buildTagRegistryTable(registry: ContentBlockPolicy[], state: WorkbenchS
                         ${isEditing
                     ? kindSelect
                     : `<span class="stx-memory-workbench__badge">${escapeHtml(resolveContentLabKindLabel(rule.kind))}</span>`}
+                    </div>
+                </td>
+                <td>
+                    <div class="stx-content-lab__table-cell">
+                        ${isEditing
+                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-pattern="${idx}" value="${escapeAttr(rule.pattern ?? '')}" placeholder="^think(?:[_-].+)?$ / tableedit">`
+                    : `<span class="stx-content-lab__table-text">${escapeHtml(rule.pattern || resolveContentLabText('empty_value'))}</span>`}
+                    </div>
+                </td>
+                <td>
+                    <div class="stx-content-lab__table-cell">
+                        ${isEditing
+                    ? patternModeSelect
+                    : `<span class="stx-memory-workbench__badge">${escapeHtml(resolveContentLabText(rule.patternMode === 'prefix' ? 'pattern_mode_prefix' : rule.patternMode === 'regex' ? 'pattern_mode_regex' : 'pattern_mode_none'))}</span>`}
+                    </div>
+                </td>
+                <td>
+                    <div class="stx-content-lab__table-cell">
+                        ${isEditing
+                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-priority="${idx}" type="number" value="${escapeAttr(String(rule.priority ?? 0))}">`
+                    : `<span class="stx-content-lab__table-text">${escapeHtml(String(rule.priority ?? 0))}</span>`}
                     </div>
                 </td>
                 <td>
@@ -169,11 +212,14 @@ function buildTagRegistryTable(registry: ContentBlockPolicy[], state: WorkbenchS
                 <table class="stx-memory-workbench__table stx-content-lab__table">
                     <colgroup>
                         <col style="width:160px;">
-                        <col style="width:270px;">
+                        <col style="width:220px;">
                         <col style="width:150px;">
+                        <col style="width:240px;">
+                        <col style="width:140px;">
+                        <col style="width:110px;">
                         <col style="width:120px;">
                         <col style="width:120px;">
-                        <col style="width:260px;">
+                        <col style="width:220px;">
                         <col style="width:180px;">
                     </colgroup>
                     <thead>
@@ -181,6 +227,9 @@ function buildTagRegistryTable(registry: ContentBlockPolicy[], state: WorkbenchS
                             <th>${escapeHtml(resolveContentLabText('tag_name'))}</th>
                             <th>${escapeHtml(resolveContentLabText('aliases'))}</th>
                             <th>${escapeHtml(resolveContentLabText('kind'))}</th>
+                            <th>${escapeHtml(resolveContentLabText('pattern'))}</th>
+                            <th>${escapeHtml(resolveContentLabText('pattern_mode'))}</th>
+                            <th>${escapeHtml(resolveContentLabText('priority'))}</th>
                             <th>${escapeHtml(resolveContentLabText('primary_extraction'))}</th>
                             <th>${escapeHtml(resolveContentLabText('hint'))}</th>
                             <th>${escapeHtml(resolveContentLabText('notes'))}</th>
@@ -290,6 +339,10 @@ function buildFloorSelector(floors: Array<{ floor: number; role: string; charCou
             <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('floor_selector'))}</div>
             <div class="stx-content-lab__toolbar-scroll">
                 <div class="stx-memory-workbench__toolbar stx-content-lab__toolbar-line">
+                <select class="stx-memory-workbench__select" id="stx-content-lab-preview-source-mode" style="width:180px;">
+                    <option value="content"${state.contentLabPreviewSourceMode === 'content' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('preview_source_content'))}</option>
+                    <option value="raw_visible_text"${state.contentLabPreviewSourceMode === 'raw_visible_text' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('preview_source_raw_visible_text'))}</option>
+                </select>
                 <input class="stx-memory-workbench__input" id="stx-content-lab-start-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('start_floor_placeholder'))}" value="${escapeAttr(state.contentLabStartFloor)}" style="width:110px;">
                 <input class="stx-memory-workbench__input" id="stx-content-lab-end-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('end_floor_placeholder'))}" value="${escapeAttr(state.contentLabEndFloor)}" style="width:110px;">
                 <input class="stx-memory-workbench__input" id="stx-content-lab-selected-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('selected_floor_placeholder'))}" value="${escapeAttr(state.contentLabSelectedFloor)}" style="width:110px;">
@@ -329,6 +382,7 @@ function buildRawContentPreview(state: WorkbenchState, previewFloor?: import('..
                 <div class="stx-content-lab__metrics-grid">
                     ${buildMetricCard(resolveContentLabText('floor_number'), String(previewFloor.floor))}
                     ${buildMetricCard(resolveContentLabText('role'), resolveContentLabRoleLabel(previewFloor.originalRole))}
+                    ${buildMetricCard(resolveContentLabText('raw_text_basis'), escapeHtml(resolveContentLabText(previewFloor.originalTextMode === 'raw_visible_text' ? 'preview_source_raw_visible_text' : 'preview_source_content')), true)}
                     ${buildMetricCard(resolveContentLabText('source'), resolveContentLabSourceLabel(previewFloor.originalTextSource || 'unknown'))}
                     ${buildMetricCard(resolveContentLabText('char_count'), String(previewFloor.originalText.length))}
                     ${buildMetricCard(resolveContentLabText('block_count'), String(previewFloor.parsedBlocks.length))}

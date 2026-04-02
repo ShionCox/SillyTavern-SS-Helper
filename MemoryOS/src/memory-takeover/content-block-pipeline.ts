@@ -7,6 +7,8 @@ import { parseContentBlocks } from './content-block-parser';
 import { classifyContentBlocks, type ClassifiedContentBlock } from './content-block-classifier';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
 
+export type ContentPreviewSourceMode = 'content' | 'raw_visible_text';
+
 /**
  * 功能：定义每一层楼的完整记录。
  * 每个选中楼层都必须生成一条 RawFloorRecord，不论其是否含有正文。
@@ -20,6 +22,8 @@ export interface RawFloorRecord {
     originalText: string;
     /** 原始文本来源字段 */
     originalTextSource?: string;
+    /** 本次预览所依据的文本模式 */
+    originalTextMode?: ContentPreviewSourceMode;
     /** 原始角色 */
     originalRole: 'user' | 'assistant' | 'system' | 'tool' | 'unknown';
     /** 是否已纳入批次 */
@@ -51,12 +55,21 @@ export interface ContentChannelAssembly {
 /**
  * 功能：对单条消息执行完整的分块分类流程，生成 RawFloorRecord。
  * @param message 消息片段。
+ * @param previewSourceMode 预览依据的文本模式。
  * @returns 该楼层的 RawFloorRecord。
  */
-export function buildFloorRecord(message: MemoryTakeoverMessageSlice): RawFloorRecord {
+export function buildFloorRecord(
+    message: MemoryTakeoverMessageSlice,
+    previewSourceMode: ContentPreviewSourceMode = 'content',
+): RawFloorRecord {
     const floor = message.floor;
-    const text = String(message.content ?? '');
-    const rawText = String(message.rawVisibleText ?? message.content ?? '');
+    const normalizedPreviewSourceMode: ContentPreviewSourceMode = previewSourceMode === 'raw_visible_text'
+        ? 'raw_visible_text'
+        : 'content';
+    const text = normalizedPreviewSourceMode === 'raw_visible_text'
+        ? String(message.rawVisibleText ?? message.content ?? '')
+        : String(message.content ?? '');
+    const rawText = text;
     const role = normalizeRoleString(message.role);
 
     const parsedBlocks = parseContentBlocks(floor, text);
@@ -70,7 +83,10 @@ export function buildFloorRecord(message: MemoryTakeoverMessageSlice): RawFloorR
         floor,
         sourceFloor: message.sourceFloor,
         originalText: rawText,
-        originalTextSource: message.rawVisibleTextSource,
+        originalTextSource: normalizedPreviewSourceMode === 'raw_visible_text'
+            ? (message.rawVisibleTextSource ?? message.contentSource)
+            : message.contentSource,
+        originalTextMode: normalizedPreviewSourceMode,
         originalRole: role,
         includedInBatch: true,
         parsedBlocks: classifiedBlocks,
@@ -83,10 +99,14 @@ export function buildFloorRecord(message: MemoryTakeoverMessageSlice): RawFloorR
 /**
  * 功能：对一组消息执行完整管线，生成所有 RawFloorRecord。
  * @param messages 消息列表。
+ * @param previewSourceMode 预览依据的文本模式。
  * @returns 所有楼层的 RawFloorRecord 列表。
  */
-export function buildFloorRecords(messages: MemoryTakeoverMessageSlice[]): RawFloorRecord[] {
-    return messages.map(buildFloorRecord);
+export function buildFloorRecords(
+    messages: MemoryTakeoverMessageSlice[],
+    previewSourceMode: ContentPreviewSourceMode = 'content',
+): RawFloorRecord[] {
+    return messages.map((message: MemoryTakeoverMessageSlice): RawFloorRecord => buildFloorRecord(message, previewSourceMode));
 }
 
 /**

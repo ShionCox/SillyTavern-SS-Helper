@@ -4,6 +4,9 @@ const CONTENT_LAB_TEXT_MAP: Record<string, string> = {
     no_tag_rules: '暂无标签规则。',
     tag_name: '主标签',
     aliases: '兼容别名',
+    pattern: '模式匹配',
+    pattern_mode: '模式类型',
+    priority: '优先级',
     kind: '归类结果',
     primary_extraction: '纳入主正文',
     hint: '纳入辅助区',
@@ -31,6 +34,9 @@ const CONTENT_LAB_TEXT_MAP: Record<string, string> = {
     preview_range: '预览范围送模',
     preview_loading: '加载中…',
     preview_range_loading: '处理中…',
+    preview_source_mode: '分类依据',
+    preview_source_content: '按 content 分类',
+    preview_source_raw_visible_text: '按 rawVisibleText 分类',
     available_floors: '可用楼层',
     floor_unit: '层',
     load_chat_hint: '请先开始旧聊天接管或加载聊天数据。',
@@ -45,6 +51,7 @@ const CONTENT_LAB_TEXT_MAP: Record<string, string> = {
     hint_only: '仅辅助区',
     excluded_only: '全部排除',
     raw_text: '原始文本',
+    raw_text_basis: '预览依据',
     block_preview: '拆分预览',
     block_preview_empty: '暂无拆分结果。',
     block_preview_title_suffix: '块',
@@ -67,6 +74,9 @@ const CONTENT_LAB_TEXT_MAP: Record<string, string> = {
     source_swipe_display_text: '候选回复显示文本',
     source_unavailable: '未命中原始字段',
     delete: '删除',
+    pattern_mode_prefix: '前缀',
+    pattern_mode_regex: '正则',
+    pattern_mode_none: '无',
 };
 
 const CONTENT_LAB_KIND_LABEL_MAP: Record<string, string> = {

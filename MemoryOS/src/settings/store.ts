@@ -54,6 +54,8 @@ export type MemoryOSSettings = {
     retrievalDefaultExpandDepth: number;
     /** 是否启用 PayloadFilter 预过滤 */
     retrievalEnablePayloadFilter: boolean;
+    /** 是否启用图扩展 */
+    retrievalEnableGraphExpansion: boolean;
     /** 是否启用图扩展热点降权 */
     retrievalEnableGraphPenalty: boolean;
     /** 是否启用 QueryContextBuilder */
@@ -140,6 +142,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalDefaultTopK: 18,
     retrievalDefaultExpandDepth: 1,
     retrievalEnablePayloadFilter: true,
+    retrievalEnableGraphExpansion: true,
     retrievalEnableGraphPenalty: true,
     retrievalEnableQueryContextBuilder: false,
     vectorTopK: 5,
@@ -158,6 +161,23 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     vectorLLMHubRerankMaxCandidates: 12,
     vectorLLMHubRerankFallbackToRule: true,
 };
+
+/**
+ * 功能：根据检索模式解析 QueryContextBuilder 的默认启用状态。
+ * 说明：词法模式默认关闭，向量链默认开启，以提升 hybrid / vector_only 的默认体验。
+ * @param retrievalMode 当前检索模式。
+ * @param explicitFlag 显式设置值。
+ * @returns 最终是否启用 QueryContextBuilder。
+ */
+export function resolveRetrievalEnableQueryContextBuilder(
+    retrievalMode: RetrievalMode,
+    explicitFlag?: boolean,
+): boolean {
+    if (explicitFlag === true) {
+        return true;
+    }
+    return retrievalMode === 'vector_only' || retrievalMode === 'hybrid';
+}
 
 /**
  * 功能：把未知设置归一化为 MemoryOS 设置结构。
@@ -272,7 +292,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         0,
         Math.min(3, Math.trunc(Number(candidate.retrievalDefaultExpandDepth) || DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth)),
     );
-
     const vectorTopK: number = Math.max(
         1,
         Math.min(100, Math.trunc(Number(candidate.vectorTopK) || DEFAULT_MEMORY_OS_SETTINGS.vectorTopK)),
@@ -346,8 +365,12 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         retrievalDefaultTopK,
         retrievalDefaultExpandDepth,
         retrievalEnablePayloadFilter: candidate.retrievalEnablePayloadFilter !== false,
+        retrievalEnableGraphExpansion: candidate.retrievalEnableGraphExpansion !== false,
         retrievalEnableGraphPenalty: candidate.retrievalEnableGraphPenalty !== false,
-        retrievalEnableQueryContextBuilder: candidate.retrievalEnableQueryContextBuilder === true,
+        retrievalEnableQueryContextBuilder: resolveRetrievalEnableQueryContextBuilder(
+            retrievalMode,
+            candidate.retrievalEnableQueryContextBuilder === true,
+        ),
         vectorTopK,
         vectorDeepWindow,
         vectorFinalTopK,

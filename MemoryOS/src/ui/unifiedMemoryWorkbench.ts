@@ -286,6 +286,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         entryQuery: '',
         previewQuery: '',
         previewLoading: false,
+        previewTabLoaded: false,
+        previewTabLoading: false,
         bindEntryId: '',
         actorQuery: '',
         actorSortOrder: 'stat-desc',
@@ -317,18 +319,23 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         vectorEnableStrategyRoutingTest: settings.vectorEnableStrategyRouting,
         vectorEnableRerankTest: settings.vectorEnableRerank,
         vectorEnableLLMHubRerankTest: settings.vectorEnableLLMHubRerank,
-        vectorEnableGraphExpansionTest: settings.retrievalEnableGraphPenalty,
+        vectorEnableGraphExpansionTest: settings.retrievalEnableGraphExpansion,
         vectorTopKTest: String(settings.vectorTopK),
         vectorDeepWindowTest: String(settings.vectorDeepWindow),
         vectorFinalTopKTest: String(settings.vectorFinalTopK),
         vectorLoading: false,
+        vectorTabLoaded: false,
+        vectorTabLoading: false,
         vectorTestRunning: false,
         vectorTestResult: null,
         vectorTestProgress: null,
         contentLabStartFloor: '',
         contentLabEndFloor: '',
         contentLabSelectedFloor: '',
+        contentLabPreviewSourceMode: 'content',
         contentLabPreviewLoading: false,
+        contentLabTabLoaded: false,
+        contentLabTabLoading: false,
         contentLabRawText: '',
         contentLabBlocks: [],
         contentLabPrimaryPreview: '',
@@ -346,8 +353,49 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
     let takeoverProgressSequence = 0;
     let previewCache: WorkbenchSnapshot['preview'] = null;
+    let previewRecallExplanationCache: WorkbenchSnapshot['recallExplanation'] = null;
+    let vectorLoadSequence = 0;
+    let contentLabLoadSequence = 0;
+    let contentLabSettingsCache: ContentLabSettings | null = null;
     let contentLabSourceMessages: MemoryTakeoverMessageSlice[] = [];
     let contentLabPreviewFloor: RawFloorRecord | undefined = undefined;
+
+    /**
+     * 功能：构造空的向量快照，占位表示尚未加载。
+     * @param loaded 是否已加载。
+     * @returns 空向量快照。
+     */
+    const createEmptyVectorSnapshot = (loaded = false): WorkbenchSnapshot['vectorSnapshot'] => ({
+        loaded,
+        runtimeReady: false,
+        embeddingAvailable: false,
+        vectorStoreAvailable: false,
+        retrievalMode: settings.retrievalMode,
+        documentCount: 0,
+        readyCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        indexCount: 0,
+        recallStatCount: 0,
+        documents: [],
+        indexRecords: [],
+        recallStats: [],
+    });
+    let vectorCache: WorkbenchSnapshot['vectorSnapshot'] = createEmptyVectorSnapshot(false);
+
+    /**
+     * 功能：将内容实验室配置同步到工作台状态。
+     * @param contentLabSettings 内容实验室配置。
+     * @returns 无返回值。
+     */
+    const applyContentLabSettingsToState = (contentLabSettings: ContentLabSettings): void => {
+        state.contentLabUnknownTagDefaultKind = contentLabSettings.unknownTagPolicy.defaultKind;
+        state.contentLabUnknownTagAllowHint = contentLabSettings.unknownTagPolicy.allowAsHint;
+        state.contentLabEnableRuleClassifier = contentLabSettings.classifierToggles.enableRuleClassifier;
+        state.contentLabEnableMetaKeywordDetection = contentLabSettings.classifierToggles.enableMetaKeywordDetection;
+        state.contentLabEnableToolArtifactDetection = contentLabSettings.classifierToggles.enableToolArtifactDetection;
+        state.contentLabEnableAIClassifier = contentLabSettings.enableAIClassifier;
+    };
 
     /**
      * 功能：构建内容实验室快照。
@@ -359,25 +407,18 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             charCount: msg.content.length,
         }));
         return {
-            tagRegistry: [],
+            loaded: state.contentLabTabLoaded,
+            tagRegistry: contentLabSettingsCache?.tagRegistry ?? [],
             availableFloors,
             previewFloor: contentLabPreviewFloor,
         };
     };
 
     /**
-     * 功能：读取工作台所需快照。
+     * 功能：读取工作台核心快照。
      * @returns 工作台快照。
      */
-    const loadSnapshot = async (): Promise<WorkbenchSnapshot> => {
-        const previewPromise: Promise<WorkbenchSnapshot['preview']> = Promise.resolve(previewCache);
-        const contentLabSettings = await memory.chatState.getContentLabSettings();
-        state.contentLabUnknownTagDefaultKind = contentLabSettings.unknownTagPolicy.defaultKind;
-        state.contentLabUnknownTagAllowHint = contentLabSettings.unknownTagPolicy.allowAsHint;
-        state.contentLabEnableRuleClassifier = contentLabSettings.classifierToggles.enableRuleClassifier;
-        state.contentLabEnableMetaKeywordDetection = contentLabSettings.classifierToggles.enableMetaKeywordDetection;
-        state.contentLabEnableToolArtifactDetection = contentLabSettings.classifierToggles.enableToolArtifactDetection;
-        state.contentLabEnableAIClassifier = contentLabSettings.enableAIClassifier;
+    const loadCoreSnapshot = async (): Promise<WorkbenchSnapshot> => {
         const [
             entryTypes,
             entries,
@@ -385,17 +426,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             relationships,
             roleMemories,
             summaries,
-            preview,
             worldProfileBinding,
             mutationHistory,
             entryAuditRecords,
-            recallExplanation,
             takeoverProgress,
-            vectorRuntimeStatus,
-            vectorDocuments,
-            vectorIndexRecords,
-            vectorRecallStats,
-            vectorIndexStats,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -403,21 +437,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.relationships.list(),
             memory.unifiedMemory.roleMemory.list(),
             memory.unifiedMemory.summaries.list(8),
-            previewPromise,
             memory.unifiedMemory.diagnostics.getWorldProfileBinding(),
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
-            memory.chatState.getLatestRecallExplanation(),
             takeoverProgressCache ? Promise.resolve(takeoverProgressCache) : memory.chatState.getTakeoverStatus(),
-            memory.unifiedMemory.diagnostics.getVectorRuntimeStatus(),
-            memory.unifiedMemory.diagnostics.listVectorDocuments(),
-            memory.unifiedMemory.diagnostics.listVectorIndexRecords(),
-            memory.unifiedMemory.diagnostics.listVectorRecallStats(),
-            memory.unifiedMemory.diagnostics.getVectorIndexStats(),
         ]);
 
         takeoverProgressCache = takeoverProgress;
-        previewCache = preview;
 
         return {
             entryTypes,
@@ -425,27 +451,26 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             actors,
             roleMemories,
             summaries,
-            preview,
+            preview: previewCache,
+            previewLoaded: state.previewTabLoaded,
             worldProfileBinding,
             mutationHistory,
             entryAuditRecords,
-            recallExplanation: normalizeRecallExplanation(recallExplanation),
+            recallExplanation: previewRecallExplanationCache,
+            recallExplanationLoaded: state.previewTabLoaded,
             actorGraph: buildActorGraph(actors, relationships, entries),
             memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
             takeoverProgress,
-            vectorSnapshot: {
-                ...vectorRuntimeStatus,
-                ...vectorIndexStats,
-                documents: vectorDocuments,
-                indexRecords: vectorIndexRecords,
-                recallStats: vectorRecallStats,
-            },
-            contentLabSnapshot: {
-                ...buildContentLabSnapshot(),
-                tagRegistry: contentLabSettings.tagRegistry,
-            },
+            vectorSnapshot: vectorCache,
+            contentLabSnapshot: buildContentLabSnapshot(),
         };
     };
+
+    /**
+     * 功能：读取当前渲染所需快照。
+     * @returns 工作台快照。
+     */
+    const loadSnapshot = async (): Promise<WorkbenchSnapshot> => loadCoreSnapshot();
 
     /**
      * 功能：保证当前选择始终有效。
@@ -477,10 +502,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         if (state.bindEntryId && !snapshot.entries.some((entry: MemoryEntry): boolean => entry.entryId === state.bindEntryId)) {
             state.bindEntryId = snapshot.entries[0]?.entryId ?? '';
         }
-        if (!state.vectorSelectedDocId && snapshot.vectorSnapshot.documents.length > 0) {
+        if (snapshot.vectorSnapshot.loaded && !state.vectorSelectedDocId && snapshot.vectorSnapshot.documents.length > 0) {
             state.vectorSelectedDocId = snapshot.vectorSnapshot.documents[0]!.vectorDocId;
         }
-        if (state.vectorSelectedDocId && !snapshot.vectorSnapshot.documents.some((doc): boolean => doc.vectorDocId === state.vectorSelectedDocId)) {
+        if (snapshot.vectorSnapshot.loaded && state.vectorSelectedDocId && !snapshot.vectorSnapshot.documents.some((doc): boolean => doc.vectorDocId === state.vectorSelectedDocId)) {
             state.vectorSelectedDocId = snapshot.vectorSnapshot.documents[0]?.vectorDocId ?? '';
         }
     };
@@ -495,6 +520,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         root: HTMLElement,
         registry?: ContentBlockPolicy[],
     ): Promise<ContentBlockPolicy[]> => {
+        if (!contentLabSettingsCache) {
+            contentLabSettingsCache = await memory.chatState.getContentLabSettings();
+            applyContentLabSettingsToState(contentLabSettingsCache);
+        }
         const saved = await memory.chatState.saveContentLabSettings({
             tagRegistry: registry,
             unknownTagPolicy: {
@@ -508,12 +537,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             },
             enableAIClassifier: readCheckedValue(root, '#stx-content-lab-enable-ai'),
         });
-        state.contentLabUnknownTagDefaultKind = saved.unknownTagPolicy.defaultKind;
-        state.contentLabUnknownTagAllowHint = saved.unknownTagPolicy.allowAsHint;
-        state.contentLabEnableRuleClassifier = saved.classifierToggles.enableRuleClassifier;
-        state.contentLabEnableMetaKeywordDetection = saved.classifierToggles.enableMetaKeywordDetection;
-        state.contentLabEnableToolArtifactDetection = saved.classifierToggles.enableToolArtifactDetection;
-        state.contentLabEnableAIClassifier = saved.enableAIClassifier;
+        contentLabSettingsCache = saved;
+        applyContentLabSettingsToState(saved);
+        state.contentLabTabLoaded = true;
         return saved.tagRegistry;
     };
 
@@ -646,6 +672,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (action === 'refresh-preview') {
                 state.previewQuery = readInputValue(root, '#stx-memory-preview-query');
                 previewCache = null;
+                previewRecallExplanationCache = null;
                 await render();
                 void refreshPreviewSnapshot();
                 return;
@@ -653,8 +680,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (action === 'capture-summary') {
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
                 previewCache = null;
+                previewRecallExplanationCache = null;
                 toast.success('已触发强制快照归档。');
                 await render();
+                if (state.currentView === 'preview') {
+                    void refreshPreviewSnapshot();
+                }
+                return;
             }
             if (action === 'export-chat-database') {
                 const databaseSnapshot = await memory.chatState.exportCurrentChatDatabaseSnapshotForTest();
@@ -678,19 +710,19 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'vector-refresh') {
-                await render();
+                void refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-rebuild-documents') {
                 const count = await memory.unifiedMemory.diagnostics.rebuildAllVectorDocuments();
                 toast.success(`已重建 ${count} 条向量文档。`);
-                await render();
+                await refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-rebuild-embeddings') {
                 const count = await memory.unifiedMemory.diagnostics.rebuildAllEmbeddings();
                 toast.success(`已重建 ${count} 条向量索引。`);
-                await render();
+                await refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-clear-data') {
@@ -702,7 +734,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.vectorSelectedDocId = '';
                 state.vectorTestResult = null;
                 toast.success('当前聊天的向量数据已清空。');
-                await render();
+                await refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-reindex-doc') {
@@ -712,7 +744,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 }
                 await memory.unifiedMemory.diagnostics.reindexVectorDocument(vectorDocId);
                 toast.success('已重新索引当前向量文档。');
-                await render();
+                await refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-remove-doc') {
@@ -729,7 +761,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     state.vectorSelectedDocId = '';
                 }
                 toast.success('当前向量文档已删除。');
-                await render();
+                await refreshVectorSnapshot();
                 return;
             }
             if (action === 'vector-run-test') {
@@ -878,6 +910,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'content-lab-preview-floor') {
+                const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+                    ? 'raw_visible_text'
+                    : 'content';
                 const selectedFloor = Number(readInputValue(root, '#stx-content-lab-selected-floor'));
                 if (!selectedFloor || selectedFloor < 1) {
                     toast.error('请输入有效的楼层号。');
@@ -885,12 +920,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 }
                 state.contentLabPreviewLoading = true;
                 state.contentLabSelectedFloor = String(selectedFloor);
+                state.contentLabPreviewSourceMode = previewSourceMode;
                 await render();
                 try {
-                    if (contentLabSourceMessages.length === 0) {
-                        const sourceBundle = collectTakeoverSourceBundle();
-                        contentLabSourceMessages = sourceBundle.messages;
-                    }
+                    await loadContentLabSnapshot();
                     if (!contentLabSourceMessages.some((m) => m.floor === selectedFloor)) {
                         toast.error(`未找到楼层 ${selectedFloor}，可用范围：${contentLabSourceMessages[0]?.floor ?? '?'} - ${contentLabSourceMessages[contentLabSourceMessages.length - 1]?.floor ?? '?'}`);
                         state.contentLabPreviewLoading = false;
@@ -898,7 +931,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         return;
                     }
                     await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
-                    const record = await memory.chatState.previewFloorContentBlocks({ floor: selectedFloor });
+                    const record = await memory.chatState.previewFloorContentBlocks({
+                        floor: selectedFloor,
+                        previewSourceMode,
+                    });
                     contentLabPreviewFloor = record;
                     state.contentLabBlocks = record.parsedBlocks;
                     state.contentLabRawText = record.originalText;
@@ -913,6 +949,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'content-lab-preview-range') {
+                const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+                    ? 'raw_visible_text'
+                    : 'content';
                 const startFloor = Number(readInputValue(root, '#stx-content-lab-start-floor'));
                 const endFloor = Number(readInputValue(root, '#stx-content-lab-end-floor'));
                 if (!startFloor || !endFloor || startFloor < 1 || endFloor < startFloor) {
@@ -922,14 +961,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.contentLabPreviewLoading = true;
                 state.contentLabStartFloor = String(startFloor);
                 state.contentLabEndFloor = String(endFloor);
+                state.contentLabPreviewSourceMode = previewSourceMode;
                 await render();
                 try {
-                    if (contentLabSourceMessages.length === 0) {
-                        const sourceBundle = collectTakeoverSourceBundle();
-                        contentLabSourceMessages = sourceBundle.messages;
-                    }
+                    await loadContentLabSnapshot();
                     await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
-                    const records = await memory.chatState.previewFloorRangeContentBlocks({ startFloor, endFloor });
+                    const records = await memory.chatState.previewFloorRangeContentBlocks({
+                        startFloor,
+                        endFloor,
+                        previewSourceMode,
+                    });
                     const channels = assembleContentChannels(records);
                     contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor))
                         ?? records[0];
@@ -955,12 +996,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     },
                     enableAIClassifier: false,
                 });
-                state.contentLabUnknownTagDefaultKind = saved.unknownTagPolicy.defaultKind;
-                state.contentLabUnknownTagAllowHint = saved.unknownTagPolicy.allowAsHint;
-                state.contentLabEnableRuleClassifier = saved.classifierToggles.enableRuleClassifier;
-                state.contentLabEnableMetaKeywordDetection = saved.classifierToggles.enableMetaKeywordDetection;
-                state.contentLabEnableToolArtifactDetection = saved.classifierToggles.enableToolArtifactDetection;
-                state.contentLabEnableAIClassifier = saved.enableAIClassifier;
+                contentLabSettingsCache = saved;
+                applyContentLabSettingsToState(saved);
+                state.contentLabTabLoaded = true;
                 toast.success('标签规则已重置为默认值。');
                 await render();
                 return;
@@ -972,6 +1010,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 registry.push({
                     tagName: tagName.trim(),
                     aliases: [],
+                    pattern: '',
+                    patternMode: undefined,
+                    priority: 0,
                     kind: 'unknown',
                     includeInPrimaryExtraction: false,
                     includeAsHint: true,
@@ -1016,6 +1057,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 const kindValue = readInputValue(root, `[data-rule-kind="${idx}"]`);
                 const tagName = readInputValue(root, `[data-rule-tag-name="${idx}"]`);
                 const aliasesText = readInputValue(root, `[data-rule-aliases="${idx}"]`);
+                const pattern = readInputValue(root, `[data-rule-pattern="${idx}"]`);
+                const patternModeValue = readInputValue(root, `[data-rule-pattern-mode="${idx}"]`);
+                const priorityValue = readInputValue(root, `[data-rule-priority="${idx}"]`);
                 const notes = readInputValue(root, `[data-rule-notes="${idx}"]`);
                 const includeInPrimaryExtraction = readCheckedValue(root, `[data-rule-primary="${idx}"]`);
                 const includeAsHint = readCheckedValue(root, `[data-rule-hint="${idx}"]`);
@@ -1029,6 +1073,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     : 'unknown';
                 rule.tagName = tagName;
                 rule.aliases = parseTagText(aliasesText);
+                rule.pattern = pattern || undefined;
+                rule.patternMode = patternModeValue === 'prefix' || patternModeValue === 'regex'
+                    ? patternModeValue
+                    : undefined;
+                rule.priority = Math.trunc(Number(priorityValue) || 0);
                 rule.kind = nextKind;
                 rule.includeInPrimaryExtraction = includeInPrimaryExtraction;
                 rule.includeAsHint = includeAsHint;
@@ -1093,14 +1142,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             button.addEventListener('click', (): void => {
                 state.currentView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
                 void render().then((): void => {
-                    if (state.currentView === 'preview' && !previewCache && !state.previewLoading) {
-                        void refreshPreviewSnapshot();
-                    }
+                    void loadDeferredTabData(state.currentView);
                     if (state.currentView === 'takeover') {
                         void refreshTakeoverProgress();
-                    }
-                    if (state.currentView === 'content-lab' && contentLabSourceMessages.length === 0) {
-                        void loadContentLabSource();
                     }
                 });
             });
@@ -1336,16 +1380,25 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     const refreshPreviewSnapshot = async (): Promise<void> => {
         if (state.currentView !== 'preview') {
             state.previewLoading = false;
+            state.previewTabLoading = false;
             return;
         }
         state.previewLoading = true;
+        state.previewTabLoading = true;
         try {
-            previewCache = await memory.unifiedMemory.prompts.preview({ query: state.previewQuery });
+            const [preview, recallExplanation] = await Promise.all([
+                memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
+                memory.chatState.getLatestRecallExplanation(),
+            ]);
+            previewCache = preview;
+            previewRecallExplanationCache = normalizeRecallExplanation(recallExplanation);
+            state.previewTabLoaded = true;
         } catch (error) {
             logger.error('加载诊断中心预览失败', error);
             toast.error(`诊断加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
             state.previewLoading = false;
+            state.previewTabLoading = false;
             if (state.currentView === 'preview') {
                 await render();
             }
@@ -1428,22 +1481,109 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
-     * 功能：重新渲染整个工作台。
-     * @returns 无返回值。
-     */
-    /**
-     * 功能：加载内容实验室数据源（聊天楼层消息）。
+     * 功能：加载内容实验室配置与楼层消息。
      * @returns 异步完成。
      */
-    const loadContentLabSource = async (): Promise<void> => {
+    const loadContentLabSnapshot = async (): Promise<void> => {
+        if (state.contentLabTabLoaded && contentLabSettingsCache && contentLabSourceMessages.length > 0) {
+            return;
+        }
+        const currentSequence = ++contentLabLoadSequence;
+        state.contentLabTabLoading = true;
+        await render();
+        await waitForUiPaint();
         try {
-            const bundle = collectTakeoverSourceBundle();
+            const [contentLabSettings, bundle] = await Promise.all([
+                contentLabSettingsCache ? Promise.resolve(contentLabSettingsCache) : memory.chatState.getContentLabSettings(),
+                Promise.resolve(collectTakeoverSourceBundle()),
+            ]);
+            if (currentSequence !== contentLabLoadSequence) {
+                return;
+            }
+            contentLabSettingsCache = contentLabSettings;
+            applyContentLabSettingsToState(contentLabSettings);
             contentLabSourceMessages = bundle.messages;
+            state.contentLabTabLoaded = true;
             logger.info(`内容实验室加载了 ${bundle.messages.length} 层消息`);
-            await render();
         } catch (error) {
+            if (currentSequence !== contentLabLoadSequence) {
+                return;
+            }
             logger.warn('内容实验室加载消息失败', error);
             toast.error(`内容实验室加载失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            if (currentSequence === contentLabLoadSequence) {
+                state.contentLabTabLoading = false;
+                await render();
+            }
+        }
+    };
+
+    /**
+     * 功能：刷新向量实验室快照。
+     * @returns 异步完成。
+     */
+    const refreshVectorSnapshot = async (): Promise<void> => {
+        const currentSequence = ++vectorLoadSequence;
+        state.vectorTabLoading = true;
+        await render();
+        await waitForUiPaint();
+        try {
+            const [
+                vectorRuntimeStatus,
+                vectorDocuments,
+                vectorIndexRecords,
+                vectorRecallStats,
+                vectorIndexStats,
+            ] = await Promise.all([
+                memory.unifiedMemory.diagnostics.getVectorRuntimeStatus(),
+                memory.unifiedMemory.diagnostics.listVectorDocuments(),
+                memory.unifiedMemory.diagnostics.listVectorIndexRecords(),
+                memory.unifiedMemory.diagnostics.listVectorRecallStats(),
+                memory.unifiedMemory.diagnostics.getVectorIndexStats(),
+            ]);
+            if (currentSequence !== vectorLoadSequence) {
+                return;
+            }
+            vectorCache = {
+                loaded: true,
+                ...vectorRuntimeStatus,
+                ...vectorIndexStats,
+                documents: vectorDocuments,
+                indexRecords: vectorIndexRecords,
+                recallStats: vectorRecallStats,
+            };
+            state.vectorTabLoaded = true;
+        } catch (error) {
+            if (currentSequence !== vectorLoadSequence) {
+                return;
+            }
+            logger.warn('加载向量实验室快照失败', error);
+            toast.error(`向量实验室加载失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            if (currentSequence === vectorLoadSequence) {
+                state.vectorTabLoading = false;
+                await render();
+            }
+        }
+    };
+
+    /**
+     * 功能：按当前 Tab 懒加载对应重数据。
+     * @param view 当前视图。
+     * @returns 异步完成。
+     */
+    const loadDeferredTabData = async (view: WorkbenchView): Promise<void> => {
+        if (view === 'preview' && !state.previewTabLoaded && !state.previewTabLoading && !state.previewLoading) {
+            await refreshPreviewSnapshot();
+            return;
+        }
+        if (view === 'vectors' && !state.vectorTabLoaded && !state.vectorTabLoading) {
+            await refreshVectorSnapshot();
+            return;
+        }
+        if (view === 'content-lab' && !state.contentLabTabLoaded && !state.contentLabTabLoading) {
+            await loadContentLabSnapshot();
         }
     };
 
@@ -1542,9 +1682,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     await render();
-    if (state.currentView === 'preview' && !previewCache) {
-        void refreshPreviewSnapshot();
-    }
+    void loadDeferredTabData(state.currentView);
     if (state.currentView === 'takeover') {
         void refreshTakeoverProgress();
     }

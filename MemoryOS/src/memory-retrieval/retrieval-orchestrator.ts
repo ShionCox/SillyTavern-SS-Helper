@@ -274,6 +274,7 @@ export class RetrievalOrchestrator {
                 allCandidates: candidates,
                 maxDepth: effectiveConfig.expandDepth,
                 decay: 0.65,
+                enableHubPenalty: effectiveConfig.enableGraphPenalty,
                 contextRoute,
                 onTrace: writeTrace,
             });

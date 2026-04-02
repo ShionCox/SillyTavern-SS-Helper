@@ -351,8 +351,8 @@ export class MemorySDKImpl {
         abortTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
         getContentLabSettings: () => Promise<ContentLabSettings>;
         saveContentLabSettings: (patch: Partial<ContentLabSettings>) => Promise<ContentLabSettings>;
-        previewFloorContentBlocks: (input: { floor: number }) => Promise<RawFloorRecord>;
-        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number }) => Promise<RawFloorRecord[]>;
+        previewFloorContentBlocks: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text' }) => Promise<RawFloorRecord>;
+        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text' }) => Promise<RawFloorRecord[]>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -697,19 +697,21 @@ export class MemorySDKImpl {
             saveContentLabSettings: async (patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> => {
                 return this.takeoverService.saveContentLabSettings(patch);
             },
-            previewFloorContentBlocks: async (input: { floor: number }): Promise<RawFloorRecord> => {
+            previewFloorContentBlocks: async (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text' }): Promise<RawFloorRecord> => {
                 this.tryRegisterLLMTasks();
                 return this.takeoverService.previewFloorContentBlocks({
                     floor: input.floor,
+                    previewSourceMode: input.previewSourceMode,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
             },
-            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number }): Promise<RawFloorRecord[]> => {
+            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text' }): Promise<RawFloorRecord[]> => {
                 this.tryRegisterLLMTasks();
                 return this.takeoverService.previewFloorRangeContentBlocks({
                     startFloor: input.startFloor,
                     endFloor: input.endFloor,
+                    previewSourceMode: input.previewSourceMode,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
