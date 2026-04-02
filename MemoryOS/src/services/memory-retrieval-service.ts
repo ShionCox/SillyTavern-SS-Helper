@@ -120,6 +120,7 @@ export class MemoryRetrievalService {
         let mergedRanking: RetrievalStageRankingItem[] = [];
         let rerankedRanking: RetrievalStageRankingItem[] = [];
         let rankingChanges: RetrievalRankingChangeItem[] = [];
+        let timeBiasedCount = 0;
 
         if (needsVectorChain && this.hybridService) {
             const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(config.retrievalMode);
@@ -185,6 +186,7 @@ export class MemoryRetrievalService {
                 finalItems,
                 vectorHitIds,
             });
+            timeBiasedCount = finalItems.filter((item) => (item.breakdown.timeBoost ?? 0) > 0).length;
         } else {
             resultSourceLabels = result.items.map((item) => ({
                 candidateId: item.candidate.candidateId,
@@ -202,6 +204,7 @@ export class MemoryRetrievalService {
                 finalItems,
                 vectorHitIds: new Set<string>(),
             });
+            timeBiasedCount = finalItems.filter((item) => (item.breakdown.timeBoost ?? 0) > 0).length;
         }
 
         const vectorProviderStatus: VectorProviderStatus = {
@@ -237,6 +240,7 @@ export class MemoryRetrievalService {
             mergedRanking,
             rerankedRanking,
             rankingChanges,
+            timeBiasedCount,
         };
 
         return {
@@ -366,6 +370,7 @@ export class MemoryRetrievalService {
                 finalScore: finalRecord.score,
                 changeReason: this.resolveRankingChangeReason({
                     source,
+                    finalItem: finalRecord.item,
                     lexicalRank: lexicalRecord?.rank,
                     mergedRank: mergedRecord?.rank,
                     rerankedRank: rerankedRecord?.rank,
@@ -430,38 +435,41 @@ export class MemoryRetrievalService {
      */
     private resolveRankingChangeReason(input: {
         source: ResultSourceLabel['source'];
+        finalItem: import('../memory-retrieval/types').RetrievalResultItem;
         lexicalRank?: number;
         mergedRank?: number;
         rerankedRank?: number;
         finalRank?: number;
     }): string {
+        const timeBoost = Number(input.finalItem.breakdown.timeBoost) || 0;
+        const timeHint = timeBoost > 0.01 ? '时间方向加权参与了最终排序。' : '';
         if (input.lexicalRank === undefined && input.mergedRank !== undefined) {
             if (input.source === 'vector') {
-                return '由向量命中补入候选。';
+                return `由向量命中补入候选。${timeHint}`.trim();
             }
             if (input.source === 'graph_expansion') {
-                return '由图扩展补入候选。';
+                return `由图扩展补入候选。${timeHint}`.trim();
             }
-            return '在融合阶段进入最终候选窗口。';
+            return `在融合阶段进入最终候选窗口。${timeHint}`.trim();
         }
         if (input.mergedRank !== undefined && input.rerankedRank !== undefined) {
             const diff = input.mergedRank - input.rerankedRank;
             if (diff > 0) {
-                return `重排后提升 ${diff} 位。`;
+                return `重排后提升 ${diff} 位。${timeHint}`.trim();
             }
             if (diff < 0) {
-                return `重排后下降 ${Math.abs(diff)} 位。`;
+                return `重排后下降 ${Math.abs(diff)} 位。${timeHint}`.trim();
             }
         }
         if (input.lexicalRank !== undefined && input.finalRank !== undefined) {
             const diff = input.lexicalRank - input.finalRank;
             if (diff > 0) {
-                return `相较初始词法排序提升 ${diff} 位。`;
+                return `相较初始词法排序提升 ${diff} 位。${timeHint}`.trim();
             }
             if (diff < 0) {
-                return `相较初始词法排序下降 ${Math.abs(diff)} 位。`;
+                return `相较初始词法排序下降 ${Math.abs(diff)} 位。${timeHint}`.trim();
             }
         }
-        return '排序位置基本保持不变。';
+        return (`排序位置基本保持不变。${timeHint}`).trim();
     }
 }

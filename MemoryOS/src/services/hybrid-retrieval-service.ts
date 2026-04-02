@@ -20,6 +20,7 @@ import { VectorStoreAdapterService } from './vector-store-adapter';
 import { VectorStrategyRouter, type VectorStrategyRouterConfig } from './vector-strategy-router';
 import { VectorRerankService } from './vector-rerank-service';
 import { LLMHubRerankService } from './llmhub-rerank-service';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 import { readMemoryOSSettings } from '../settings/store';
 
@@ -448,7 +449,7 @@ export class HybridRetrievalService {
         settings: MemoryOSSettings,
     ): Promise<HybridRetrievalOutput> {
         const finalTopK = input.overrideFinalTopK ?? decision.finalTopK;
-        const merged = this.mergeResults(lexicalResults, vectorResults);
+        const merged = this.mergeResults(lexicalResults, vectorResults, query, input.queryContext?.mergedContextText || '');
         merged.sort((a, b) => b.score - a.score);
 
         if (!decision.rerankEnabled) {
@@ -599,8 +600,14 @@ export class HybridRetrievalService {
     private mergeResults(
         lexical: RetrievalResultItem[],
         vector: RetrievalResultItem[],
+        query: string,
+        queryContextText: string,
     ): RetrievalResultItem[] {
         const seen = new Map<string, RetrievalResultItem>();
+        const queryText = `${String(query ?? '').trim()} ${String(queryContextText ?? '').trim()}`.trim();
+        const currentMaxFloor = [...lexical, ...vector].reduce((max: number, item: RetrievalResultItem): number => (
+            Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0)
+        ), 0);
 
         for (const item of lexical) {
             const key = item.candidate.candidateId || item.candidate.entryId;
@@ -627,6 +634,24 @@ export class HybridRetrievalService {
             }
         }
 
-        return Array.from(seen.values());
+        return Array.from(seen.values())
+            .map((item: RetrievalResultItem): RetrievalResultItem => {
+                const existingTimeBoost = Number(item.breakdown.timeBoost) || 0;
+                const computedTimeBoost = item.candidate.timeContext
+                    ? Math.max(0, computeTimeBoost(queryText, item.candidate.timeContext, currentMaxFloor))
+                    : 0;
+                const timeBoost = Math.max(existingTimeBoost, computedTimeBoost);
+                const mergedScore = Math.max(0, Math.min(1, Number((
+                    item.score * (timeBoost > 0 ? 0.92 : 1) + timeBoost * 0.08
+                ).toFixed(6))));
+                return {
+                    ...item,
+                    score: mergedScore,
+                    breakdown: {
+                        ...item.breakdown,
+                        timeBoost,
+                    },
+                };
+            });
     }
 }

@@ -1,6 +1,7 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalFacet, RetrievalResultItem } from './types';
 import { computeNGramSimilarity } from './scoring';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 
 /**
  * 功能：facet 到 schemaId 的分类映射。
@@ -32,6 +33,7 @@ const FACET_MAX_RATIO: Record<RetrievalFacet, number> = {
  */
 export interface DiversityPruneInput {
     items: RetrievalResultItem[];
+    query?: string;
     maxChars?: number;
     maxCandidates?: number;
     similarityThreshold?: number;
@@ -54,7 +56,7 @@ export interface DiversityPruneResult {
  * @returns 裁剪后的结果和诊断。
  */
 export function pruneForDiversity(input: DiversityPruneInput): DiversityPruneResult {
-    const { items, maxChars = 8000, maxCandidates = 40, similarityThreshold = 0.85, onTrace } = input;
+    const { items, query = '', maxChars = 8000, maxCandidates = 40, similarityThreshold = 0.85, onTrace } = input;
     if (items.length <= 0) {
         return {
             items: [],
@@ -70,9 +72,12 @@ export function pruneForDiversity(input: DiversityPruneInput): DiversityPruneRes
         maxCandidates,
     });
 
+    const currentMaxFloor = items.reduce((max: number, item: RetrievalResultItem): number => {
+        return Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0);
+    }, 0);
     const deduped = deduplicateItems(items, similarityThreshold);
-    const balanced = balanceByCategory(deduped, maxCandidates);
-    const truncated = truncateByBudget(balanced.items, maxChars);
+    const balanced = balanceByCategory(deduped, maxCandidates, query, currentMaxFloor);
+    const truncated = truncateByBudget(sortItemsByTimePreference(balanced.items, query, currentMaxFloor), maxChars);
     const droppedCount = Math.max(0, items.length - truncated.length);
 
     if (balanced.dominantFacet) {
@@ -159,6 +164,8 @@ function deduplicateItems(items: RetrievalResultItem[], threshold: number): Retr
 function balanceByCategory(
     items: RetrievalResultItem[],
     maxCandidates: number,
+    query: string,
+    currentMaxFloor: number,
 ): { items: RetrievalResultItem[]; dominantFacet: RetrievalFacet | null; deferredCount: number } {
     if (items.length <= 0) {
         return { items, dominantFacet: null, deferredCount: 0 };
@@ -178,7 +185,7 @@ function balanceByCategory(
         }
     }
     if (items.length <= maxCandidates) {
-        return lightBalanceByCategory(items, buckets, allFacets, maxCandidates);
+        return lightBalanceByCategory(items, buckets, allFacets, maxCandidates, query, currentMaxFloor);
     }
 
     const selected: RetrievalResultItem[] = [];
@@ -217,7 +224,7 @@ function balanceByCategory(
         selected.push(item);
     }
     return {
-        items: selected.sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score),
+        items: sortItemsByTimePreference(selected, query, currentMaxFloor),
         dominantFacet: null,
         deferredCount: Math.max(0, items.length - selected.length),
     };
@@ -236,6 +243,8 @@ function lightBalanceByCategory(
     buckets: Map<RetrievalFacet, RetrievalResultItem[]>,
     allFacets: RetrievalFacet[],
     maxCandidates: number,
+    query: string,
+    currentMaxFloor: number,
 ): { items: RetrievalResultItem[]; dominantFacet: RetrievalFacet | null; deferredCount: number } {
     const total = items.length;
     if (total <= 3) {
@@ -287,10 +296,46 @@ function lightBalanceByCategory(
     return {
         items: [...prioritized, ...deferred]
             .slice(0, maxCandidates)
-            .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score),
+            .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => compareItemsByTimePreference(left, right, query, currentMaxFloor)),
         dominantFacet,
         deferredCount: deferred.length,
     };
+}
+
+/**
+ * 功能：按时间方向偏好与原始分数共同排序。
+ * @param items 候选列表。
+ * @param query 查询文本。
+ * @returns 排序后的候选。
+ */
+function sortItemsByTimePreference(items: RetrievalResultItem[], query: string, currentMaxFloor: number): RetrievalResultItem[] {
+    return [...items].sort((left: RetrievalResultItem, right: RetrievalResultItem): number => {
+        return compareItemsByTimePreference(left, right, query, currentMaxFloor);
+    });
+}
+
+/**
+ * 功能：比较两个候选的时间偏好顺序。
+ * @param left 左侧候选。
+ * @param right 右侧候选。
+ * @param query 查询文本。
+ * @returns 比较结果。
+ */
+function compareItemsByTimePreference(left: RetrievalResultItem, right: RetrievalResultItem, query: string, currentMaxFloor: number): number {
+    const leftTimeBoost = Math.max(
+        Number(left.breakdown.timeBoost) || 0,
+        left.candidate.timeContext ? Math.max(0, computeTimeBoost(query, left.candidate.timeContext, currentMaxFloor)) : 0,
+    );
+    const rightTimeBoost = Math.max(
+        Number(right.breakdown.timeBoost) || 0,
+        right.candidate.timeContext ? Math.max(0, computeTimeBoost(query, right.candidate.timeContext, currentMaxFloor)) : 0,
+    );
+    const leftScore = left.score + leftTimeBoost * 0.05;
+    const rightScore = right.score + rightTimeBoost * 0.05;
+    if (rightScore !== leftScore) {
+        return rightScore - leftScore;
+    }
+    return right.score - left.score;
 }
 
 /**

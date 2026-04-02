@@ -28,8 +28,9 @@ import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
 import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
 import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
-import { buildTimeMetaByEntryType } from '../memory-time/time-context';
-import { logTimeDebug } from '../memory-time/time-debug';
+import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug';
+import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
+import type { BatchTimeAssessment, MemoryTimelineProfile } from '../memory-time/time-types';
 
 /**
  * 功能：定义总结编排器依赖。
@@ -39,6 +40,8 @@ export interface SummaryOrchestratorDependencies extends MutationApplyDependenci
     listRoleMemories(actorKey?: string): Promise<RoleEntryMemory[]>;
     listSummarySnapshots(limit?: number): Promise<SummarySnapshot[]>;
     getWorldProfileBinding(): Promise<WorldProfileBinding | null>;
+    getTimelineProfile?(): Promise<MemoryTimelineProfile | null>;
+    putTimelineProfile?(profile: MemoryTimelineProfile): Promise<unknown>;
     appendMutationHistory(input: {
         action: string;
         payload: Record<string, unknown>;
@@ -106,6 +109,13 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             },
         };
     }
+    const windowBatchTimeAssessment = assessBatchTime({
+        batchId: `summary_window:${String(input.chatKey ?? 'global')}:${window.fromTurn}:${window.toTurn}`,
+        batchText: window.summaryText,
+        startFloor: window.fromTurn,
+        endFloor: window.toTurn,
+    });
+    const summaryTimeDigestBlock = buildSummaryTimeDigest(windowBatchTimeAssessment);
 
     const entries = await input.dependencies.listEntries();
     const roleMemories = await input.dependencies.listRoleMemories();
@@ -180,7 +190,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             worldProfile: plannerResult.diagnostics.worldProfile,
             user: userPlaceholder,
             userDisplayName: userPlaceholder,
-        })}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+        })}\n\n${summaryTimeDigestBlock}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
         const lightweightPlannerInput = normalizeNarrativeValueWithUserPlaceholder({
             ...buildLightweightPlannerInput(plannerResult.context),
             userPlaceholder,
@@ -293,7 +303,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         worldProfile: plannerResult.diagnostics.worldProfile,
         user: userPlaceholder,
         userDisplayName: userPlaceholder,
-    })}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
+    })}\n\n${summaryTimeDigestBlock}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
     upsertPipelineJobRecord({
         jobId: summaryJobId,
@@ -467,12 +477,14 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const finalMutationDocument = finalizeSummaryMutationSnapshot(stagingSnapshot);
 
     // ── 为总结批次生成时间评估 ──
-    const summaryBatchTimeAssessment = assessBatchTime({
+    const summaryBatchTimeAssessment = {
+        ...windowBatchTimeAssessment,
         batchId: summaryJobId,
-        batchText: resumedPlannerContext.window.summaryText,
-        startFloor: finalMutationDocument.window.fromTurn,
-        endFloor: finalMutationDocument.window.toTurn,
-    });
+        floorRange: {
+            startFloor: finalMutationDocument.window.fromTurn,
+            endFloor: finalMutationDocument.window.toTurn,
+        },
+    };
     finalMutationDocument.batchTimeAssessment = summaryBatchTimeAssessment;
 
     // 为每个 action 补充时间上下文
@@ -493,6 +505,34 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         confidence: summaryBatchTimeAssessment.confidence,
         explicitMentions: summaryBatchTimeAssessment.explicitMentions,
     });
+    if (input.dependencies.putTimelineProfile) {
+        const existingTimelineProfile = input.dependencies.getTimelineProfile
+            ? await input.dependencies.getTimelineProfile()
+            : null;
+        const timelineEvolution = resolveTimelineProfileEvolution({
+            texts: [
+                resumedPlannerContext.window.summaryText,
+                resumedPlannerContext.window.recentContextText ?? '',
+            ],
+            anchorFloor: finalMutationDocument.window.toTurn,
+            existingProfile: existingTimelineProfile,
+        });
+        if (timelineEvolution.shouldPersist) {
+            await input.dependencies.putTimelineProfile(timelineEvolution.profile);
+            await input.dependencies.appendMutationHistory({
+                action: 'timeline_profile_updated',
+                payload: {
+                    source: 'summary_batch',
+                    reason: timelineEvolution.reason,
+                    mode: timelineEvolution.profile.mode,
+                    calendarKind: timelineEvolution.profile.calendarKind,
+                    confidence: timelineEvolution.profile.confidence,
+                    anchorTimeText: timelineEvolution.profile.anchorTimeText,
+                    version: timelineEvolution.profile.version,
+                },
+            });
+        }
+    }
 
     await input.dependencies.appendMutationHistory({
         action: 'mutation_validated',
@@ -766,6 +806,46 @@ function buildEditableFieldMap(typeSchemas: Array<{ schemaId: string; editableFi
         map.set(schema.schemaId, new Set(schema.editableFields));
     }
     return map;
+}
+
+/**
+ * 功能：为总结提示词构建批次时间摘要块。
+ * @param assessment 批次时间评估。
+ * @returns 多行摘要文本。
+ */
+function buildSummaryTimeDigest(assessment: BatchTimeAssessment): string {
+    const lines: string[] = ['本批时间评估：'];
+    lines.push(`- 时间模式：${resolveSummaryTimeModeLabel(assessment)}`);
+    lines.push(`- 可能经历时间：${resolveSummaryElapsedLabel(assessment)}`);
+    lines.push(`- 明确时间词：${assessment.explicitMentions.length > 0 ? assessment.explicitMentions.join('、') : '未检测到'}`);
+    lines.push(`- 场景推进：${assessment.sceneTransitions.length > 0 ? assessment.sceneTransitions.join(' -> ') : '未检测到明显场景推进'}`);
+    lines.push(`- 判断说明：${explainBatchAssessment(assessment).replace(/\n+/g, '；')}`);
+    lines.push('请在抽取事件、关系、状态变化时显式参考以上时间推进，不要把不同时间层的事实混成同一时点。');
+    return lines.join('\n');
+}
+
+/**
+ * 功能：解析总结阶段的时间模式标签。
+ * @param assessment 批次时间评估。
+ * @returns 中文标签。
+ */
+function resolveSummaryTimeModeLabel(assessment: BatchTimeAssessment): string {
+    if (assessment.explicitMentions.length > 0) {
+        return '明确故事时间';
+    }
+    if (assessment.inferredElapsed?.text) {
+        return '推断时间推进';
+    }
+    return '系统时序为主';
+}
+
+/**
+ * 功能：解析总结阶段的持续时间标签。
+ * @param assessment 批次时间评估。
+ * @returns 中文标签。
+ */
+function resolveSummaryElapsedLabel(assessment: BatchTimeAssessment): string {
+    return String(assessment.inferredElapsed?.text ?? '').trim() || '未识别到明确时长，按系统时序理解';
 }
 
 /**

@@ -75,6 +75,8 @@ export interface RetrievalOutputDiagnostics {
     rerankedRanking?: RetrievalStageRankingItem[];
     /** 结果排序变化解释 */
     rankingChanges?: RetrievalRankingChangeItem[];
+    /** 最终结果中受到时间偏置影响的条目数量 */
+    timeBiasedCount?: number;
 }
 
 /**

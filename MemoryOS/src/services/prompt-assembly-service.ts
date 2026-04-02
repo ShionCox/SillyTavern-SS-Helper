@@ -12,6 +12,8 @@ import { readMemoryOSSettings } from '../settings/store';
 import type { ActorMemoryProfile, MemoryEntry, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
 import type { MemoryCompareKeyIndexRecord } from '../db/db';
 import { getSharedRetrievalService } from '../runtime/vector-runtime';
+import { buildPromptTimeMeta } from '../memory-time/time-ranking';
+import type { PromptTimeMeta } from '../memory-time/time-types';
 
 /**
  * 功能：统一承接 Prompt 检索、记忆保留阶段计算与注入文本组装。
@@ -52,8 +54,11 @@ export class PromptAssemblyService {
             this.repository.listRoleMemories(),
             this.repository.listCompareKeyIndexRecords(),
         ]);
+        const currentMaxFloor = entries.reduce((max: number, entry: MemoryEntry): number => {
+            return Math.max(max, entry.timeContext?.sequenceTime?.lastFloor ?? 0);
+        }, 0);
 
-        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex);
+        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex, currentMaxFloor);
         const retrievalQueryText = query || promptText || '当前对话';
         const retrievalResult = await getSharedRetrievalService().searchForPrompt({
             query: retrievalQueryText,
@@ -81,7 +86,7 @@ export class PromptAssemblyService {
         const effectiveActorKey = matchedActorKeys[0] || 'user';
         const actorMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, ActorMemoryProfile] => [profile.actorKey, profile]));
         const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
-        const roleEntries = this.buildRoleEntries(roleMemories, matchedActorKeys, matchedEntryIdSet, entryMap, actorMap);
+        const roleEntries = this.buildRoleEntries(roleMemories, matchedActorKeys, matchedEntryIdSet, entryMap, actorMap, currentMaxFloor);
 
         const worldDetection = worldBinding?.primaryProfile
             ? {
@@ -158,6 +163,8 @@ export class PromptAssemblyService {
                 retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
                 matchModeCounts: this.buildPromptMatchModeCounts(selectedEntries, compareKeyIndex),
                 compareKeySchemaVersion: 'v2',
+                timeInjectedCount: visibleContext.diagnostics.timeInjectedCount,
+                timeSourceCounts: visibleContext.diagnostics.timeSourceCounts,
             },
         };
 
@@ -169,6 +176,8 @@ export class PromptAssemblyService {
                 matchedEntryCount: snapshot.matchedEntryIds.length,
                 retrievalProviderId: retrievalResult.providerId,
                 retrievalRulePack: settings.retrievalRulePack,
+                timeInjectedCount: visibleContext.diagnostics.timeInjectedCount,
+                timeSourceCounts: visibleContext.diagnostics.timeSourceCounts,
                 reasonCodes: snapshot.reasonCodes,
             },
         });
@@ -190,6 +199,7 @@ export class PromptAssemblyService {
         matchedEntryIdSet: Set<string>,
         entryMap: Map<string, MemoryEntry>,
         actorMap: Map<string, ActorMemoryProfile>,
+        currentMaxFloor: number,
     ): PromptAssemblyRoleEntry[] {
         const roleEntries: PromptAssemblyRoleEntry[] = [];
         for (const row of roleMemories) {
@@ -211,6 +221,9 @@ export class PromptAssemblyService {
                 actorMemoryStat: actorMap.get(row.actorKey)?.memoryStat ?? row.memoryPercent,
                 relationSensitivity: this.resolveRelationSensitivity(entry),
             });
+            const promptTimeMeta = entry.timeContext
+                ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
+                : undefined;
             roleEntries.push({
                 actorKey: row.actorKey,
                 actorLabel: actorMap.get(row.actorKey)?.displayName || row.actorKey,
@@ -219,7 +232,8 @@ export class PromptAssemblyService {
                 entryType: entry.entryType,
                 memoryPercent: row.memoryPercent,
                 forgotten: false,
-                renderedText: this.renderRoleEntryText(entry, retention.stage, retention.distortionTemplateId),
+                renderedText: this.renderRoleEntryText(entry, retention.stage, retention.distortionTemplateId, currentMaxFloor),
+                promptTimeMeta,
                 retentionStage: retention.stage,
                 retentionReasonCodes: retention.reasonCodes,
                 renderMode: retention.stage,
@@ -293,6 +307,7 @@ export class PromptAssemblyService {
         roleRows: RoleEntryMemory[],
         actorProfiles: ActorMemoryProfile[],
         compareKeyIndex: MemoryCompareKeyIndexRecord[],
+        currentMaxFloor: number,
     ): RetrievalCandidate[] {
         const boundActorMap = new Map<string, string[]>();
         const memoryPercentMap = new Map<string, number>();
@@ -378,6 +393,9 @@ export class PromptAssemblyService {
                 injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
                 aliasTexts,
                 timeContext: entry.timeContext,
+                promptTimeMeta: entry.timeContext
+                    ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
+                    : undefined,
             };
         });
     }
@@ -460,16 +478,43 @@ export class PromptAssemblyService {
      * @param distortionTemplateId 失真模板标识
      * @returns 渲染文本
      */
-    private renderRoleEntryText(entry: MemoryEntry, stage: 'clear' | 'blur' | 'distorted', distortionTemplateId?: string): string {
+    private renderRoleEntryText(
+        entry: MemoryEntry,
+        stage: 'clear' | 'blur' | 'distorted',
+        distortionTemplateId?: string,
+        currentMaxFloor: number = 0,
+    ): string {
         const baseSummary = entry.summary || entry.detail || '暂无详情';
+        const promptTimeMeta = entry.timeContext
+            ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
+            : undefined;
         if (stage === 'clear') {
-            return `${entry.title}：${baseSummary}`;
+            return this.prependPromptTimeHeader(`${entry.title}：${baseSummary}`, promptTimeMeta);
         }
         if (stage === 'blur') {
             const shortened = baseSummary.length > 24 ? `${baseSummary.slice(0, 24)}……` : `${baseSummary}（细节已模糊）`;
-            return `${entry.title}：${shortened}`;
+            return this.prependPromptTimeHeader(`${entry.title}：${shortened}`, promptTimeMeta);
         }
-        return `${entry.title}：${this.renderDistortedSummary(entry, distortionTemplateId)}`;
+        return this.prependPromptTimeHeader(`${entry.title}：${this.renderDistortedSummary(entry, distortionTemplateId)}`, promptTimeMeta);
+    }
+
+    /**
+     * 功能：把时间头追加到提示词记忆文本前方。
+     * @param text 原始正文。
+     * @param promptTimeMeta 提示词时间元信息。
+     * @returns 带时间头的文本。
+     */
+    private prependPromptTimeHeader(text: string, promptTimeMeta?: PromptTimeMeta): string {
+        const normalized = this.normalizeText(text);
+        if (!normalized || !promptTimeMeta) {
+            return normalized;
+        }
+        const header = [
+            `时间：${promptTimeMeta.timeLabelForPrompt}`,
+            `来源：${promptTimeMeta.timeSourceLabel}`,
+            ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
+        ].join('｜');
+        return `[${header}] ${normalized}`;
     }
 
     /**

@@ -32,6 +32,9 @@ import {
     buildWorldStateCompareKey,
 } from '../core/compare-key';
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
+import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
+import type { MemoryTimeContext } from '../memory-time/time-types';
+import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { logTimeDebug } from '../memory-time/time-debug';
 
 /**
@@ -1252,6 +1255,92 @@ function normalizeTakeoverUserPlaceholder<T>(value: T, userDisplayName: string, 
 }
 
 /**
+ * 功能：根据接管稳定事实类型映射目标 entryType。
+ * @param factType 接管稳定事实类型。
+ * @returns 对应的 entryType。
+ */
+function resolveTakeoverFactEntryTypeForTime(factType: string): string {
+    const normalized = String(factType ?? '').trim().toLowerCase();
+    if (normalized === 'faction') {
+        return 'organization';
+    }
+    if (normalized === 'artifact') {
+        return 'item';
+    }
+    if (normalized === 'world') {
+        return 'world_core_setting';
+    }
+    if (normalized === 'world_global_state') {
+        return 'world_global_state';
+    }
+    return normalized || 'other';
+}
+
+/**
+ * 功能：为单条接管记录补齐时间上下文与扩展时间字段。
+ * @param entryType 目标 entryType。
+ * @param record 原始记录。
+ * @param timeContext 批次映射出的时间上下文。
+ * @returns 补齐时间后的记录。
+ */
+function attachTakeoverRecordTime<T extends Record<string, unknown>>(
+    entryType: string,
+    record: T,
+    timeContext: MemoryTimeContext,
+): T {
+    const existingTimeContext = record.timeContext as MemoryTimeContext | undefined;
+    const resolvedTimeContext = existingTimeContext ?? timeContext;
+    const timeMeta = buildTimeMetaByEntryType(entryType, resolvedTimeContext);
+    return {
+        ...record,
+        timeContext: resolvedTimeContext,
+        ...timeMeta,
+    };
+}
+
+/**
+ * 功能：把批次时间评估下沉到接管条目级结果。
+ * @param result 原始批次结果。
+ * @returns 补齐时间字段后的批次结果。
+ */
+function attachTakeoverBatchTimeMeta(result: MemoryTakeoverBatchResult): MemoryTakeoverBatchResult {
+    const assessment = result.batchTimeAssessment;
+    if (!assessment) {
+        return result;
+    }
+    const batchTimeContext = mapBatchToMemoryTimeContext({
+        assessment,
+        firstFloor: result.sourceRange.startFloor,
+        lastFloor: result.sourceRange.endFloor,
+        source: 'takeover_batch',
+    });
+    return {
+        ...result,
+        stableFacts: (result.stableFacts ?? []).map((fact: MemoryTakeoverStableFact): MemoryTakeoverStableFact => (
+            attachTakeoverRecordTime(resolveTakeoverFactEntryTypeForTime(fact.type), fact as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverStableFact
+        )),
+        relationships: (result.relationships ?? []).map((relationship: MemoryTakeoverRelationshipCard): MemoryTakeoverRelationshipCard => (
+            attachTakeoverRecordTime('relationship', relationship as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverRelationshipCard
+        )),
+        entityCards: (result.entityCards ?? []).map((entityCard: MemoryTakeoverEntityCardCandidate): MemoryTakeoverEntityCardCandidate => (
+            attachTakeoverRecordTime(entityCard.entityType, entityCard as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverEntityCardCandidate
+        )),
+        entityTransitions: (result.entityTransitions ?? []).map((transition: MemoryTakeoverEntityTransition): MemoryTakeoverEntityTransition => (
+            attachTakeoverRecordTime(transition.entityType, transition as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverEntityTransition
+        )),
+        relationTransitions: (result.relationTransitions ?? []).map((transition: MemoryTakeoverRelationTransition): MemoryTakeoverRelationTransition => (
+            attachTakeoverRecordTime('relationship', transition as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverRelationTransition
+        )),
+        taskTransitions: (result.taskTransitions ?? []).map((task: MemoryTakeoverTaskTransition): MemoryTakeoverTaskTransition => (
+            attachTakeoverRecordTime('task', task as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverTaskTransition
+        )),
+        worldStateChanges: (result.worldStateChanges ?? []).map((change: MemoryTakeoverWorldStateChange): MemoryTakeoverWorldStateChange => (
+            attachTakeoverRecordTime('world_global_state', change as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverWorldStateChange
+        )),
+    };
+}
+
+/**
  * 功能：统一归一化接管批次结果。
  * @param input 归一化输入。
  * @returns 归一化后的批次结果。
@@ -1265,7 +1354,7 @@ export function normalizeTakeoverBatchResult(input: {
 }): MemoryTakeoverBatchResult {
     const userDisplayName = resolveCurrentNarrativeUserName();
     const structured = normalizeTakeoverUserPlaceholder(input.result, userDisplayName);
-    return {
+    const normalizedResult: MemoryTakeoverBatchResult = {
         ...input.fallback,
         ...structured,
         actorCards: normalizeActorCards(structured.actorCards ?? [], 12),
@@ -1284,4 +1373,5 @@ export function normalizeTakeoverBatchResult(input: {
         sourceSegments: input.sourceSegments ?? structured.sourceSegments ?? [],
         generatedAt: Date.now(),
     };
+    return attachTakeoverBatchTimeMeta(normalizedResult);
 }

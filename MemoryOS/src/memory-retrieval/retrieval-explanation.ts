@@ -114,6 +114,7 @@ function formatScoreBreakdown(breakdown: RetrievalScoreBreakdown): string {
     if (breakdown.memoryWeight > 0) parts.push(`记忆度=${breakdown.memoryWeight.toFixed(3)}`);
     if ((breakdown.recencyWeight ?? 0) > 0) parts.push(`时效性=${(breakdown.recencyWeight ?? 0).toFixed(3)}`);
     if ((breakdown.graphBoost ?? 0) > 0) parts.push(`图扩展=${(breakdown.graphBoost ?? 0).toFixed(3)}`);
+    if ((breakdown.timeBoost ?? 0) > 0) parts.push(`时间加权=${(breakdown.timeBoost ?? 0).toFixed(3)}`);
     if ((breakdown.diversityPenalty ?? 0) > 0) parts.push(`多样性惩罚=${(breakdown.diversityPenalty ?? 0).toFixed(3)}`);
     return parts.join(' | ') || '无具体分解';
 }
@@ -134,6 +135,7 @@ function buildReasonSummary(
             if (breakdown.editDistance > 0.5) reasons.push('文本拼写接近');
             if (breakdown.memoryWeight > 0.5) reasons.push('记忆度较高');
             if ((breakdown.recencyWeight ?? 0) > 0.5) reasons.push('近期更新');
+            if ((breakdown.timeBoost ?? 0) > 0.2) reasons.push('时间方向匹配');
             return reasons.join('、') || '词法检索命中';
         }
         case 'vector':

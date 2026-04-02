@@ -2,11 +2,13 @@ import {
     loadMemoryTakeoverBatchMetas,
     loadMemoryTakeoverBatchResults,
     loadMemoryTakeoverPreview,
+    readMemoryTimelineProfile,
     readMemoryTakeoverPlan,
     saveCandidateActorMentions,
     saveMemoryTakeoverBatchMeta,
     saveMemoryTakeoverBatchResult,
     saveMemoryTakeoverPreview,
+    writeMemoryTimelineProfile,
     writeMemoryTakeoverPlan,
 } from '../db/db';
 import type {
@@ -27,6 +29,8 @@ import { assembleTakeoverBatchPromptAssembly, runTakeoverBatch } from './takeove
 import { runTakeoverConsolidation } from './takeover-consolidator';
 import { buildTakeoverBatches, validateTakeoverBatchCoverage } from './takeover-planner';
 import { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
+import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
+import { logTimeDebug } from '../memory-time/time-debug';
 
 /**
  * 功能：执行完整旧聊天接管任务。
@@ -211,6 +215,24 @@ export async function runTakeoverScheduler(input: {
                 isolatedBatchIds.delete(admission.result.batchId);
                 await saveMemoryTakeoverBatchResult(input.chatKey, admission.result);
                 await saveCandidateActorMentions(input.chatKey, admission.result.candidateActors ?? []);
+                const existingTimelineProfile = await readMemoryTimelineProfile(input.chatKey);
+                const timelineEvolution = resolveTimelineProfileEvolution({
+                    texts: messages.map((message): string => String(message.content ?? '').trim()).filter(Boolean),
+                    anchorFloor: batch.range.endFloor,
+                    existingProfile: existingTimelineProfile,
+                });
+                if (timelineEvolution.shouldPersist) {
+                    await writeMemoryTimelineProfile(input.chatKey, timelineEvolution.profile);
+                    logTimeDebug('takeover_timeline_profile_updated', {
+                        takeoverId: plan.takeoverId,
+                        batchId: admission.result.batchId,
+                        reason: timelineEvolution.reason,
+                        mode: timelineEvolution.profile.mode,
+                        calendarKind: timelineEvolution.profile.calendarKind,
+                        confidence: timelineEvolution.profile.confidence,
+                        version: timelineEvolution.profile.version,
+                    });
+                }
                 await saveMemoryTakeoverBatchMeta(input.chatKey, {
                     ...runningBatch,
                     status: 'completed',

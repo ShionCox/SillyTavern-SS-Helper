@@ -1,4 +1,5 @@
 import type { RetrievalResultItem } from '../memory-retrieval/types';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 
 /**
@@ -108,6 +109,41 @@ function buildRerankDocText(item: RetrievalResultItem): string {
 }
 
 /**
+ * 功能：对 LLMHub 返回结果追加时间偏置，避免模型重排完全丢失时间方向。
+ * @param query 查询文本。
+ * @param items 候选项。
+ * @returns 加入时间偏置后的候选。
+ */
+function applyLLMHubTimeBias(query: string, items: RetrievalResultItem[]): RetrievalResultItem[] {
+    if (items.length <= 0) {
+        return [];
+    }
+    const currentMaxFloor = items.reduce((max: number, item: RetrievalResultItem): number => (
+        Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0)
+    ), 0);
+    const queryText = String(query ?? '').trim();
+    return items
+        .map((item: RetrievalResultItem): RetrievalResultItem => {
+            const timeBoost = item.candidate.timeContext
+                ? computeTimeBoost(queryText, item.candidate.timeContext, currentMaxFloor)
+                : (item.breakdown.timeBoost ?? 0);
+            const llmScore = Math.max(0, Math.min(1, Number(item.score) || 0));
+            const rerankScore = Math.max(0, Math.min(1, Number((
+                llmScore * 0.92 + Math.max(0, Number(timeBoost) || 0) * 0.08
+            ).toFixed(6))));
+            return {
+                ...item,
+                score: rerankScore,
+                breakdown: {
+                    ...item.breakdown,
+                    timeBoost: Math.max(0, Number(timeBoost) || 0),
+                },
+            };
+        })
+        .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score);
+}
+
+/**
  * 功能：LLMHub 模型重排序服务。
  */
 export class LLMHubRerankService {
@@ -194,9 +230,10 @@ export class LLMHubRerankService {
                 };
             }
 
+            const timeBiasedItems = applyLLMHubTimeBias(input.query, items);
             return {
                 ok: true,
-                items: items.slice(0, input.finalTopK),
+                items: timeBiasedItems.slice(0, input.finalTopK),
                 reasonCodes: [`llmhub_rerank_${input.mode}`, `from_${input.candidates.length}_to_${Math.min(items.length, input.finalTopK)}`],
                 providerResource: response.resource,
                 providerModel: response.meta?.model,

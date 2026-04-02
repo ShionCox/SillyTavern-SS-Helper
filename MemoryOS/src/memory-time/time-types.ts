@@ -201,6 +201,16 @@ export interface MemoryTimeIndex {
     timeLabel: string;
 }
 
+/**
+ * 功能：定义供 AI 阅读的时间注入元信息。
+ */
+export interface PromptTimeMeta {
+    timeLabelForPrompt: string;
+    timeSourceLabel: string;
+    timeConfidenceLabel?: string;
+    sourceMode: 'explicit_story' | 'inferred_story' | 'sequence_fallback';
+}
+
 // ── 默认兜底规则 ──
 
 export const DEFAULT_FALLBACK_RULES: FallbackTimeRules = {

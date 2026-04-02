@@ -2,7 +2,7 @@ import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger
 import type { RetrievalContextRoute, RetrievalDiagnostics, RetrievalRulePackMode } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetentionStage } from '../memory-retention/retention-types';
-import type { MemoryTimeContext } from '../memory-time/time-types';
+import type { MemoryTimeContext, PromptTimeMeta } from '../memory-time/time-types';
 
 export type MemoryEntryCategory =
     | '世界基础'
@@ -151,6 +151,10 @@ export interface MemoryRelationshipRecord {
     affection: number;
     tension: number;
     participants: string[];
+    timeContext?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
     createdAt: number;
     updatedAt: number;
 }
@@ -169,6 +173,16 @@ export interface SummaryEntryUpsert {
     sourceLabel?: string;
     /** 时间上下文 */
     timeContext?: MemoryTimeContext;
+    /** 稳定事实类：首次观测时间 */
+    firstObservedAt?: MemoryTimeContext;
+    /** 稳定事实类：最后观测时间 */
+    lastObservedAt?: MemoryTimeContext;
+    /** 区间类：生效起始时间 */
+    validFrom?: MemoryTimeContext;
+    /** 区间类：生效结束时间 */
+    validTo?: MemoryTimeContext;
+    /** 区间类：是否仍在持续 */
+    ongoing?: boolean;
 }
 
 export interface SummaryRefreshBinding {
@@ -247,6 +261,16 @@ export interface LedgerMutation {
     sourceContext?: Record<string, unknown>;
     /** 时间上下文 */
     timeContext?: MemoryTimeContext;
+    /** 稳定事实类：首次观测时间 */
+    firstObservedAt?: MemoryTimeContext;
+    /** 稳定事实类：最后观测时间 */
+    lastObservedAt?: MemoryTimeContext;
+    /** 区间类：生效起始时间 */
+    validFrom?: MemoryTimeContext;
+    /** 区间类：生效结束时间 */
+    validTo?: MemoryTimeContext;
+    /** 区间类：是否仍在持续 */
+    ongoing?: boolean;
 }
 
 export interface LedgerMutationBatchContext {
@@ -380,6 +404,7 @@ export interface PromptAssemblyRoleEntry {
     memoryPercent: number;
     forgotten: boolean;
     renderedText: string;
+    promptTimeMeta?: PromptTimeMeta;
     retentionStage: RetentionStage;
     retentionReasonCodes: string[];
     renderMode: 'clear' | 'blur' | 'distorted' | 'hidden';
@@ -406,6 +431,8 @@ export interface PromptAssemblyDiagnostics {
     matchModeCounts?: Record<string, number>;
     compareKeySchemaVersion?: string;
     bindingMatchModeCounts?: Record<string, number>;
+    timeInjectedCount?: number;
+    timeSourceCounts?: Record<string, number>;
 }
 
 export interface PromptAssemblySnapshot {

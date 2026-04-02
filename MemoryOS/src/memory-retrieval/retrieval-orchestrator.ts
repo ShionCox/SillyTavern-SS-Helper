@@ -272,6 +272,7 @@ export class RetrievalOrchestrator {
             const expandedResult = expandFromSeeds({
                 seeds,
                 allCandidates: candidates,
+                queryText: normalizedQuery,
                 maxDepth: effectiveConfig.expandDepth,
                 decay: 0.65,
                 enableHubPenalty: effectiveConfig.enableGraphPenalty,
@@ -309,6 +310,7 @@ export class RetrievalOrchestrator {
         if (effectiveConfig.enableDiversity) {
             const diversityResult = pruneForDiversity({
                 items: coverageResult.items,
+                query: normalizedQuery,
                 maxChars: query.budget.maxChars ?? 8000,
                 maxCandidates: query.budget.maxCandidates ?? 40,
                 onTrace: writeTrace,

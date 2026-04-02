@@ -6,7 +6,10 @@ import {
     db,
     deleteMemoryCompareKeyIndexRecord,
     loadMemoryCompareKeyIndexRecords,
+    readMemoryOSChatState,
+    readMemoryTimelineProfile,
     saveMemoryCompareKeyIndexRecord,
+    writeMemoryOSChatState,
     type DBActorMemoryProfile,
     type DBMemoryEntry,
     type DBMemoryEntryAuditRecord,
@@ -35,6 +38,7 @@ import {
     clearAllVectorDataForChat,
 } from '../db/vector-db';
 import { normalizeSummarySnapshot } from '../memory-summary-planner';
+import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { deleteWorldProfileBinding, getWorldProfileBinding, putWorldProfileBinding } from '../memory-world-profile';
 import { BindingResolutionService } from '../services/binding-resolution-service';
 import {
@@ -62,6 +66,8 @@ import {
     type WorldProfileBinding,
 } from '../types';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import type { MemoryTimeContext } from '../memory-time/time-types';
+import type { MemoryTimelineProfile } from '../memory-time/time-types';
 import type { VectorDocument, DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
 import type { IndexedVectorDocument } from '../types/vector-search';
 import { onEntryDeleted } from '../services/vector-index-service';
@@ -447,6 +453,10 @@ export class EntryRepository {
             affection: this.clampPercent(input.affection),
             tension: this.clampPercent(input.tension),
             participants: this.normalizeActorKeyList(input.participants),
+            ...(input.timeContext ? { timeContext: input.timeContext as unknown as Record<string, unknown> } : {}),
+            ...(input.validFrom ? { validFrom: input.validFrom as unknown as Record<string, unknown> } : {}),
+            ...(input.validTo ? { validTo: input.validTo as unknown as Record<string, unknown> } : {}),
+            ...(input.ongoing !== undefined ? { ongoing: input.ongoing } : {}),
             createdAt: existing?.createdAt ?? (Number(input.createdAt ?? now) || now),
             updatedAt: Number(input.updatedAt ?? now) || now,
         };
@@ -479,6 +489,10 @@ export class EntryRepository {
             affection: this.clampPercent(item.affection),
             tension: this.clampPercent(item.tension),
             participants: this.normalizeActorKeyList(item.participants),
+            ...(item.timeContext ? { timeContext: item.timeContext as unknown as Record<string, unknown> } : {}),
+            ...(item.validFrom ? { validFrom: item.validFrom as unknown as Record<string, unknown> } : {}),
+            ...(item.validTo ? { validTo: item.validTo as unknown as Record<string, unknown> } : {}),
+            ...(item.ongoing !== undefined ? { ongoing: item.ongoing } : {}),
             createdAt: Number(item.createdAt ?? Date.now()) || Date.now(),
             updatedAt: Number(item.updatedAt ?? Date.now()) || Date.now(),
         }));
@@ -634,6 +648,7 @@ export class EntryRepository {
                 tags: mutation.tags,
                 sourceSummaryIds: context.summaryId ? [context.summaryId] : [],
                 ...(mutation.timeContext ? { timeContext: mutation.timeContext } : {}),
+                ...this.buildEntryTimeFields(mutation.targetKind, mutation.timeContext, targetEntry, mutation),
             }, {
                 actionType: action as EntryAuditWriteOptions['actionType'],
                 summaryId: context.summaryId,
@@ -733,6 +748,11 @@ export class EntryRepository {
             tags: upsert.tags,
             reasonCodes: upsert.reasonCodes,
             timeContext: upsert.timeContext,
+            firstObservedAt: upsert.firstObservedAt,
+            lastObservedAt: upsert.lastObservedAt,
+            validFrom: upsert.validFrom,
+            validTo: upsert.validTo,
+            ongoing: upsert.ongoing,
         }));
         const mutationApplyDiagnostics = await this.applyLedgerMutationBatch(mutations, {
             chatKey: this.chatKey,
@@ -863,6 +883,30 @@ export class EntryRepository {
      */
     async deleteWorldProfileBinding(): Promise<void> {
         await deleteWorldProfileBinding(this.chatKey);
+    }
+
+    /**
+     * 功能：读取当前聊天保存的时间画像。
+     * @returns 时间画像；不存在时返回 null。
+     */
+    async getTimelineProfile(): Promise<MemoryTimelineProfile | null> {
+        return readMemoryTimelineProfile(this.chatKey);
+    }
+
+    /**
+     * 功能：写入当前聊天的时间画像。
+     * @param profile 时间画像。
+     * @returns 保存后的时间画像。
+     */
+    async putTimelineProfile(profile: MemoryTimelineProfile): Promise<MemoryTimelineProfile> {
+        const stateRow = await readMemoryOSChatState(this.chatKey);
+        const state = this.normalizeRecord(stateRow?.state);
+        const normalizedProfile = this.normalizeRecord(profile) as unknown as MemoryTimelineProfile;
+        await writeMemoryOSChatState(this.chatKey, {
+            ...state,
+            timelineProfile: normalizedProfile as unknown as Record<string, unknown>,
+        });
+        return normalizedProfile;
     }
 
     /**
@@ -1030,6 +1074,48 @@ export class EntryRepository {
             return 'ADD';
         }
         return 'UPDATE';
+    }
+
+    /**
+     * 功能：根据条目类型与时间上下文生成扩展时间字段。
+     * @param entryType 条目类型。
+     * @param timeContext 当前时间上下文。
+     * @param existing 已有条目。
+     * @param mutation 原始变更。
+     * @returns 可直接写入条目的时间字段补丁。
+     */
+    private buildEntryTimeFields(
+        entryType: string,
+        timeContext: MemoryTimeContext | undefined,
+        existing: MemoryEntry | null,
+        mutation?: Partial<LedgerMutation>,
+    ): Partial<MemoryEntry> {
+        const explicitFields: Partial<MemoryEntry> = {
+            ...(mutation?.firstObservedAt ? { firstObservedAt: mutation.firstObservedAt } : {}),
+            ...(mutation?.lastObservedAt ? { lastObservedAt: mutation.lastObservedAt } : {}),
+            ...(mutation?.validFrom ? { validFrom: mutation.validFrom } : {}),
+            ...(mutation?.validTo ? { validTo: mutation.validTo } : {}),
+            ...(mutation?.ongoing !== undefined ? { ongoing: mutation.ongoing } : {}),
+        };
+        if (Object.keys(explicitFields).length > 0) {
+            return explicitFields;
+        }
+        if (!timeContext) {
+            return {};
+        }
+        const derivedTimeMeta = buildTimeMetaByEntryType(entryType, timeContext);
+        return {
+            ...(derivedTimeMeta.firstObservedAt ? { firstObservedAt: derivedTimeMeta.firstObservedAt as MemoryTimeContext } : {}),
+            ...(derivedTimeMeta.lastObservedAt ? { lastObservedAt: derivedTimeMeta.lastObservedAt as MemoryTimeContext } : {}),
+            ...(derivedTimeMeta.validFrom ? { validFrom: derivedTimeMeta.validFrom as MemoryTimeContext } : {}),
+            ...(derivedTimeMeta.validTo ? { validTo: derivedTimeMeta.validTo as MemoryTimeContext } : {}),
+            ...(derivedTimeMeta.ongoing !== undefined ? { ongoing: Boolean(derivedTimeMeta.ongoing) } : {}),
+            ...(existing?.firstObservedAt && !derivedTimeMeta.firstObservedAt ? { firstObservedAt: existing.firstObservedAt } : {}),
+            ...(existing?.lastObservedAt && !derivedTimeMeta.lastObservedAt ? { lastObservedAt: existing.lastObservedAt } : {}),
+            ...(existing?.validFrom && !derivedTimeMeta.validFrom ? { validFrom: existing.validFrom } : {}),
+            ...(existing?.validTo && !derivedTimeMeta.validTo ? { validTo: existing.validTo } : {}),
+            ...(existing?.ongoing !== undefined && derivedTimeMeta.ongoing === undefined ? { ongoing: existing.ongoing } : {}),
+        };
     }
 
     /**
@@ -1299,6 +1385,14 @@ export class EntryRepository {
             detail: this.normalizeText(row.detail),
             detailPayload: this.normalizeRecord(row.detailPayload),
             sourceSummaryIds: this.normalizeTags(row.sourceSummaryIds),
+            timeContext: this.readOptionalTimeContext((row as DBMemoryEntry & { timeContext?: unknown }).timeContext),
+            firstObservedAt: this.readOptionalTimeContext((row as DBMemoryEntry & { firstObservedAt?: unknown }).firstObservedAt),
+            lastObservedAt: this.readOptionalTimeContext((row as DBMemoryEntry & { lastObservedAt?: unknown }).lastObservedAt),
+            validFrom: this.readOptionalTimeContext((row as DBMemoryEntry & { validFrom?: unknown }).validFrom),
+            validTo: this.readOptionalTimeContext((row as DBMemoryEntry & { validTo?: unknown }).validTo),
+            ongoing: (row as DBMemoryEntry & { ongoing?: unknown }).ongoing === undefined
+                ? undefined
+                : Boolean((row as DBMemoryEntry & { ongoing?: unknown }).ongoing),
         };
     }
 
@@ -1348,6 +1442,12 @@ export class EntryRepository {
             trust: this.clampPercent(row.trust),
             affection: this.clampPercent(row.affection),
             tension: this.clampPercent(row.tension),
+            timeContext: this.readOptionalTimeContext((row as DBMemoryRelationship & { timeContext?: unknown }).timeContext),
+            validFrom: this.readOptionalTimeContext((row as DBMemoryRelationship & { validFrom?: unknown }).validFrom),
+            validTo: this.readOptionalTimeContext((row as DBMemoryRelationship & { validTo?: unknown }).validTo),
+            ongoing: (row as DBMemoryRelationship & { ongoing?: unknown }).ongoing === undefined
+                ? undefined
+                : Boolean((row as DBMemoryRelationship & { ongoing?: unknown }).ongoing),
         };
     }
 
@@ -1670,6 +1770,18 @@ export class EntryRepository {
             return {};
         }
         return value as Record<string, unknown>;
+    }
+
+    /**
+     * 功能：读取可选时间上下文。
+     * @param value 原始值。
+     * @returns 合法时间上下文；无值时返回 undefined。
+     */
+    private readOptionalTimeContext(value: unknown): MemoryTimeContext | undefined {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return undefined;
+        }
+        return value as MemoryTimeContext;
     }
 
     /**

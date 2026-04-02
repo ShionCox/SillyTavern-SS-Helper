@@ -63,22 +63,22 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                     ${state.takeoverUseActiveSnapshot ? `
                         <input class="stx-memory-workbench__input" id="stx-memory-takeover-active-snapshot-floors" type="number" min="1" placeholder="${escapeAttr(resolveTakeoverWorkbenchText('active_snapshot_floors'))}" value="${escapeAttr(state.takeoverActiveSnapshotFloors)}" style="width: 120px;">
                     ` : ''}
-                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-preview-calc"${state.takeoverPreviewLoading ? ' disabled' : ''}>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-preview-calc"${state.takeoverPreviewLoading || state.takeoverActionRunning ? ' disabled' : ''}>
                         <i class="fa-solid fa-calculator"></i> ${escapeHtml(state.takeoverPreviewLoading ? resolveTakeoverWorkbenchText('calculating') : resolveTakeoverWorkbenchText('calculate_estimate'))}
                     </button>
-                    <button id="stx-memory-takeover-start-button" class="stx-memory-workbench__button" data-action="takeover-start"${state.takeoverPreviewLoading ? ' disabled' : ''}>
-                        <i class="fa-solid fa-play"></i> ${escapeHtml(resolveTakeoverWorkbenchText('start_takeover'))}
+                    <button id="stx-memory-takeover-start-button" class="stx-memory-workbench__button" data-action="takeover-start"${state.takeoverPreviewLoading || state.takeoverActionRunning ? ' disabled' : ''}>
+                        <i class="fa-solid fa-play"></i> ${escapeHtml(state.takeoverActionRunning ? resolveTakeoverWorkbenchText('takeover_running') : resolveTakeoverWorkbenchText('start_takeover'))}
                     </button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-pause">
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-pause"${state.takeoverActionRunning ? ' disabled' : ''}>
                         <i class="fa-solid fa-pause"></i> ${escapeHtml(resolveTakeoverWorkbenchText('pause'))}
                     </button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-resume">
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-resume"${state.takeoverActionRunning ? ' disabled' : ''}>
                         <i class="fa-solid fa-forward"></i> ${escapeHtml(resolveTakeoverWorkbenchText('resume'))}
                     </button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-consolidate">
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-consolidate"${state.takeoverActionRunning ? ' disabled' : ''}>
                         <i class="fa-solid fa-layer-group"></i> ${escapeHtml(resolveTakeoverWorkbenchText('consolidate_now'))}
                     </button>
-                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-abort" style="border-color:rgba(239,68,68,0.35); color:var(--mw-warn);">
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-abort"${state.takeoverActionRunning ? ' disabled' : ''} style="border-color:rgba(239,68,68,0.35); color:var(--mw-warn);">
                         <i class="fa-solid fa-stop"></i> ${escapeHtml(resolveTakeoverWorkbenchText('abort'))}
                     </button>
                 </div>

@@ -350,11 +350,10 @@ export class TakeoverService {
     /**
      * 功能：构建接管计划。
      * @param totalFloors 总楼层数。
-     * @param detection 检测结果。
      * @param config 接管配置。
      * @returns 接管计划。
      */
-    buildPlan(totalFloors: number, _detection: MemoryTakeoverDetectionResult, config?: MemoryTakeoverCreateInput): MemoryTakeoverPlan {
+    buildPlan(totalFloors: number, config?: MemoryTakeoverCreateInput): MemoryTakeoverPlan {
         const settings = readMemoryOSSettings();
         return buildTakeoverPlan({
             chatKey: this.chatKey,
@@ -426,7 +425,7 @@ export class TakeoverService {
     async createPlanSnapshot(currentFloorCount: number, config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverProgressSnapshot> {
         const detection = await this.detectNeeded(currentFloorCount, await this.readPlan());
         const totalFloors = Math.max(detection.currentFloorCount, currentFloorCount);
-        const plan = this.buildPlan(totalFloors, detection, config);
+        const plan = this.buildPlan(totalFloors, config);
         await writeMemoryTakeoverPlan(this.chatKey, plan);
         return this.buildProgress(plan);
     }

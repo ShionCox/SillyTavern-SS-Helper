@@ -1,4 +1,4 @@
-import type { MemoryTakeoverCreateInput, MemoryTakeoverMode } from '../types';
+import type { MemoryTakeoverCreateInput, MemoryTakeoverMode, MemoryTakeoverPreviewEstimate } from '../types';
 
 /**
  * 功能：定义接管表单草稿。
@@ -19,7 +19,6 @@ export interface MemoryTakeoverFormDraft {
 export interface MemoryTakeoverFieldVisibility {
     showRecentFloors: boolean;
     showCustomRange: boolean;
-    showActiveSnapshotFloors: boolean;
 }
 
 /**
@@ -40,7 +39,6 @@ export function resolveTakeoverFieldVisibility(mode: string): MemoryTakeoverFiel
     return {
         showRecentFloors: normalizedMode === 'recent',
         showCustomRange: normalizedMode === 'custom_range',
-        showActiveSnapshotFloors: true,
     };
 }
 
@@ -149,6 +147,34 @@ export function parseTakeoverFormDraft(draft: MemoryTakeoverFormDraft): MemoryTa
             useActiveSnapshot: draft.useActiveSnapshot,
             activeSnapshotFloors: draft.useActiveSnapshot && activeSnapshotFloors > 0 ? activeSnapshotFloors : undefined,
         },
+    };
+}
+
+/**
+ * 功能：构建接管预估失败或校验失败时的占位预估结果。
+ * @param input 占位预估输入。
+ * @returns 可直接渲染的预估结果。
+ */
+export function buildTakeoverFallbackEstimate(input: {
+    config: MemoryTakeoverCreateInput;
+    totalFloors: number;
+    threshold?: number;
+    validationError: string;
+}): MemoryTakeoverPreviewEstimate {
+    return {
+        mode: input.config.mode ?? 'full',
+        totalFloors: Math.max(0, Number(input.totalFloors) || 0),
+        range: null,
+        activeWindow: null,
+        batchSize: Math.max(0, Number(input.config.batchSize ?? 0) || 0),
+        useActiveSnapshot: input.config.useActiveSnapshot !== false,
+        activeSnapshotFloors: Math.max(0, Number(input.config.activeSnapshotFloors ?? 0) || 0),
+        threshold: Math.max(0, Number(input.threshold ?? 100000) || 100000),
+        totalBatches: 0,
+        batches: [],
+        hasOverflow: false,
+        overflowWarnings: [],
+        validationError: input.validationError,
     };
 }
 

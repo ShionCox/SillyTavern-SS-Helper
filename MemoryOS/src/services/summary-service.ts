@@ -51,6 +51,8 @@ export class SummaryService {
                 listRoleMemories: async (actorKey?: string): Promise<RoleEntryMemory[]> => this.repository.listRoleMemories(actorKey),
                 listSummarySnapshots: async (limit?: number): Promise<SummarySnapshot[]> => this.repository.listSummarySnapshots(limit),
                 getWorldProfileBinding: async (): Promise<WorldProfileBinding | null> => this.repository.getWorldProfileBinding(),
+                getTimelineProfile: async () => this.repository.getTimelineProfile(),
+                putTimelineProfile: async (profile) => this.repository.putTimelineProfile(profile),
                 appendMutationHistory: async (history): Promise<void> => this.repository.appendMutationHistory(history),
                 getEntry: async (entryId: string) => this.repository.getEntry(entryId),
                 applySummarySnapshot: async (summaryInput) => this.applySummaryArchive(summaryInput),

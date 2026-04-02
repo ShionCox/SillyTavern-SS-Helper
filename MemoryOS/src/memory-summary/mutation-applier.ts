@@ -7,6 +7,7 @@ import { buildCompareKey, supportsCompareKey } from '../core/compare-key';
 import { resolveLedgerUpdateDecision } from '../core/ledger-update-rules';
 import { normalizeTaskTitle } from '../core/task-title-normalizer';
 import { normalizeTaskDescription } from '../core/task-description-normalizer';
+import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import {
     normalizeNarrativeValue,
     normalizeUserNarrativeText,
@@ -198,6 +199,7 @@ async function applySingleAction(input: {
     }
     if (input.action.timeContext) {
         upsert.timeContext = input.action.timeContext;
+        applyEntryUpsertTimeMeta(upsert, upsert.entryType, input.action.timeContext);
     }
     input.entryUpserts.push(upsert);
     for (const actorKey of input.actorKeys) {
@@ -247,6 +249,7 @@ async function applyMergeAction(input: {
     if (primaryUpsert) {
         if (input.action.timeContext) {
             primaryUpsert.timeContext = input.action.timeContext;
+            applyEntryUpsertTimeMeta(primaryUpsert, primaryUpsert.entryType, input.action.timeContext);
         }
         input.entryUpserts.push(primaryUpsert);
         for (const actorKey of input.actorKeys) {
@@ -286,6 +289,35 @@ async function applyMergeAction(input: {
             reasonCodes: Array.isArray(input.action.reasonCodes) ? input.action.reasonCodes : [],
             sourceLabel: '结构化回合总结',
         });
+    }
+}
+
+/**
+ * 功能：根据 entryType 与 timeContext 为 upsert 补齐扩展时间字段。
+ * @param upsert 待写入的 upsert。
+ * @param entryType 条目类型。
+ * @param timeContext 时间上下文。
+ */
+function applyEntryUpsertTimeMeta(
+    upsert: SummaryEntryUpsert,
+    entryType: string,
+    timeContext: NonNullable<SummaryMutationAction['timeContext']>,
+): void {
+    const timeMeta = buildTimeMetaByEntryType(entryType, timeContext);
+    if (timeMeta.firstObservedAt) {
+        upsert.firstObservedAt = timeMeta.firstObservedAt as typeof timeContext;
+    }
+    if (timeMeta.lastObservedAt) {
+        upsert.lastObservedAt = timeMeta.lastObservedAt as typeof timeContext;
+    }
+    if (timeMeta.validFrom) {
+        upsert.validFrom = timeMeta.validFrom as typeof timeContext;
+    }
+    if (timeMeta.validTo) {
+        upsert.validTo = timeMeta.validTo as typeof timeContext;
+    }
+    if (timeMeta.ongoing !== undefined) {
+        upsert.ongoing = Boolean(timeMeta.ongoing);
     }
 }
 

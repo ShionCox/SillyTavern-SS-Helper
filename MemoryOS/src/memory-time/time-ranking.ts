@@ -2,7 +2,7 @@
  * 功能：检索和注入时的时间加权计算。
  */
 
-import type { MemoryTimeContext, MemoryTimeIndex } from './time-types';
+import type { MemoryTimeContext, MemoryTimeIndex, PromptTimeMeta } from './time-types';
 
 // ── 近期查询关键词 ──
 
@@ -138,4 +138,80 @@ export function buildTimeLabel(timeCtx: MemoryTimeContext, currentMaxFloor: numb
     if (floorDiff <= 5) return '近期';
     if (floorDiff <= 20) return `较当前早约${floorDiff}层`;
     return `早期内容（约${floorDiff}层前）`;
+}
+
+/**
+ * 功能：为提示词注入构建 AI 可读时间元信息。
+ * @param timeCtx 时间上下文。
+ * @param currentMaxFloor 当前最大楼层号。
+ * @returns 时间注入元信息。
+ */
+export function buildPromptTimeMeta(timeCtx: MemoryTimeContext, currentMaxFloor: number): PromptTimeMeta {
+    const resolvedCurrentMaxFloor = Math.max(currentMaxFloor, timeCtx.sequenceTime.lastFloor, timeCtx.sequenceTime.firstFloor);
+    const timeLabelForPrompt = buildTimeLabel(timeCtx, resolvedCurrentMaxFloor);
+    const timeSourceLabel = resolvePromptTimeSourceLabel(timeCtx);
+    const timeConfidenceLabel = shouldRenderPromptTimeConfidence(timeCtx)
+        ? resolvePromptTimeConfidenceLabel(timeCtx.confidence)
+        : undefined;
+    return {
+        timeLabelForPrompt,
+        timeSourceLabel,
+        timeConfidenceLabel,
+        sourceMode: resolvePromptTimeSourceMode(timeCtx),
+    };
+}
+
+/**
+ * 功能：解析提示词时间来源标签。
+ * @param timeCtx 时间上下文。
+ * @returns 来源标签。
+ */
+function resolvePromptTimeSourceLabel(timeCtx: MemoryTimeContext): string {
+    if (timeCtx.mode === 'story_explicit') {
+        return '明确故事时间';
+    }
+    if (timeCtx.mode === 'story_inferred') {
+        return '推断时间';
+    }
+    return '系统时序';
+}
+
+/**
+ * 功能：解析提示词时间来源模式。
+ * @param timeCtx 时间上下文。
+ * @returns 来源模式。
+ */
+function resolvePromptTimeSourceMode(timeCtx: MemoryTimeContext): PromptTimeMeta['sourceMode'] {
+    if (timeCtx.mode === 'story_explicit') {
+        return 'explicit_story';
+    }
+    if (timeCtx.mode === 'story_inferred') {
+        return 'inferred_story';
+    }
+    return 'sequence_fallback';
+}
+
+/**
+ * 功能：判断提示词时间标签是否需要补充置信度。
+ * @param timeCtx 时间上下文。
+ * @returns 是否显示置信度。
+ */
+function shouldRenderPromptTimeConfidence(timeCtx: MemoryTimeContext): boolean {
+    return timeCtx.mode === 'story_inferred' || Number(timeCtx.confidence ?? 0) < 0.6;
+}
+
+/**
+ * 功能：把数值置信度映射为中文等级。
+ * @param confidence 数值置信度。
+ * @returns 中文等级。
+ */
+function resolvePromptTimeConfidenceLabel(confidence: number): string {
+    const normalized = Number(confidence ?? 0);
+    if (normalized >= 0.78) {
+        return '高';
+    }
+    if (normalized >= 0.5) {
+        return '中';
+    }
+    return '低';
 }

@@ -135,6 +135,61 @@ export function shouldUpdateProfile(
 }
 
 /**
+ * 功能：根据新文本解析结果决定时间画像是否需要演进，并返回应持久化的画像。
+ * @param input 演进输入。
+ * @returns 演进结果。
+ */
+export function resolveTimelineProfileEvolution(input: {
+    texts: string[];
+    anchorFloor?: number;
+    existingProfile?: MemoryTimelineProfile | null;
+}): {
+    shouldPersist: boolean;
+    profile: MemoryTimelineProfile;
+    reason: 'init' | 'upgrade' | 'keep';
+} {
+    const existingProfile = input.existingProfile ?? null;
+    const detectedProfile = detectTimelineProfile({
+        texts: input.texts,
+        anchorFloor: input.anchorFloor,
+        existingProfile,
+    });
+    if (!existingProfile) {
+        if (detectedProfile.mode !== 'sequence_only') {
+            return {
+                shouldPersist: true,
+                profile: detectedProfile,
+                reason: 'init',
+            };
+        }
+        const fallbackProfile = createSequenceOnlyProfile();
+        return {
+            shouldPersist: true,
+            profile: {
+                ...fallbackProfile,
+                anchorFloor: detectedProfile.anchorFloor,
+                confidence: Math.max(fallbackProfile.confidence, detectedProfile.confidence),
+                fallbackRules: detectedProfile.fallbackRules,
+                signals: detectedProfile.signals,
+            },
+            reason: 'init',
+        };
+    }
+    if (!shouldUpdateProfile(existingProfile, detectedProfile.signals ?? [])) {
+        return {
+            shouldPersist: false,
+            profile: existingProfile,
+            reason: 'keep',
+        };
+    }
+    return {
+        shouldPersist: true,
+        profile: detectedProfile,
+        reason: 'upgrade',
+    };
+}
+
+/**
  * 功能：创建空白序列模式画像。
  */
 export function createSequenceOnlyProfile(): MemoryTimelineProfile {

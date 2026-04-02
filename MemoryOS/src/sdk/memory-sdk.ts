@@ -838,6 +838,8 @@ export class MemorySDKImpl {
                             chatKey: this.chatKey_,
                         }),
                         putWorldProfileBinding: async (binding): Promise<unknown> => this.entryRepository.putWorldProfileBinding(binding),
+                        getTimelineProfile: async () => this.entryRepository.getTimelineProfile(),
+                        putTimelineProfile: async (profile) => this.entryRepository.putTimelineProfile(profile),
                         appendMutationHistory: async (history): Promise<unknown> => this.entryRepository.appendMutationHistory(history),
                     },
                     llm,
@@ -912,6 +914,8 @@ export class MemorySDKImpl {
                             chatKey: this.chatKey_,
                         }),
                         putWorldProfileBinding: async (binding): Promise<unknown> => this.entryRepository.putWorldProfileBinding(binding),
+                        getTimelineProfile: async () => this.entryRepository.getTimelineProfile(),
+                        putTimelineProfile: async (profile) => this.entryRepository.putTimelineProfile(profile),
                         appendMutationHistory: async (history): Promise<unknown> => this.entryRepository.appendMutationHistory(history),
                     },
                     document: this.pendingColdStartDraft.document,
@@ -1644,6 +1648,12 @@ export class MemorySDKImpl {
                 compareKey: String(fact.compareKey ?? '').trim() || undefined,
                 tags: [fact.type].filter(Boolean),
                 actorBindings,
+                timeContext: fact.timeContext,
+                firstObservedAt: fact.firstObservedAt,
+                lastObservedAt: fact.lastObservedAt,
+                validFrom: fact.validFrom,
+                validTo: fact.validTo,
+                ongoing: fact.ongoing,
                 reasonCodes: ['takeover_long_term_fact', ...(fact.reasonCodes ?? [])],
                 detailPayload: {
                     compareKey: String(fact.compareKey ?? '').trim() || undefined,
@@ -1714,6 +1724,10 @@ export class MemorySDKImpl {
                     relationState: this.renderTakeoverNarrativeText(relation.state, narrativeContext),
                     relationReason: this.renderTakeoverNarrativeText(relation.reason, narrativeContext),
                     relationTag,
+                    timeContext: relation.timeContext,
+                    validFrom: relation.validFrom,
+                    validTo: relation.validTo,
+                    ongoing: relation.ongoing,
                     takeoverId: result.takeoverId,
                 });
                 if (record) {
@@ -1791,6 +1805,12 @@ export class MemorySDKImpl {
                 compareKey: taskDecision.compareKey,
                 tags: ['任务', '旧聊天接管'],
                 actorBindings: this.normalizeStringArray([...(task.bindings?.actors ?? []), 'user']),
+                timeContext: task.timeContext,
+                firstObservedAt: task.firstObservedAt,
+                lastObservedAt: task.lastObservedAt,
+                validFrom: task.validFrom,
+                validTo: task.validTo,
+                ongoing: task.ongoing,
                 reasonCodes: ['takeover_task_state', ...taskDecision.reasonCodes, ...(task.reasonCodes ?? [])],
                 detailPayload: {
                     compareKey: taskDecision.compareKey,
@@ -1837,7 +1857,17 @@ export class MemorySDKImpl {
         }
 
                 const worldStateMutations: LedgerMutation[] = [];
-        const worldStateRecords: Array<{ key: string; value: string; reasonCodes?: string[] }> = (result.worldStateDetails?.length ?? 0) > 0
+        const worldStateRecords: Array<{
+            key: string;
+            value: string;
+            reasonCodes?: string[];
+            timeContext?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['timeContext'];
+            firstObservedAt?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['firstObservedAt'];
+            lastObservedAt?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['lastObservedAt'];
+            validFrom?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['validFrom'];
+            validTo?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['validTo'];
+            ongoing?: NonNullable<MemoryTakeoverConsolidationResult['worldStateDetails']>[number]['ongoing'];
+        }> = (result.worldStateDetails?.length ?? 0) > 0
             ? result.worldStateDetails!
             : Object.entries(result.worldState ?? {}).map(([key, value]) => ({
                 key,
@@ -1863,6 +1893,12 @@ export class MemorySDKImpl {
                 detail: normalizedValue,
                 compareKey: worldDecision.compareKey,
                 tags: ['世界状态', '旧聊天接管'],
+                timeContext: worldState.timeContext,
+                firstObservedAt: worldState.firstObservedAt,
+                lastObservedAt: worldState.lastObservedAt,
+                validFrom: worldState.validFrom,
+                validTo: worldState.validTo,
+                ongoing: worldState.ongoing,
                 reasonCodes: ['takeover_world_state', ...worldDecision.reasonCodes],
                 detailPayload: {
                     compareKey: worldDecision.compareKey,
@@ -2171,6 +2207,10 @@ export class MemorySDKImpl {
         relationState: string;
         relationReason: string;
         relationTag: string;
+        timeContext?: MemoryRelationshipRecord['timeContext'];
+        validFrom?: MemoryRelationshipRecord['validFrom'];
+        validTo?: MemoryRelationshipRecord['validTo'];
+        ongoing?: MemoryRelationshipRecord['ongoing'];
         takeoverId: string;
     }): Promise<MemoryRelationshipRecord> {
         const actor = await this.ensureTakeoverActorReference({
@@ -2191,6 +2231,10 @@ export class MemorySDKImpl {
             affection: 0,
             tension: 0,
             participants: ['user', actor.actorKey],
+            timeContext: input.timeContext,
+            validFrom: input.validFrom,
+            validTo: input.validTo,
+            ongoing: input.ongoing,
             takeoverId: input.takeoverId,
             reasonCode: 'takeover_relation_state',
         });
@@ -2278,6 +2322,10 @@ export class MemorySDKImpl {
                 targetActor.actorKey,
                 ...((input.relationship.participants ?? []).map((item: string): string => String(item ?? '').trim().toLowerCase())),
             ],
+            timeContext: input.relationship.timeContext,
+            validFrom: input.relationship.validFrom,
+            validTo: input.relationship.validTo,
+            ongoing: input.relationship.ongoing,
             takeoverId: input.takeoverId,
             reasonCode: 'takeover_relationship_card',
         });
@@ -2300,6 +2348,10 @@ export class MemorySDKImpl {
         affection: number;
         tension: number;
         participants: string[];
+        timeContext?: MemoryRelationshipRecord['timeContext'];
+        validFrom?: MemoryRelationshipRecord['validFrom'];
+        validTo?: MemoryRelationshipRecord['validTo'];
+        ongoing?: MemoryRelationshipRecord['ongoing'];
         takeoverId: string;
         reasonCode: string;
     }): Promise<MemoryRelationshipRecord> {
@@ -2326,6 +2378,10 @@ export class MemorySDKImpl {
             affection: normalizedAffection,
             tension: normalizedTension,
             participants: normalizedParticipants,
+            timeContext: input.timeContext,
+            validFrom: input.validFrom,
+            validTo: input.validTo,
+            ongoing: input.ongoing,
         });
     }
 
@@ -2554,6 +2610,12 @@ export class MemorySDKImpl {
             summary,
             detail: existingEntry?.detail ?? '',
             tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
+            timeContext: entityCard.timeContext,
+            firstObservedAt: entityCard.firstObservedAt,
+            lastObservedAt: entityCard.lastObservedAt,
+            validFrom: entityCard.validFrom,
+            validTo: entityCard.validTo,
+            ongoing: entityCard.ongoing,
             reasonCodes: [existingEntry ? 'takeover_entity_card_update' : 'takeover_entity_card_add'],
             detailPayload: {
                 ...(existingEntry?.detailPayload ?? {}),
@@ -2626,6 +2688,12 @@ export class MemorySDKImpl {
                 tags: existingEntry.tags ?? [entityType],
                 summary: '[已失效] ' + (existingEntry.summary ?? ''),
                 detail: existingEntry.detail ?? '',
+                timeContext: transition.timeContext,
+                firstObservedAt: transition.firstObservedAt,
+                lastObservedAt: transition.lastObservedAt,
+                validFrom: transition.validFrom,
+                validTo: transition.validTo,
+                ongoing: transition.ongoing,
                 reasonCodes: ['takeover_entity_invalidate'],
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
@@ -2655,6 +2723,12 @@ export class MemorySDKImpl {
                 title: existingEntry.title,
                 entryId: existingEntry.entryId,
                 compareKey,
+                timeContext: transition.timeContext,
+                firstObservedAt: transition.firstObservedAt,
+                lastObservedAt: transition.lastObservedAt,
+                validFrom: transition.validFrom,
+                validTo: transition.validTo,
+                ongoing: transition.ongoing,
                 reasonCodes: ['takeover_entity_delete'],
                 detailPayload: {
                     ...(existingEntry.detailPayload ?? {}),
@@ -2684,6 +2758,12 @@ export class MemorySDKImpl {
                 tags: existingEntry?.tags?.length ? existingEntry.tags : [entityType],
                 summary: summary || `${title}的${categoryMap[entityType] ?? '实体'}变更`,
                 detail: existingEntry?.detail ?? '',
+                timeContext: transition.timeContext,
+                firstObservedAt: transition.firstObservedAt,
+                lastObservedAt: transition.lastObservedAt,
+                validFrom: transition.validFrom,
+                validTo: transition.validTo,
+                ongoing: transition.ongoing,
                 reasonCodes: ['takeover_entity_' + action.toLowerCase()],
                 detailPayload: {
                     ...(existingEntry?.detailPayload ?? {}),

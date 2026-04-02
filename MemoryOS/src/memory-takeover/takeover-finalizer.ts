@@ -64,6 +64,10 @@ export function finalizeTakeoverConsolidation(input: {
         reason: item.summary,
         relationTag: item.relationTag,
         targetType: 'actor' as const,
+        timeContext: item.timeContext,
+        validFrom: item.validFrom,
+        validTo: item.validTo,
+        ongoing: item.ongoing,
         })),
         ...input.batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverRelationTransition[] => item.relationTransitions ?? [])
             .filter((item: MemoryTakeoverRelationTransition): boolean => String(item.targetType ?? 'unknown').trim().toLowerCase() !== 'actor')
@@ -73,6 +77,10 @@ export function finalizeTakeoverConsolidation(input: {
                 reason: item.reason,
                 relationTag: item.relationTag,
                 targetType: item.targetType ?? 'unknown',
+                timeContext: item.timeContext,
+                validFrom: item.validFrom,
+                validTo: item.validTo,
+                ongoing: item.ongoing,
             })),
     ]);
 

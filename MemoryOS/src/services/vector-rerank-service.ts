@@ -5,6 +5,7 @@
  */
 
 import type { RetrievalResultItem } from '../memory-retrieval/types';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 import type { VectorRerankInput, VectorRerankResult } from '../types/vector-rerank';
 
 /**
@@ -37,7 +38,11 @@ const HYBRID_WEIGHTS = {
     anchorConsistency: 0.10,
     recencyWeight: 0.03,
     memoryWeight: 0.02,
+    timeBoost: 0.08,
 };
+
+/** vector_only 模式下的时间偏置权重 */
+const VECTOR_ONLY_TIME_WEIGHT = 0.10;
 
 // ─── 辅助函数 ──────────────────────────────
 
@@ -135,7 +140,11 @@ export class VectorRerankService {
         }
 
         const weights = input.mode === 'vector_only' ? VECTOR_ONLY_WEIGHTS : HYBRID_WEIGHTS;
+        const timeWeight = input.mode === 'vector_only' ? VECTOR_ONLY_TIME_WEIGHT : HYBRID_WEIGHTS.timeBoost;
         const queryContext = `${input.query} ${input.queryContextText}`;
+        const currentMaxFloor = candidates.reduce((max: number, item: RetrievalResultItem): number => (
+            Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0)
+        ), 0);
 
         const scoredItems = candidates.map((item) => {
             const breakdown = item.breakdown;
@@ -163,6 +172,11 @@ export class VectorRerankService {
             // 记忆度
             const memoryWeight = clamp01(breakdown.memoryWeight ?? 0);
 
+            // 时间方向偏置
+            const timeBoost = item.candidate.timeContext
+                ? clamp01(computeTimeBoost(queryContext, item.candidate.timeContext, currentMaxFloor))
+                : clamp01(breakdown.timeBoost ?? 0);
+
             // 加权求和
             const rerankScore =
                 vectorScore * weights.vectorScore +
@@ -170,12 +184,17 @@ export class VectorRerankService {
                 graphBoost * weights.graphBoost +
                 anchorConsistency * weights.anchorConsistency +
                 recencyWeight * weights.recencyWeight +
-                memoryWeight * weights.memoryWeight;
+                memoryWeight * weights.memoryWeight +
+                timeBoost * timeWeight;
 
             return {
                 item: {
                     ...item,
                     score: clamp01(rerankScore),
+                    breakdown: {
+                        ...item.breakdown,
+                        timeBoost,
+                    },
                 },
                 rerankScore,
             };

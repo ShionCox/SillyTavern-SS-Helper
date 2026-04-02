@@ -120,4 +120,5 @@ export type {
     EventTimeMeta,
     IntervalTimeMeta,
     MemoryTimeIndex,
+    PromptTimeMeta,
 } from '../memory-time/time-types';

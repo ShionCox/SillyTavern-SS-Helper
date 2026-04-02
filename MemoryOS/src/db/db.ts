@@ -42,6 +42,7 @@ import type {
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverPlan,
 } from '../types';
+import type { MemoryTimelineProfile } from '../memory-time/time-types';
 
 export { db, patchSdkChatShared, rebuildSSHelperDatabase };
 export type {
@@ -212,6 +213,36 @@ export async function readMemoryOSChatState(chatKey: string): Promise<DBChatPlug
  */
 export async function writeMemoryOSChatState(chatKey: string, state: Record<string, unknown>): Promise<void> {
     await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), state);
+}
+
+/**
+ * 功能：读取当前聊天保存的时间画像。
+ * @param chatKey 聊天键。
+ * @returns 时间画像；不存在时返回 null。
+ */
+export async function readMemoryTimelineProfile(chatKey: string): Promise<MemoryTimelineProfile | null> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    const profile = toRecord(state.timelineProfile);
+    if (Object.keys(profile).length <= 0) {
+        return null;
+    }
+    return profile as unknown as MemoryTimelineProfile;
+}
+
+/**
+ * 功能：写入当前聊天的时间画像。
+ * @param chatKey 聊天键。
+ * @param profile 时间画像。
+ * @returns 异步完成。
+ */
+export async function writeMemoryTimelineProfile(chatKey: string, profile: MemoryTimelineProfile): Promise<void> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    await writeMemoryOSChatState(chatKey, {
+        ...state,
+        timelineProfile: profile as unknown as Record<string, unknown>,
+    });
 }
 
 /**

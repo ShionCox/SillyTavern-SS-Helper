@@ -1,7 +1,9 @@
 import { openSharedDialog, type SharedDialogInstance } from '../../../_Components/sharedDialog';
 import type { MemoryTakeoverCreateInput, MemoryTakeoverPayloadPreview, MemoryTakeoverPreviewEstimate } from '../types';
+import { escapeHtml } from './editorShared';
 import { buildTakeoverPreviewMarkup } from './takeoverPreviewMarkup';
 import {
+    buildTakeoverFallbackEstimate,
     normalizeTakeoverMode,
     parseTakeoverFormDraft,
     resolveTakeoverFieldVisibility,
@@ -19,20 +21,6 @@ export interface MemoryTakeoverDialogResult {
     confirmed: boolean;
     resumeExisting: boolean;
     config?: MemoryTakeoverCreateInput;
-}
-
-/**
- * 功能：转义 HTML 文本。
- * @param value 原始文本
- * @returns 转义结果
- */
-function escapeHtml(value: string): string {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -430,7 +418,7 @@ export async function openMemoryTakeoverDialog(input: {
                         customRangeEndCard.hidden = !visibility.showCustomRange;
                     }
                     if (activeSnapshotFloorsCard) {
-                        activeSnapshotFloorsCard.hidden = !(visibility.showActiveSnapshotFloors && useActiveSnapshotInput?.checked === true);
+                        activeSnapshotFloorsCard.hidden = useActiveSnapshotInput?.checked !== true;
                     }
                 };
 
@@ -469,21 +457,11 @@ export async function openMemoryTakeoverDialog(input: {
                     const currentSequence = ++previewSequence;
                     if (parsed.validationError) {
                         previewContainer.innerHTML = buildTakeoverPreviewMarkup({
-                            estimate: {
-                                mode: parsed.config.mode ?? 'full',
+                            estimate: buildTakeoverFallbackEstimate({
+                                config: parsed.config,
                                 totalFloors: input.totalFloorCount,
-                                range: null,
-                                activeWindow: null,
-                                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
-                                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
-                                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
-                                threshold: 100000,
-                                totalBatches: 0,
-                                batches: [],
-                                hasOverflow: false,
-                                overflowWarnings: [],
                                 validationError: parsed.validationError,
-                            },
+                            }),
                         });
                         return;
                     }
@@ -514,21 +492,11 @@ export async function openMemoryTakeoverDialog(input: {
                             return;
                         }
                         previewContainer.innerHTML = buildTakeoverPreviewMarkup({
-                            estimate: {
-                                mode: parsed.config.mode ?? 'full',
+                            estimate: buildTakeoverFallbackEstimate({
+                                config: parsed.config,
                                 totalFloors: input.totalFloorCount,
-                                range: null,
-                                activeWindow: null,
-                                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
-                                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
-                                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
-                                threshold: 100000,
-                                totalBatches: 0,
-                                batches: [],
-                                hasOverflow: false,
-                                overflowWarnings: [],
                                 validationError: `Token 预估失败：${String((error as Error)?.message ?? error)}`,
-                            },
+                            }),
                         });
                     } finally {
                         if (currentSequence === previewSequence) {
@@ -638,21 +606,11 @@ export async function openMemoryTakeoverDialog(input: {
                     const parsed = parseTakeoverFormDraft(readDraft());
                     if (parsed.validationError) {
                         previewContainer!.innerHTML = buildTakeoverPreviewMarkup({
-                            estimate: {
-                                mode: parsed.config.mode ?? 'full',
+                            estimate: buildTakeoverFallbackEstimate({
+                                config: parsed.config,
                                 totalFloors: input.totalFloorCount,
-                                range: null,
-                                activeWindow: null,
-                                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
-                                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
-                                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
-                                threshold: 100000,
-                                totalBatches: 0,
-                                batches: [],
-                                hasOverflow: false,
-                                overflowWarnings: [],
                                 validationError: parsed.validationError,
-                            },
+                            }),
                         });
                         return;
                     }

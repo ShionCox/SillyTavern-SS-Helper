@@ -1,6 +1,6 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalMode } from './retrieval-mode';
-import type { MemoryTimeContext } from '../memory-time/time-types';
+import type { MemoryTimeContext, PromptTimeMeta } from '../memory-time/time-types';
 
 /**
  * 功能：定义可检索候选记录。
@@ -29,6 +29,8 @@ export interface RetrievalCandidate {
     aliasTexts?: string[];
     /** 时间上下文 */
     timeContext?: MemoryTimeContext;
+    /** 提示词时间元信息，仅用于运行时注入 */
+    promptTimeMeta?: PromptTimeMeta;
 }
 
 /**

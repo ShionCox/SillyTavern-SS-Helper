@@ -15,6 +15,7 @@ import type {
     PipelineDomainLedgerRecord,
     PipelineSectionDigestRecord,
 } from '../pipeline/pipeline-types';
+import type { MemoryTimeContext } from '../memory-time/time-types';
 
 /**
  * 功能：构建旧聊天接管的分段摘要。
@@ -209,6 +210,12 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
     legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverTaskTransition['bindings'];
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }> {
     const taskMap = new Map<string, MemoryTakeoverTaskTransition[]>();
     for (const record of batchResults.flatMap((item: MemoryTakeoverBatchResult): MemoryTakeoverTaskTransition[] => item.taskTransitions ?? [])) {
@@ -235,6 +242,12 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
         legacyCompareKeys?: string[];
         bindings?: MemoryTakeoverTaskTransition['bindings'];
         reasonCodes?: string[];
+        timeContext?: MemoryTimeContext;
+        firstObservedAt?: MemoryTimeContext;
+        lastObservedAt?: MemoryTimeContext;
+        validFrom?: MemoryTimeContext;
+        validTo?: MemoryTimeContext;
+        ongoing?: boolean;
     }> = [];
     const unresolvedConflicts: PipelineConflictRecord[] = [];
     for (const [taskCompareKey, records] of taskMap) {
@@ -255,6 +268,12 @@ export function reduceTakeoverTasks(batchResults: MemoryTakeoverBatchResult[]): 
             legacyCompareKeys: Array.isArray(latest?.legacyCompareKeys) ? dedupeStrings(latest.legacyCompareKeys) : [],
             bindings: latest?.bindings,
             reasonCodes: Array.isArray(latest?.reasonCodes) ? latest.reasonCodes : [],
+            timeContext: latest?.timeContext,
+            firstObservedAt: latest?.firstObservedAt,
+            lastObservedAt: latest?.lastObservedAt,
+            validFrom: latest?.validFrom,
+            validTo: latest?.validTo,
+            ongoing: latest?.ongoing,
         });
         const states = new Set(records.map((item: MemoryTakeoverTaskTransition): string => String(item.to ?? '').trim()).filter(Boolean));
         if (states.size > 1) {
@@ -302,6 +321,12 @@ export function reduceTakeoverWorld(batchResults: MemoryTakeoverBatchResult[]): 
             legacyCompareKeys: Array.isArray(latest?.legacyCompareKeys) ? dedupeStrings(latest.legacyCompareKeys) : [],
             bindings: latest?.bindings,
             reasonCodes: Array.isArray(latest?.reasonCodes) ? dedupeStrings(latest.reasonCodes) : [],
+            timeContext: latest?.timeContext,
+            firstObservedAt: latest?.firstObservedAt,
+            lastObservedAt: latest?.lastObservedAt,
+            validFrom: latest?.validFrom,
+            validTo: latest?.validTo,
+            ongoing: latest?.ongoing,
         });
         const values = new Set(records.map((item: MemoryTakeoverWorldStateChange): string => String(item.value ?? '').trim()).filter(Boolean));
         if (values.size > 1) {
@@ -391,6 +416,12 @@ function mergeEntityCards(records: MemoryTakeoverEntityCardCandidate[]): MemoryT
         legacyCompareKeys: dedupeStrings([...(merged.legacyCompareKeys ?? []), ...(current.legacyCompareKeys ?? [])]),
         bindings: mergeTakeoverBindings(merged.bindings, current.bindings),
         reasonCodes: dedupeStrings([...(merged.reasonCodes ?? []), ...(current.reasonCodes ?? [])]),
+        timeContext: pickLaterTimeContext(merged.timeContext, current.timeContext),
+        firstObservedAt: pickEarlierTimeContext(merged.firstObservedAt, current.firstObservedAt),
+        lastObservedAt: pickLaterTimeContext(merged.lastObservedAt, current.lastObservedAt),
+        validFrom: pickEarlierTimeContext(merged.validFrom, current.validFrom),
+        validTo: pickLaterTimeContext(merged.validTo, current.validTo),
+        ongoing: resolveOngoingFlag(merged.ongoing, current.ongoing),
     }), {
         entityType: records[0]?.entityType ?? 'organization',
         entityKey: String(records[0]?.entityKey ?? '').trim() || undefined,
@@ -406,6 +437,12 @@ function mergeEntityCards(records: MemoryTakeoverEntityCardCandidate[]): MemoryT
         confidence: 0,
         bindings: undefined,
         reasonCodes: [],
+        timeContext: records[0]?.timeContext,
+        firstObservedAt: records[0]?.firstObservedAt,
+        lastObservedAt: records[0]?.lastObservedAt,
+        validFrom: records[0]?.validFrom,
+        validTo: records[0]?.validTo,
+        ongoing: records[0]?.ongoing,
     });
 }
 
@@ -501,6 +538,10 @@ function mergeRelationshipCards(records: MemoryTakeoverRelationshipCard[]): Memo
         trust: Math.max(Number(merged.trust) || 0, Number(current.trust) || 0),
         affection: Math.max(Number(merged.affection) || 0, Number(current.affection) || 0),
         tension: Math.max(Number(merged.tension) || 0, Number(current.tension) || 0),
+        timeContext: pickLaterTimeContext(merged.timeContext, current.timeContext),
+        validFrom: pickEarlierTimeContext(merged.validFrom, current.validFrom),
+        validTo: pickLaterTimeContext(merged.validTo, current.validTo),
+        ongoing: resolveOngoingFlag(merged.ongoing, current.ongoing),
     }), {
         sourceActorKey: String(records[0]?.sourceActorKey ?? '').trim().toLowerCase(),
         targetActorKey: String(records[0]?.targetActorKey ?? '').trim().toLowerCase(),
@@ -511,6 +552,10 @@ function mergeRelationshipCards(records: MemoryTakeoverRelationshipCard[]): Memo
         trust: 0,
         affection: 0,
         tension: 0,
+        timeContext: records[0]?.timeContext,
+        validFrom: records[0]?.validFrom,
+        validTo: records[0]?.validTo,
+        ongoing: records[0]?.ongoing,
     });
 }
 
@@ -538,6 +583,12 @@ function mergeStableFacts(records: MemoryTakeoverStableFact[]): MemoryTakeoverSt
         status: chooseLongerOptionalText(merged.status, current.status),
         importance: Math.max(Number(merged.importance) || 0, Number(current.importance) || 0) || undefined,
         reasonCodes: dedupeStrings([...(merged.reasonCodes ?? []), ...(current.reasonCodes ?? [])]),
+        timeContext: pickLaterTimeContext(merged.timeContext, current.timeContext),
+        firstObservedAt: pickEarlierTimeContext(merged.firstObservedAt, current.firstObservedAt),
+        lastObservedAt: pickLaterTimeContext(merged.lastObservedAt, current.lastObservedAt),
+        validFrom: pickEarlierTimeContext(merged.validFrom, current.validFrom),
+        validTo: pickLaterTimeContext(merged.validTo, current.validTo),
+        ongoing: resolveOngoingFlag(merged.ongoing, current.ongoing),
     }), {
         type: String(records[0]?.type ?? '').trim(),
         subject: String(records[0]?.subject ?? '').trim(),
@@ -556,7 +607,67 @@ function mergeStableFacts(records: MemoryTakeoverStableFact[]): MemoryTakeoverSt
         status: String(records[0]?.status ?? '').trim() || undefined,
         importance: Number(records[0]?.importance) || undefined,
         reasonCodes: [],
+        timeContext: records[0]?.timeContext,
+        firstObservedAt: records[0]?.firstObservedAt,
+        lastObservedAt: records[0]?.lastObservedAt,
+        validFrom: records[0]?.validFrom,
+        validTo: records[0]?.validTo,
+        ongoing: records[0]?.ongoing,
     });
+}
+
+/**
+ * 功能：按楼层顺序优先选择更早的时间上下文。
+ * @param current 当前时间。
+ * @param next 新时间。
+ * @returns 更早的时间。
+ */
+function pickEarlierTimeContext(
+    current?: MemoryTimeContext,
+    next?: MemoryTimeContext,
+): MemoryTimeContext | undefined {
+    if (!current) {
+        return next;
+    }
+    if (!next) {
+        return current;
+    }
+    return next.sequenceTime.firstFloor <= current.sequenceTime.firstFloor ? next : current;
+}
+
+/**
+ * 功能：按楼层顺序优先选择更新的时间上下文。
+ * @param current 当前时间。
+ * @param next 新时间。
+ * @returns 更新的时间。
+ */
+function pickLaterTimeContext(
+    current?: MemoryTimeContext,
+    next?: MemoryTimeContext,
+): MemoryTimeContext | undefined {
+    if (!current) {
+        return next;
+    }
+    if (!next) {
+        return current;
+    }
+    return next.sequenceTime.lastFloor >= current.sequenceTime.lastFloor ? next : current;
+}
+
+/**
+ * 功能：合并持续状态标记。
+ * @param current 当前标记。
+ * @param next 新标记。
+ * @returns 合并后的持续状态。
+ */
+function resolveOngoingFlag(current?: boolean, next?: boolean): boolean | undefined {
+    if (next === false || current === false) {
+        return false;
+    }
+    if (next === true || current === true) {
+        return true;
+    }
+    return undefined;
 }
 
 /**

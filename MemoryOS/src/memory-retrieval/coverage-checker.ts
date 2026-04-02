@@ -1,6 +1,7 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalCandidate, RetrievalContextRoute, RetrievalFacet, RetrievalResultItem } from './types';
 import { clamp01, computeMemoryWeight, computeNGramSimilarity, computeRecencyWeight } from './scoring';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 
 /**
  * 功能：facet 到对应 schemaId 的补召回映射。
@@ -77,6 +78,9 @@ export function applyCoverageSecondPass(input: {
     const supplements: RetrievalResultItem[] = [];
     const subQueries: Partial<Record<RetrievalFacet, string>> = {};
     const addedCounts: Partial<Record<RetrievalFacet, number>> = {};
+    const currentMaxFloor = allCandidates.reduce((max: number, candidate: RetrievalCandidate): number => {
+        return Math.max(max, candidate.timeContext?.sequenceTime?.lastFloor ?? 0);
+    }, 0);
 
     for (const facet of facetsToSupplement) {
         const targetSchemas = FACET_RECALL_SCHEMAS[facet] ?? [];
@@ -107,9 +111,12 @@ export function applyCoverageSecondPass(input: {
             const ngram = computeNGramSimilarity(subQuery, `${candidate.title} ${candidate.summary}`);
             const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
             const recencyWeight = computeRecencyWeight(candidate.updatedAt);
+            const timeBoost = candidate.timeContext
+                ? Math.max(0, computeTimeBoost(subQuery || query, candidate.timeContext, currentMaxFloor))
+                : 0;
             return {
                 candidate,
-                score: clamp01(ngram * 0.4 + memoryWeight * 0.3 + recencyWeight * 0.3),
+                score: clamp01(ngram * 0.34 + memoryWeight * 0.26 + recencyWeight * 0.25 + timeBoost * 0.15),
                 breakdown: {
                     bm25: 0,
                     ngram,
@@ -117,6 +124,7 @@ export function applyCoverageSecondPass(input: {
                     memoryWeight,
                     recencyWeight,
                     graphBoost: 0,
+                    timeBoost,
                 },
             };
         }).sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score);

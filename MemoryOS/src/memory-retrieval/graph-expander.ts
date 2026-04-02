@@ -2,6 +2,7 @@ import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger
 import type { RetrievalCandidate, RetrievalContextRoute, RetrievalFacet, RetrievalResultItem } from './types';
 import { buildCandidateLinkIndex } from './link-index';
 import { clamp01 } from './scoring';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 
 /**
  * 功能：图扩散输入参数。
@@ -9,6 +10,7 @@ import { clamp01 } from './scoring';
 export interface GraphExpansionInput {
     seeds: RetrievalResultItem[];
     allCandidates: RetrievalCandidate[];
+    queryText?: string;
     maxDepth?: number;
     decay?: number;
     enableHubPenalty?: boolean;
@@ -89,7 +91,7 @@ function computeRawGraphBoost(seedScore: number, edgeWeight: number, decay: numb
  * @returns 合并种子与扩散结果后的列表和诊断信息。
  */
 export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResult {
-    const { seeds, allCandidates, maxDepth = 1, decay = 0.65, enableHubPenalty = true, contextRoute, onTrace } = input;
+    const { seeds, allCandidates, queryText = '', maxDepth = 1, decay = 0.65, enableHubPenalty = true, contextRoute, onTrace } = input;
     if (seeds.length <= 0 || allCandidates.length <= 0) {
         return {
             items: seeds,
@@ -127,6 +129,9 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
     let hubPenaltyAppliedCount = 0;
     let addedCount = 0;
     let currentFrontier = seeds.map((seed: RetrievalResultItem): string => seed.candidate.candidateId);
+    const currentMaxFloor = allCandidates.reduce((max: number, candidate: RetrievalCandidate): number => {
+        return Math.max(max, candidate.timeContext?.sequenceTime?.lastFloor ?? 0);
+    }, 0);
 
     for (let depth = 0; depth < maxDepth; depth += 1) {
         const nextFrontier: string[] = [];
@@ -151,7 +156,11 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
                 if (enableHubPenalty && targetDegree >= 4) {
                     hubPenaltyAppliedCount += 1;
                 }
-                const boost = computeRawGraphBoost(sourceItem.score, adjustedEdgeWeight, decay) * hubPenalty;
+                const rawBoost = computeRawGraphBoost(sourceItem.score, adjustedEdgeWeight, decay) * hubPenalty;
+                const timeBoost = targetCandidate.timeContext
+                    ? Math.max(0, computeTimeBoost(queryText, targetCandidate.timeContext, currentMaxFloor))
+                    : 0;
+                const boost = rawBoost * (1 + timeBoost * 0.25);
                 if (boost <= 0.001) {
                     continue;
                 }
@@ -164,6 +173,7 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
                         breakdown: {
                             ...existing.breakdown,
                             graphBoost: newBoost,
+                            timeBoost: Math.max(existing.breakdown.timeBoost ?? 0, timeBoost),
                         },
                     });
                     continue;
@@ -178,6 +188,7 @@ export function expandFromSeeds(input: GraphExpansionInput): GraphExpansionResul
                         memoryWeight: 0,
                         recencyWeight: 0,
                         graphBoost: boost,
+                        timeBoost,
                     },
                 });
                 nextFrontier.push(edge.targetId);

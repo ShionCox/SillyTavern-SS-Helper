@@ -12,6 +12,7 @@ const TAKEOVER_WORKBENCH_TEXT_MAP: Record<string, string> = {
     calculating: '计算中…',
     calculate_estimate: '计算预估',
     start_takeover: '开始接管',
+    takeover_running: '接管执行中...',
     pause: '暂停',
     resume: '继续',
     consolidate_now: '立即整合',

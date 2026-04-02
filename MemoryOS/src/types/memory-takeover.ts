@@ -3,7 +3,7 @@
  */
 export type MemoryTakeoverMode = 'full' | 'recent' | 'custom_range';
 
-import type { BatchTimeAssessment } from '../memory-time/time-types';
+import type { BatchTimeAssessment, MemoryTimeContext } from '../memory-time/time-types';
 
 /**
  * 功能：定义旧聊天接管任务状态。
@@ -147,6 +147,12 @@ export interface MemoryTakeoverStableFact {
     status?: string;
     importance?: number;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -174,6 +180,10 @@ export interface MemoryTakeoverRelationTransition {
     targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -196,6 +206,12 @@ export interface MemoryTakeoverTaskTransition {
     legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -213,6 +229,12 @@ export interface MemoryTakeoverWorldStateChange {
     legacyCompareKeys?: string[];
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -299,6 +321,12 @@ export interface MemoryTakeoverEntityCardCandidate {
     confidence: number;
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -318,6 +346,12 @@ export interface MemoryTakeoverEntityTransition {
     payload: Record<string, unknown>;
     bindings?: MemoryTakeoverBindings;
     reasonCodes?: string[];
+    timeContext?: MemoryTimeContext;
+    firstObservedAt?: MemoryTimeContext;
+    lastObservedAt?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 /**
@@ -333,6 +367,10 @@ export interface MemoryTakeoverRelationshipCard {
     trust: number;
     affection: number;
     tension: number;
+    timeContext?: MemoryTimeContext;
+    validFrom?: MemoryTimeContext;
+    validTo?: MemoryTimeContext;
+    ongoing?: boolean;
 }
 
 export interface MemoryTakeoverBaseline {
@@ -428,6 +466,10 @@ export interface MemoryTakeoverConsolidationResult {
         reason: string;
         relationTag?: string;
         targetType?: 'actor' | 'organization' | 'city' | 'nation' | 'location' | 'unknown';
+        timeContext?: MemoryTimeContext;
+        validFrom?: MemoryTimeContext;
+        validTo?: MemoryTimeContext;
+        ongoing?: boolean;
     }>;
     taskState: Array<{
         task: string;
@@ -444,6 +486,12 @@ export interface MemoryTakeoverConsolidationResult {
         legacyCompareKeys?: string[];
         bindings?: MemoryTakeoverBindings;
         reasonCodes?: string[];
+        timeContext?: MemoryTimeContext;
+        firstObservedAt?: MemoryTimeContext;
+        lastObservedAt?: MemoryTimeContext;
+        validFrom?: MemoryTimeContext;
+        validTo?: MemoryTimeContext;
+        ongoing?: boolean;
     }>;
     worldState: Record<string, string>;
     worldStateDetails?: MemoryTakeoverWorldStateChange[];

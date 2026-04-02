@@ -154,97 +154,129 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 </aside>
 
                 <div class="stx-vector-lab__content">
-                    <div class="stx-memory-workbench__card stx-vector-lab__panel">
-                        <div class="stx-vector-lab__detail-head">
-                            <div>
-                                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('document_detail'))}</div>
-                                <div class="stx-vector-lab__detail-subtitle">${selectedDoc ? escapeHtml(selectedDoc.vectorDocId) : escapeHtml(resolveVectorWorkbenchText('select_document_hint'))}</div>
-                            </div>
-                            ${selectedDoc ? `
-                                <div class="stx-memory-workbench__toolbar">
-                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-reindex-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}">${escapeHtml(resolveVectorWorkbenchText('reindex_document'))}</button>
-                                    <button class="stx-memory-workbench__ghost-btn" data-action="vector-remove-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}" style="border-color:rgba(239,68,68,0.42); color:var(--mw-warn);">${escapeHtml(resolveVectorWorkbenchText('remove_document'))}</button>
-                                </div>
-                            ` : ''}
-                        </div>
-                        <div class="stx-vector-lab__panel-body stx-vector-lab__panel-body--scroll">
-                            ${selectedDoc ? `
-                                <div class="stx-vector-lab__detail-grid">
-                                    <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('basic_info'))}</div>
-                                        ${buildInfoRow(resolveVectorWorkbenchText('source_type'), resolveSourceKindLabel(selectedDoc.sourceKind))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('source_id'), selectedDoc.sourceId)}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('schema_id'), selectedDoc.schemaId || resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('compare_key'), selectedDoc.compareKey || resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('updated_at'), formatTimestamp(selectedDoc.updatedAt))}
-                                    </div>
-                                    <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_status'))}</div>
-                                        ${buildInfoRow(resolveVectorWorkbenchText('embedding_status'), resolveStatusLabel(selectedDoc.embeddingStatus))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('model'), selectedDoc.embeddingModel || resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('version'), selectedDoc.embeddingVersion || resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('dimension'), String(selectedDoc.embeddingDim ?? 0))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('index_written'), hasIndex ? resolveVectorWorkbenchText('indexed') : resolveVectorWorkbenchText('not_indexed'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_recall'), recallStat ? `${recallStat.recallCount} ${resolveVectorWorkbenchText('recall_count_suffix')}` : resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_mode'), recallStat?.lastRecallMode || resolveVectorWorkbenchText('empty_value'))}
-                                        ${buildInfoRow(resolveVectorWorkbenchText('recent_time'), formatTimestamp(recallStat?.lastRecalledAt))}
-                                        ${selectedDoc.lastError ? buildInfoRow(resolveVectorWorkbenchText('error_message'), selectedDoc.lastError) : ''}
-                                    </div>
-                                </div>
-                                <div class="stx-vector-lab__detail-grid">
-                                    <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('structure_tags'))}</div>
-                                        ${buildTagBlock(resolveVectorWorkbenchText('source_actor'), selectedDoc.actorKeys)}
-                                        ${buildTagBlock(resolveVectorWorkbenchText('source_relationship'), selectedDoc.relationKeys)}
-                                        ${buildTagBlock(resolveVectorWorkbenchText('world_tag'), selectedDoc.worldKeys)}
-                                        ${buildTagBlock(resolveVectorWorkbenchText('location_tag'), selectedDoc.locationKey ? [selectedDoc.locationKey] : [])}
-                                    </div>
-                                    <div class="stx-vector-lab__detail-card">
-                                        <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('text_content'))}</div>
-                                        <div class="stx-vector-lab__detail-text">
-                                            <strong>${escapeHtml(selectedDoc.title || resolveVectorWorkbenchText('untitled_document'))}</strong>
-                                            <div>${escapeHtml(selectedDoc.text || resolveVectorWorkbenchText('no_text_content'))}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('select_document_empty'))}</div>`}
-                        </div>
-                    </div>
-
-                    <div class="stx-memory-workbench__card stx-vector-lab__panel">
-                        <div class="stx-vector-lab__detail-head">
-                            <div>
-                                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('retrieval_testbench'))}</div>
-                                <div class="stx-vector-lab__detail-subtitle">${escapeHtml(resolveVectorWorkbenchText('retrieval_testbench_subtitle'))}</div>
-                            </div>
-                            <button class="stx-memory-workbench__button" data-action="vector-run-test"${state.vectorTestRunning ? ' disabled' : ''}>
-                                <i class="fa-solid fa-play"></i> ${escapeHtml(state.vectorTestRunning ? resolveVectorWorkbenchText('testing') : resolveVectorWorkbenchText('start_test'))}
+                    <div class="stx-memory-workbench__card stx-vector-lab__panel stx-vector-lab__panel--tabs">
+                        <div class="stx-vector-lab__tabbar">
+                            <button
+                                class="stx-vector-lab__tab${state.vectorRightTab === 'detail' ? ' is-active' : ''}"
+                                data-vector-right-tab="detail"
+                                type="button"
+                            >
+                                ${escapeHtml(resolveVectorWorkbenchText('document_detail'))}
+                            </button>
+                            <button
+                                class="stx-vector-lab__tab${state.vectorRightTab === 'test' ? ' is-active' : ''}"
+                                data-vector-right-tab="test"
+                                type="button"
+                            >
+                                ${escapeHtml(resolveVectorWorkbenchText('retrieval_testbench'))}
                             </button>
                         </div>
-                        <div class="stx-vector-lab__panel-body">
-                            <div class="stx-vector-lab__test-grid">
-                                <div class="stx-vector-lab__test-form">
-                                    <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="${escapeAttr(resolveVectorWorkbenchText('query_placeholder'))}">${escapeHtml(state.vectorQuery)}</textarea>
-                                    <div class="stx-vector-lab__filter-grid">
-                                        <select id="stx-vector-mode" class="stx-memory-workbench__select">
-                                            <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
-                                            <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
-                                            <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
-                                        </select>
-                                        <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('topk_placeholder'))}">
-                                        <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('deep_window_placeholder'))}">
-                                        <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('final_topk_placeholder'))}">
-                                    </div>
-                                    <div class="stx-vector-lab__switches">
-                                        ${buildSwitch('stx-vector-enable-routing', resolveVectorWorkbenchText('enable_strategy_routing'), state.vectorEnableStrategyRoutingTest)}
-                                        ${buildSwitch('stx-vector-enable-rerank', resolveVectorWorkbenchText('enable_rule_rerank'), state.vectorEnableRerankTest)}
-                                        ${buildSwitch('stx-vector-enable-llmhub-rerank', resolveVectorWorkbenchText('enable_llmhub_rerank'), state.vectorEnableLLMHubRerankTest)}
-                                        ${buildSwitch('stx-vector-enable-graph-expansion', resolveVectorWorkbenchText('enable_graph_expansion'), state.vectorEnableGraphExpansionTest)}
-                                    </div>
+                        <div class="stx-vector-lab__tabpanel"${state.vectorRightTab !== 'detail' ? ' hidden' : ''}>
+                            <div class="stx-vector-lab__detail-head">
+                                <div>
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveVectorWorkbenchText('document_detail'))}</div>
+                                    <div class="stx-vector-lab__detail-subtitle">${selectedDoc ? escapeHtml(selectedDoc.vectorDocId) : escapeHtml(resolveVectorWorkbenchText('select_document_hint'))}</div>
                                 </div>
-                                <div class="stx-vector-lab__test-result">
+                                ${selectedDoc ? `
+                                    <div class="stx-memory-workbench__toolbar">
+                                        <button class="stx-memory-workbench__ghost-btn" data-action="vector-reindex-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}">${escapeHtml(resolveVectorWorkbenchText('reindex_document'))}</button>
+                                        <button class="stx-memory-workbench__ghost-btn" data-action="vector-remove-doc" data-vector-doc-id="${escapeAttr(selectedDoc.vectorDocId)}" style="border-color:rgba(239,68,68,0.42); color:var(--mw-warn);">${escapeHtml(resolveVectorWorkbenchText('remove_document'))}</button>
+                                    </div>
+                                ` : ''}
+                            </div>
+                            <div class="stx-vector-lab__panel-body stx-vector-lab__panel-body--scroll">
+                                ${selectedDoc ? `
+                                    <div class="stx-vector-lab__detail-grid">
+                                        <div class="stx-vector-lab__detail-card">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('basic_info'))}</div>
+                                            ${buildInfoRow(resolveVectorWorkbenchText('source_type'), resolveSourceKindLabel(selectedDoc.sourceKind))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('source_id'), selectedDoc.sourceId)}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('schema_id'), selectedDoc.schemaId || resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('compare_key'), selectedDoc.compareKey || resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('updated_at'), formatTimestamp(selectedDoc.updatedAt))}
+                                        </div>
+                                        <div class="stx-vector-lab__detail-card">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_status'))}</div>
+                                            ${buildInfoRow(resolveVectorWorkbenchText('embedding_status'), resolveStatusLabel(selectedDoc.embeddingStatus))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('model'), selectedDoc.embeddingModel || resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('version'), selectedDoc.embeddingVersion || resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('dimension'), String(selectedDoc.embeddingDim ?? 0))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('index_written'), hasIndex ? resolveVectorWorkbenchText('indexed') : resolveVectorWorkbenchText('not_indexed'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('recent_recall'), recallStat ? `${recallStat.recallCount} ${resolveVectorWorkbenchText('recall_count_suffix')}` : resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('recent_mode'), recallStat?.lastRecallMode || resolveVectorWorkbenchText('empty_value'))}
+                                            ${buildInfoRow(resolveVectorWorkbenchText('recent_time'), formatTimestamp(recallStat?.lastRecalledAt))}
+                                            ${selectedDoc.lastError ? buildInfoRow(resolveVectorWorkbenchText('error_message'), selectedDoc.lastError) : ''}
+                                        </div>
+                                    </div>
+                                    <div class="stx-vector-lab__detail-grid">
+                                        <div class="stx-vector-lab__detail-card">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('structure_tags'))}</div>
+                                            ${buildTagBlock(resolveVectorWorkbenchText('source_actor'), selectedDoc.actorKeys)}
+                                            ${buildTagBlock(resolveVectorWorkbenchText('source_relationship'), selectedDoc.relationKeys)}
+                                            ${buildTagBlock(resolveVectorWorkbenchText('world_tag'), selectedDoc.worldKeys)}
+                                            ${buildTagBlock(resolveVectorWorkbenchText('location_tag'), selectedDoc.locationKey ? [selectedDoc.locationKey] : [])}
+                                        </div>
+                                        <div class="stx-vector-lab__detail-card">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('text_content'))}</div>
+                                            <div class="stx-vector-lab__detail-text">
+                                                <strong>${escapeHtml(selectedDoc.title || resolveVectorWorkbenchText('untitled_document'))}</strong>
+                                                <div>${escapeHtml(selectedDoc.text || resolveVectorWorkbenchText('no_text_content'))}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('select_document_empty'))}</div>`}
+                            </div>
+                        </div>
+                        <div class="stx-vector-lab__tabpanel"${state.vectorRightTab !== 'test' ? ' hidden' : ''}>
+                            <div class="stx-vector-lab__panel-body">
+                            <div class="stx-vector-lab__testbench">
+                                <section class="stx-vector-lab__testbench-controls">
+                                    <div class="stx-vector-lab__control-card stx-vector-lab__control-card--query">
+                                        <div class="stx-vector-lab__control-head">
+                                            <div class="stx-vector-lab__control-title">${escapeHtml(resolveVectorWorkbenchText('test_query_card'))}</div>
+                                            <button class="stx-memory-workbench__button stx-vector-lab__run-btn" data-action="vector-run-test"${state.vectorTestRunning ? ' disabled' : ''}>
+                                                <i class="fa-solid fa-play"></i> ${escapeHtml(state.vectorTestRunning ? resolveVectorWorkbenchText('testing') : resolveVectorWorkbenchText('start_test'))}
+                                            </button>
+                                        </div>
+                                        <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="${escapeAttr(resolveVectorWorkbenchText('query_placeholder'))}">${escapeHtml(state.vectorQuery)}</textarea>
+                                        <div class="stx-vector-lab__test-controls">
+                                            <select id="stx-vector-mode" class="stx-memory-workbench__select">
+                                                <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
+                                                <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
+                                                <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
+                                            </select>
+                                            <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('topk_placeholder'))}">
+                                            <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('deep_window_placeholder'))}">
+                                            <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('final_topk_placeholder'))}">
+                                        </div>
+                                    </div>
+
+                                    <div class="stx-vector-lab__control-card">
+                                        <div class="stx-vector-lab__control-title">${escapeHtml(resolveVectorWorkbenchText('test_switch_card'))}</div>
+                                        <div class="stx-vector-lab__switches stx-vector-lab__switches--compact">
+                                            ${buildSwitch('stx-vector-enable-routing', resolveVectorWorkbenchText('enable_strategy_routing'), state.vectorEnableStrategyRoutingTest)}
+                                            ${buildSwitch('stx-vector-enable-rerank', resolveVectorWorkbenchText('enable_rule_rerank'), state.vectorEnableRerankTest)}
+                                            ${buildSwitch('stx-vector-enable-llmhub-rerank', resolveVectorWorkbenchText('enable_llmhub_rerank'), state.vectorEnableLLMHubRerankTest)}
+                                            ${buildSwitch('stx-vector-enable-graph-expansion', resolveVectorWorkbenchText('enable_graph_expansion'), state.vectorEnableGraphExpansionTest)}
+                                        </div>
+                                    </div>
+
+                                    <div class="stx-vector-lab__control-card">
+                                        <div class="stx-vector-lab__control-title">${escapeHtml(resolveVectorWorkbenchText('test_snapshot_card'))}</div>
+                                        ${testResult ? `
+                                            <div class="stx-vector-lab__snapshot-list">
+                                                ${buildCompactInfoRow(resolveVectorWorkbenchText('generated_at'), formatTimestamp(testResult.generatedAt))}
+                                                ${buildCompactInfoRow(resolveVectorWorkbenchText('current_mode'), resolveModeLabel(testResult.retrievalMode))}
+                                                ${buildCompactInfoRow(resolveVectorWorkbenchText('final_provider'), resolveRetrievalProviderLabel(testResult.providerId))}
+                                                ${buildCompactInfoRow(resolveVectorWorkbenchText('result_count'), String(testResult.items.length))}
+                                            </div>
+                                        ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('test_snapshot_empty'))}</div>`}
+                                    </div>
+                                </section>
+
+                                <section class="stx-vector-lab__testbench-stage">
                                     ${state.vectorTestRunning || testProgress ? `
-                                        <div class="stx-vector-lab__progress-card${state.vectorTestRunning ? ' is-running' : ''}${testProgress?.stage === 'failed' ? ' is-failed' : ''}">
+                                        <div class="stx-vector-lab__progress-card stx-vector-lab__progress-card--hero${state.vectorTestRunning ? ' is-running' : ''}${testProgress?.stage === 'failed' ? ' is-failed' : ''}">
                                             <div class="stx-vector-lab__progress-head">
                                                 <span>${escapeHtml(resolveVectorWorkbenchText('current_step'))}</span>
                                                 <strong>${escapeHtml(testProgress?.title || (state.vectorTestRunning ? resolveVectorWorkbenchText('test_running') : resolveVectorWorkbenchText('latest_step')))}</strong>
@@ -258,74 +290,76 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                         </div>
                                     ` : ''}
                                     ${testResult ? `
-                                        <div class="stx-vector-lab__result-block">
-                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('chain_diagnostics'))}</div>
-                                            <div class="stx-vector-lab__result-grid">
-                                                ${buildMetricChip(resolveVectorWorkbenchText('final_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.finalProviderId || testResult.providerId))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('seed_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.seedProviderId || 'none'))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('strategy_route'), resolveStrategyRouteLabel(testResult.diagnostics.strategyDecision?.route))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('vector_hit_count'), String(testResult.diagnostics.vectorHitCount ?? 0))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('merge_used'), testResult.diagnostics.mergeUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('rerank_used'), testResult.diagnostics.rerankUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('rerank_source'), resolveRerankSourceLabel(testResult.diagnostics.rerankSource))}
-                                                ${buildMetricChip(resolveVectorWorkbenchText('result_count'), String(testResult.items.length))}
+                                        <div class="stx-vector-lab__result-block stx-vector-lab__result-block--overview">
+                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('result_overview'))}</div>
+                                            <div class="stx-vector-lab__compact-metrics-scroll">
+                                                <div class="stx-vector-lab__compact-metrics">
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('final_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.finalProviderId || testResult.providerId))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('seed_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.seedProviderId || 'none'))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('strategy_route'), resolveStrategyRouteLabel(testResult.diagnostics.strategyDecision?.route))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('vector_hit_count'), String(testResult.diagnostics.vectorHitCount ?? 0))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('merge_used'), testResult.diagnostics.mergeUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('rerank_used'), testResult.diagnostics.rerankUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('rerank_source'), resolveRerankSourceLabel(testResult.diagnostics.rerankSource))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('result_count'), String(testResult.items.length))}
+                                                </div>
                                             </div>
-                                            <div class="stx-vector-lab__reason-row">
+                                            <div class="stx-vector-lab__reason-row stx-vector-lab__reason-row--panel">
                                                 <span>${escapeHtml(resolveVectorWorkbenchText('reason_codes'))}</span>
                                                 <strong>${escapeHtml((testResult.diagnostics.rerankReasonCodes ?? []).join('、') || resolveVectorWorkbenchText('empty_value'))}</strong>
                                             </div>
                                         </div>
-                                        <div class="stx-vector-lab__result-block">
-                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('ranking_diff'))}</div>
-                                            <div class="stx-vector-lab__detail-grid">
-                                                <div class="stx-vector-lab__detail-card">
-                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_top_hits'))}</div>
-                                                    ${buildRankingStageList(
-                                                        testResult.diagnostics.vectorTopHits?.map((item) => ({
-                                                            rank: item.rank,
-                                                            title: item.sourceId,
-                                                            score: item.score,
-                                                            source: 'vector',
-                                                        })) ?? [],
-                                                        true,
-                                                    )}
-                                                </div>
-                                                <div class="stx-vector-lab__detail-card">
-                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('merged_ranking'))}</div>
-                                                    ${buildRankingStageList(testResult.diagnostics.mergedRanking ?? [])}
-                                                </div>
-                                                <div class="stx-vector-lab__detail-card">
-                                                    <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('reranked_ranking'))}</div>
-                                                    ${buildRankingStageList(testResult.diagnostics.rerankedRanking ?? [])}
-                                                </div>
+                                        <div class="stx-vector-lab__testbench-grid">
+                                            <div class="stx-vector-lab__result-block">
+                                                <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('vector_top_hits'))}</div>
+                                                ${buildRankingStageList(
+                                                    testResult.diagnostics.vectorTopHits?.map((item) => ({
+                                                        rank: item.rank,
+                                                        title: item.sourceId,
+                                                        score: item.score,
+                                                        source: 'vector',
+                                                    })) ?? [],
+                                                    true,
+                                                )}
                                             </div>
-                                            <div class="stx-vector-lab__detail-card" style="margin-top:12px;">
+                                            <div class="stx-vector-lab__result-block">
+                                                <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('merged_ranking'))}</div>
+                                                ${buildRankingStageList(testResult.diagnostics.mergedRanking ?? [], true)}
+                                            </div>
+                                            <div class="stx-vector-lab__result-block">
+                                                <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('reranked_ranking'))}</div>
+                                                ${buildRankingStageList(testResult.diagnostics.rerankedRanking ?? [], true)}
+                                            </div>
+                                        </div>
+                                        <div class="stx-vector-lab__testbench-grid stx-vector-lab__testbench-grid--wide">
+                                            <div class="stx-vector-lab__result-block">
                                                 <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('ranking_changes'))}</div>
                                                 ${buildRankingChangeList(testResult.diagnostics.rankingChanges ?? [])}
                                             </div>
-                                        </div>
-                                        <div class="stx-vector-lab__result-block">
-                                            <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('final_results'))}</div>
-                                            <div class="stx-vector-lab__result-list">
-                                                ${testResult.items.map((item, index) => {
-                                                    const sourceLabel = testResult.diagnostics.resultSourceLabels.find((label) => label.candidateId === item.candidate.candidateId)?.source ?? 'lexical';
-                                                    return `
-                                                        <article class="stx-vector-lab__result-item">
-                                                            <div class="stx-vector-lab__result-head">
-                                                                <strong>#${index + 1} ${escapeHtml(item.candidate.title || item.candidate.entryId)}</strong>
-                                                                <span>${escapeHtml(resolveResultSourceLabel(sourceLabel))}</span>
-                                                            </div>
-                                                            <div class="stx-vector-lab__result-meta">${escapeHtml(item.candidate.schemaId)} / ${escapeHtml(item.candidate.entryId)}</div>
-                                                            <div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(item.candidate.summary || resolveVectorWorkbenchText('empty_value'), 180) || resolveVectorWorkbenchText('empty_value'))}</div>
-                                                            <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
-                                                        </article>
-                                                    `;
-                                                }).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_result_hits'))}</div>`}
+                                            <div class="stx-vector-lab__result-block">
+                                                <div class="stx-vector-lab__detail-title">${escapeHtml(resolveVectorWorkbenchText('final_results'))}</div>
+                                                <div class="stx-vector-lab__result-list stx-vector-lab__result-list--final">
+                                                    ${testResult.items.map((item, index) => {
+                                                        const sourceLabel = testResult.diagnostics.resultSourceLabels.find((label) => label.candidateId === item.candidate.candidateId)?.source ?? 'lexical';
+                                                        return `
+                                                            <article class="stx-vector-lab__result-item stx-vector-lab__result-item--compact">
+                                                                <div class="stx-vector-lab__result-head">
+                                                                    <strong>#${index + 1} ${escapeHtml(item.candidate.title || item.candidate.entryId)}</strong>
+                                                                    <span>${escapeHtml(resolveResultSourceLabel(sourceLabel))}</span>
+                                                                </div>
+                                                                <div class="stx-vector-lab__result-meta">${escapeHtml(item.candidate.schemaId)} / ${escapeHtml(item.candidate.entryId)}</div>
+                                                                <div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(item.candidate.summary || resolveVectorWorkbenchText('empty_value'), 180) || resolveVectorWorkbenchText('empty_value'))}</div>
+                                                                <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
+                                                            </article>
+                                                        `;
+                                                    }).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_result_hits'))}</div>`}
+                                                </div>
                                             </div>
                                         </div>
-                                    ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('test_result_empty'))}</div>`}
-                                </div>
+                                    ` : `<div class="stx-memory-workbench__empty stx-vector-lab__stage-empty">${escapeHtml(resolveVectorWorkbenchText('test_result_empty'))}</div>`}
+                                </section>
                             </div>
+                        </div>
                         </div>
                     </div>
             </div>
@@ -347,7 +381,7 @@ function buildRankingStageList(
         return `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('no_ranking_data'))}</div>`;
     }
     return `
-        <div class="stx-vector-lab__result-list"${compact ? ' style="max-height:220px;"' : ''}>
+        <div class="stx-vector-lab__result-list"${compact ? ' ' : ''}>
             ${items.map((item) => `
                 <article class="stx-vector-lab__result-item">
                     <div class="stx-vector-lab__result-head">
@@ -423,6 +457,21 @@ function buildOverviewCard(label: string, value: string, detail: string, tone: '
             <div class="stx-vector-lab__overview-value">${escapeHtml(value)}</div>
             <div class="stx-vector-lab__overview-detail">${escapeHtml(detail)}</div>
         </article>
+    `;
+}
+
+/**
+ * 功能：构建紧凑型键值信息行。
+ * @param label 标签。
+ * @param value 值。
+ * @returns HTML。
+ */
+function buildCompactInfoRow(label: string, value: string): string {
+    return `
+        <div class="stx-vector-lab__compact-row">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value || resolveVectorWorkbenchText('empty_value'))}</strong>
+        </div>
     `;
 }
 

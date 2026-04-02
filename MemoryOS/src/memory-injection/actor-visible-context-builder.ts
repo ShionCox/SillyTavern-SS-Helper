@@ -3,7 +3,8 @@ import { type RetentionStage } from '../memory-retention';
 import { renderEventMemoryNarrative } from './narrative-renderer/event-renderer';
 import { renderRelationshipNarrative } from './narrative-renderer/relationship-renderer';
 import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
-import { buildTimeLabel } from '../memory-time/time-ranking';
+import { buildPromptTimeMeta } from '../memory-time/time-ranking';
+import type { PromptTimeMeta } from '../memory-time/time-types';
 
 /**
  * 功能：角色可见记忆视图。
@@ -17,6 +18,8 @@ export interface ActorVisibleMemoryContext {
         totalInjectedCount: number;
         estimatedChars: number;
         retentionStageCounts: Record<RetentionStage, number>;
+        timeInjectedCount: number;
+        timeSourceCounts: Record<string, number>;
     };
     actorView: {
         actorKey: string;
@@ -56,17 +59,23 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     const worldBaseLines = input.entries
         .filter((entry: MemoryEntry): boolean => isWorldBaseType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => renderWorldStateNarrative(`${entry.title}：${entry.summary || entry.detail || '暂无详情'}`));
+        .map((entry: MemoryEntry): string => renderWorldStateNarrative(
+            prependPromptTimeHeader(`${entry.title}：${entry.summary || entry.detail || '暂无详情'}`, entry.timeContext, currentMaxFloor),
+        ));
 
     const sceneSharedLines = input.entries
         .filter((entry: MemoryEntry): boolean => isSceneSharedType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => appendTimeLabel(`${entry.title}：${entry.summary || entry.detail || '暂无详情'}`, entry, currentMaxFloor));
+        .map((entry: MemoryEntry): string => prependPromptTimeHeader(
+            `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
+            entry.timeContext,
+            currentMaxFloor,
+        ));
 
     const entityLines = input.entries
         .filter((entry: MemoryEntry): boolean => isEntityType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => renderEntityLine(entry));
+        .map((entry: MemoryEntry): string => renderEntityLine(entry, currentMaxFloor));
 
     const identityLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isIdentityType(entry.entryType))
@@ -119,6 +128,30 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         ...eventLines,
         ...interpretationLines,
     ].join('\n').length;
+    const timeSourceCounts: Record<string, number> = {
+        explicit_story: 0,
+        inferred_story: 0,
+        sequence_fallback: 0,
+    };
+    const timeInjectedCount = countPromptTimeMetaSources([
+        ...input.entries
+            .filter((entry: MemoryEntry): boolean => (
+                isWorldBaseType(entry.entryType)
+                || isSceneSharedType(entry.entryType)
+                || isEntityType(entry.entryType)
+            ))
+            .map((entry: MemoryEntry): PromptTimeMeta | undefined => (
+                entry.timeContext ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor) : undefined
+            )),
+        ...targetRoleEntries
+            .filter((entry: PromptAssemblyRoleEntry): boolean => (
+                isIdentityType(entry.entryType)
+                || isRelationshipType(entry.entryType)
+                || isVisibleEventType(entry.entryType)
+                || isInterpretationType(entry.entryType)
+            ))
+            .map((entry: PromptAssemblyRoleEntry): PromptTimeMeta | undefined => entry.promptTimeMeta),
+    ], timeSourceCounts);
 
     return {
         worldBaseLines,
@@ -129,6 +162,8 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             totalInjectedCount,
             estimatedChars,
             retentionStageCounts,
+            timeInjectedCount,
+            timeSourceCounts,
         },
         actorView: {
             actorKey: activeActorKey || 'actor',
@@ -180,10 +215,11 @@ function isEntityType(entryType: string): boolean {
  * @param entry 记忆条目。
  * @returns 渲染后的文本行。
  */
-function renderEntityLine(entry: MemoryEntry): string {
+function renderEntityLine(entry: MemoryEntry, currentMaxFloor: number): string {
     const typeLabel = resolveEntityTypeLabel(entry.entryType);
     const summary = entry.summary || entry.detail || '暂无详情';
-    return `[${typeLabel}] ${entry.title}：${summary}`;
+    const body = `[${typeLabel}] ${entry.title}：${summary}`;
+    return prependPromptTimeHeader(body, entry.timeContext, currentMaxFloor);
 }
 
 /**
@@ -264,13 +300,41 @@ function normalizeType(entryType: string): string {
  * @param currentMaxFloor 当前最大楼层号。
  * @returns 追加时间标签后的文本行。
  */
-function appendTimeLabel(text: string, entry: MemoryEntry, currentMaxFloor: number): string {
-    if (!entry.timeContext) {
-        return text;
+function prependPromptTimeHeader(
+    text: string,
+    timeContext: MemoryEntry['timeContext'],
+    currentMaxFloor: number,
+): string {
+    const normalized = String(text ?? '').trim();
+    if (!normalized || !timeContext) {
+        return normalized;
     }
-    const label = buildTimeLabel(entry.timeContext, currentMaxFloor);
-    if (!label) {
-        return text;
+    const promptTimeMeta = buildPromptTimeMeta(timeContext, currentMaxFloor);
+    const header = [
+        `时间：${promptTimeMeta.timeLabelForPrompt}`,
+        `来源：${promptTimeMeta.timeSourceLabel}`,
+        ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
+    ].join('｜');
+    return `[${header}] ${normalized}`;
+}
+
+/**
+ * 功能：统计注入文本使用的时间来源分布。
+ * @param values 时间元信息列表。
+ * @param timeSourceCounts 来源统计对象。
+ * @returns 带时间头的条目数量。
+ */
+function countPromptTimeMetaSources(
+    values: Array<PromptTimeMeta | undefined>,
+    timeSourceCounts: Record<string, number>,
+): number {
+    let count = 0;
+    for (const value of values) {
+        if (!value) {
+            continue;
+        }
+        count += 1;
+        timeSourceCounts[value.sourceMode] = (timeSourceCounts[value.sourceMode] ?? 0) + 1;
     }
-    return `${text}（${label}）`;
+    return count;
 }

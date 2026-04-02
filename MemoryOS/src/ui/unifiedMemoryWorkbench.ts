@@ -49,7 +49,8 @@ import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { buildVectorsViewMarkup } from './workbenchTabs/tabVectors';
 import { buildContentLabViewMarkup } from './workbenchTabs/tabContentLab';
-import { parseTakeoverFormDraft } from './takeoverFormShared';
+import { resolveTakeoverWorkbenchText } from './workbenchLocale';
+import { buildTakeoverFallbackEstimate, parseTakeoverFormDraft } from './takeoverFormShared';
 import {
     type ContentLabSettings,
     type ContentBlockPolicy,
@@ -320,6 +321,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         takeoverPreviewLoading: false,
         takeoverPreviewExpanded: false,
         takeoverProgressLoading: false,
+        takeoverActionRunning: false,
         vectorQuery: '',
         vectorMode: settings.retrievalMode,
         vectorSourceKindFilter: 'all',
@@ -328,6 +330,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         vectorActorFilter: 'all',
         vectorTextFilter: '',
         vectorSelectedDocId: '',
+        vectorRightTab: 'detail',
         vectorEnableStrategyRoutingTest: settings.vectorEnableStrategyRouting,
         vectorEnableRerankTest: settings.vectorEnableRerank,
         vectorEnableLLMHubRerankTest: settings.vectorEnableLLMHubRerank,
@@ -364,6 +367,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let takeoverPreviewSequence = 0;
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
     let takeoverProgressSequence = 0;
+    let takeoverProgressPollTimer: number | null = null;
     let previewCache: WorkbenchSnapshot['preview'] = null;
     let previewRecallExplanationCache: WorkbenchSnapshot['recallExplanation'] = null;
     let vectorLoadSequence = 0;
@@ -878,10 +882,20 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     await render();
                     return;
                 }
-                await memory.chatState.createTakeoverPlan(parsed.config);
-                await memory.chatState.startTakeover();
-                toast.success('旧聊天接管任务已启动。');
-                await render();
+                runTakeoverActionInBackground(async (): Promise<void> => {
+                    takeoverProgressCache = null;
+                    const plannedProgress = await memory.chatState.createTakeoverPlan(parsed.config);
+                    takeoverProgressCache = plannedProgress;
+                    await refreshTakeoverProgress();
+                    toast.info('旧聊天接管已开始，正在后台执行并刷新进度。');
+                    const executionResult = await memory.chatState.startTakeover(plannedProgress.plan?.takeoverId);
+                    takeoverProgressCache = executionResult.progress ?? null;
+                    if (!executionResult.ok) {
+                        toast.error(executionResult.errorMessage || `旧聊天接管启动失败：${executionResult.reasonCode}`);
+                        return;
+                    }
+                    toast.success('旧聊天接管本轮执行已完成。');
+                });
                 return;
             }
             if (action === 'takeover-preview-calc') {
@@ -890,25 +904,39 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'takeover-pause') {
-                await memory.chatState.pauseTakeover();
+                takeoverProgressCache = await memory.chatState.pauseTakeover();
                 toast.success('接管任务已暂停。');
                 await render();
                 return;
             }
             if (action === 'takeover-resume') {
-                await memory.chatState.resumeTakeover();
-                toast.success('接管任务已继续。');
-                await render();
+                runTakeoverActionInBackground(async (): Promise<void> => {
+                    toast.info('接管任务正在后台继续执行。');
+                    const executionResult = await memory.chatState.resumeTakeover();
+                    takeoverProgressCache = executionResult.progress ?? null;
+                    if (!executionResult.ok) {
+                        toast.error(executionResult.errorMessage || `接管任务继续失败：${executionResult.reasonCode}`);
+                        return;
+                    }
+                    toast.success('接管任务本轮继续执行已完成。');
+                });
                 return;
             }
             if (action === 'takeover-consolidate') {
-                await memory.chatState.runTakeoverConsolidation();
-                toast.success('接管整合已完成。');
-                await render();
+                runTakeoverActionInBackground(async (): Promise<void> => {
+                    toast.info('接管整合正在后台执行。');
+                    const executionResult = await memory.chatState.runTakeoverConsolidation();
+                    takeoverProgressCache = executionResult.progress ?? null;
+                    if (!executionResult.ok) {
+                        toast.error(executionResult.errorMessage || `接管整合失败：${executionResult.reasonCode}`);
+                        return;
+                    }
+                    toast.success('接管整合已完成。');
+                });
                 return;
             }
             if (action === 'takeover-abort') {
-                await memory.chatState.abortTakeover();
+                takeoverProgressCache = await memory.chatState.abortTakeover();
                 toast.success('接管任务已终止。');
                 await render();
                 return;
@@ -1308,6 +1336,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             state.vectorEnableGraphExpansionTest = vectorGraphSwitch.checked === true;
         });
 
+        root.querySelectorAll<HTMLElement>('[data-vector-right-tab]').forEach((button: HTMLElement): void => {
+            button.addEventListener('click', (): void => {
+                const nextTab = String(button.dataset.vectorRightTab ?? '').trim();
+                if (nextTab === 'detail' || nextTab === 'test') {
+                    state.vectorRightTab = nextTab;
+                    void render();
+                }
+            });
+        });
+
         const takeoverModeSelect = root.querySelector('#stx-memory-takeover-mode') as HTMLSelectElement | null;
         takeoverModeSelect?.addEventListener('change', (): void => {
             state.takeoverMode = String(takeoverModeSelect.value ?? 'full').trim();
@@ -1383,8 +1421,65 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         }
         const startButton = root.querySelector('#stx-memory-takeover-start-button') as HTMLButtonElement | null;
         if (startButton) {
-            startButton.disabled = state.takeoverPreviewLoading;
+            startButton.disabled = state.takeoverPreviewLoading || state.takeoverActionRunning;
+            startButton.innerHTML = state.takeoverActionRunning
+                ? `<i class="fa-solid fa-play"></i> ${escapeHtml(resolveTakeoverWorkbenchText('takeover_running'))}`
+                : `<i class="fa-solid fa-play"></i> ${escapeHtml(resolveTakeoverWorkbenchText('start_takeover'))}`;
         }
+    };
+
+    /**
+     * 功能：停止接管进度轮询，避免重复刷新。
+     * @returns 无返回值。
+     */
+    const stopTakeoverProgressPolling = (): void => {
+        if (takeoverProgressPollTimer !== null) {
+            window.clearInterval(takeoverProgressPollTimer);
+            takeoverProgressPollTimer = null;
+        }
+    };
+
+    /**
+     * 功能：开始轮询接管进度，让后台任务执行时界面持续刷新。
+     * @returns 无返回值。
+     */
+    const startTakeoverProgressPolling = (): void => {
+        stopTakeoverProgressPolling();
+        takeoverProgressPollTimer = window.setInterval((): void => {
+            if (!state.takeoverActionRunning) {
+                stopTakeoverProgressPolling();
+                return;
+            }
+            void refreshTakeoverProgress();
+        }, 1500);
+    };
+
+    /**
+     * 功能：在后台执行接管动作，避免工作台被长任务阻塞。
+     * @param runner 实际执行逻辑。
+     * @returns 无返回值。
+     */
+    const runTakeoverActionInBackground = (runner: () => Promise<void>): void => {
+        if (state.takeoverActionRunning) {
+            toast.info('旧聊天接管正在执行，请稍候。');
+            return;
+        }
+        state.takeoverActionRunning = true;
+        startTakeoverProgressPolling();
+        void (async (): Promise<void> => {
+            await render();
+            try {
+                await runner();
+            } catch (error) {
+                logger.error('旧聊天接管后台执行失败', error);
+                toast.error(`旧聊天接管失败：${String((error as Error)?.message ?? error)}`);
+            } finally {
+                state.takeoverActionRunning = false;
+                stopTakeoverProgressPolling();
+                await refreshTakeoverProgress();
+                await render();
+            }
+        })();
     };
 
     /**
@@ -1437,21 +1532,12 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         });
         if (parsed.validationError) {
             state.takeoverPreviewLoading = false;
-            state.takeoverPreview = {
-                mode: parsed.config.mode ?? 'full',
+            state.takeoverPreview = buildTakeoverFallbackEstimate({
+                config: parsed.config,
                 totalFloors: state.takeoverPreview?.totalFloors ?? 0,
-                range: null,
-                activeWindow: null,
-                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
-                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
-                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
-                threshold: state.takeoverPreview?.threshold ?? 100000,
-                totalBatches: 0,
-                batches: [],
-                hasOverflow: false,
-                overflowWarnings: [],
+                threshold: state.takeoverPreview?.threshold,
                 validationError: parsed.validationError,
-            };
+            });
             syncTakeoverPreviewUi();
             return;
         }
@@ -1468,21 +1554,12 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (currentSequence !== takeoverPreviewSequence) {
                 return;
             }
-            state.takeoverPreview = {
-                mode: parsed.config.mode ?? 'full',
+            state.takeoverPreview = buildTakeoverFallbackEstimate({
+                config: parsed.config,
                 totalFloors: state.takeoverPreview?.totalFloors ?? 0,
-                range: null,
-                activeWindow: null,
-                batchSize: Math.max(0, Number(parsed.config.batchSize ?? 0) || 0),
-                useActiveSnapshot: parsed.config.useActiveSnapshot !== false,
-                activeSnapshotFloors: Math.max(0, Number(parsed.config.activeSnapshotFloors ?? 0) || 0),
-                threshold: state.takeoverPreview?.threshold ?? 100000,
-                totalBatches: 0,
-                batches: [],
-                hasOverflow: false,
-                overflowWarnings: [],
+                threshold: state.takeoverPreview?.threshold,
                 validationError: `Token 预估失败：${String((error as Error)?.message ?? error)}`,
-            };
+            });
         } finally {
             if (currentSequence === takeoverPreviewSequence) {
                 state.takeoverPreviewLoading = false;

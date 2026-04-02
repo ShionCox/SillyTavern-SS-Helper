@@ -168,6 +168,7 @@ export interface WorkbenchState {
     takeoverPreviewLoading: boolean;
     takeoverPreviewExpanded: boolean;
     takeoverProgressLoading: boolean;
+    takeoverActionRunning: boolean;
     vectorQuery: string;
     vectorMode: 'lexical_only' | 'vector_only' | 'hybrid';
     vectorSourceKindFilter: string;
@@ -176,6 +177,7 @@ export interface WorkbenchState {
     vectorActorFilter: string;
     vectorTextFilter: string;
     vectorSelectedDocId: string;
+    vectorRightTab: 'detail' | 'test';
     vectorEnableStrategyRoutingTest: boolean;
     vectorEnableRerankTest: boolean;
     vectorEnableLLMHubRerankTest: boolean;

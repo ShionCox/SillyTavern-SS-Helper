@@ -24,6 +24,7 @@ export type {
     EventTimeMeta,
     IntervalTimeMeta,
     MemoryTimeIndex,
+    PromptTimeMeta,
 } from './time-types';
 export { DEFAULT_FALLBACK_RULES } from './time-types';
 
@@ -31,6 +32,7 @@ export { DEFAULT_FALLBACK_RULES } from './time-types';
 export {
     detectTimelineProfile,
     shouldUpdateProfile,
+    resolveTimelineProfileEvolution,
     createSequenceOnlyProfile,
 } from './timeline-profile';
 
@@ -79,6 +81,7 @@ export {
     boostEarly,
     buildTimeIndex,
     buildTimeLabel,
+    buildPromptTimeMeta,
 } from './time-ranking';
 
 // ── 展示格式化 ──

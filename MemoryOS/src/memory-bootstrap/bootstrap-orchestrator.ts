@@ -21,9 +21,10 @@ import {
     clearBootstrapStagingSnapshot,
     saveBootstrapStagingSnapshot,
 } from './bootstrap-staging-store';
-import { detectTimelineProfile, createSequenceOnlyProfile } from '../memory-time/timeline-profile';
+import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
+import { buildSequenceTime } from '../memory-time/sequence-time';
 import { logTimeDebug } from '../memory-time/time-debug';
-import type { MemoryTimelineProfile } from '../memory-time/time-types';
+import type { MemoryTimeContext, MemoryTimelineProfile } from '../memory-time/time-types';
 
 /**
  * 功能：定义冷启动编排依赖。
@@ -38,6 +39,7 @@ export interface BootstrapOrchestratorDependencies {
         reasonCodes: string[];
         detectedFrom: string[];
     }): Promise<unknown>;
+    getTimelineProfile?(): Promise<MemoryTimelineProfile | null>;
     putTimelineProfile?(profile: MemoryTimelineProfile): Promise<unknown>;
     appendMutationHistory(input: {
         action: string;
@@ -378,13 +380,20 @@ export async function applyBootstrapCandidates(input: {
         confidence: number;
         reasonCodes: string[];
     };
+    timelineProfile: MemoryTimelineProfile;
 }> {
     const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const normalizedDocument = normalizeColdStartNarrativeDocument(input.document, userDisplayName);
     const actorDisplayNameMap = buildBootstrapActorDisplayNameMap(normalizedDocument, input.sourceBundle, userDisplayName);
-    const selectedIds = new Set(input.selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id));
+    const normalizedSelectedCandidates = input.selectedCandidates.map((candidate: ColdStartCandidate): ColdStartCandidate => normalizeColdStartCandidate(candidate, userDisplayName));
+    const selectedIds = new Set(normalizedSelectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id));
+    const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
+    const existingTimelineProfile = input.dependencies.getTimelineProfile
+        ? await input.dependencies.getTimelineProfile()
+        : null;
+    const timelineProfile = resolveColdStartTimelineProfile(sourceTexts, existingTimelineProfile);
 
-    for (const candidate of input.selectedCandidates.map((item: ColdStartCandidate): ColdStartCandidate => normalizeColdStartCandidate(item, userDisplayName))) {
+    for (const candidate of normalizedSelectedCandidates) {
         for (const actorKey of candidate.actorBindings ?? []) {
             await input.dependencies.ensureActorProfile({
                 actorKey,
@@ -394,7 +403,7 @@ export async function applyBootstrapCandidates(input: {
         }
     }
     await input.dependencies.applyLedgerMutationBatch(
-        input.selectedCandidates.map((candidate: ColdStartCandidate): LedgerMutation => ({
+        normalizedSelectedCandidates.map((candidate: ColdStartCandidate): LedgerMutation => ({
             targetKind: candidate.entryType,
             action: 'ADD',
             title: candidate.title,
@@ -402,6 +411,7 @@ export async function applyBootstrapCandidates(input: {
             detailPayload: candidate.detailPayload,
             tags: candidate.tags,
             actorBindings: candidate.actorBindings,
+            timeContext: buildColdStartCandidateTimeContext(candidate, timelineProfile),
             reasonCodes: ['cold_start_candidate_confirmed', candidate.type],
             sourceContext: {
                 candidateId: candidate.id,
@@ -419,7 +429,6 @@ export async function applyBootstrapCandidates(input: {
         },
     );
 
-    const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
     const worldProfile = resolveBootstrapWorldProfile(normalizedDocument, input.sourceBundle);
     await input.dependencies.putWorldProfileBinding({
         primaryProfile: worldProfile.primaryProfile,
@@ -452,11 +461,7 @@ export async function applyBootstrapCandidates(input: {
         },
     });
 
-    // ── 时间画像检测 ──
-    const timelineProfile = detectTimelineProfile({
-        texts: sourceTexts,
-        anchorFloor: 0,
-    });
+    // ── 时间画像检测 / 兜底写入 ──
     logTimeDebug('cold_start_timeline_profile', {
         mode: timelineProfile.mode,
         calendarKind: timelineProfile.calendarKind,
@@ -477,7 +482,69 @@ export async function applyBootstrapCandidates(input: {
         },
     });
 
-    return { worldProfile };
+    return { worldProfile, timelineProfile };
+}
+
+/**
+ * 功能：解析冷启动应写入的时间画像；检测不到时间体系时显式落为 sequence_only。
+ * @param sourceTexts 冷启动来源文本。
+ * @param existingProfile 已有时间画像。
+ * @returns 冷启动时间画像。
+ */
+function resolveColdStartTimelineProfile(
+    sourceTexts: string[],
+    existingProfile?: MemoryTimelineProfile | null,
+): MemoryTimelineProfile {
+    return resolveTimelineProfileEvolution({
+        texts: sourceTexts,
+        anchorFloor: 0,
+        existingProfile,
+    }).profile;
+}
+
+/**
+ * 功能：为冷启动确认候选生成基础时间上下文。
+ * @param candidate 候选记忆。
+ * @param timelineProfile 当前冷启动时间画像。
+ * @param index 候选顺序。
+ * @returns 基础时间上下文。
+ */
+function buildColdStartCandidateTimeContext(
+    candidate: ColdStartCandidate,
+    timelineProfile: MemoryTimelineProfile,
+): MemoryTimeContext {
+    const anchorText = resolveColdStartCandidateAnchorText(candidate);
+    const hasExplicitAnchor = Boolean(anchorText && timelineProfile.mode === 'explicit_world_time');
+    const hasInferredAnchor = Boolean(anchorText && timelineProfile.mode === 'implicit_world_time');
+    return {
+        mode: hasExplicitAnchor
+            ? 'story_explicit'
+            : hasInferredAnchor
+                ? 'story_inferred'
+                : 'sequence_fallback',
+        storyTime: anchorText ? {
+            calendarKind: timelineProfile.calendarKind,
+            ...(hasExplicitAnchor ? { absoluteText: anchorText } : { relativeText: anchorText }),
+        } : undefined,
+        sequenceTime: buildSequenceTime(0, 0, `cold_start:${candidate.id}`),
+        source: 'cold_start',
+        confidence: Math.max(0.3, Math.min(0.95, Number(candidate.confidence) || timelineProfile.confidence || 0.3)),
+    };
+}
+
+/**
+ * 功能：为冷启动候选提取可用的基础时间锚文本。
+ * @param candidate 冷启动候选。
+ * @returns 时间锚文本。
+ */
+function resolveColdStartCandidateAnchorText(candidate: ColdStartCandidate): string | undefined {
+    const sourceExcerpt = candidate.sourceRefs
+        .map((item) => String(item.excerpt ?? '').trim())
+        .find(Boolean);
+    if (candidate.type === 'timeline_fact' || candidate.type === 'initial_state') {
+        return sourceExcerpt || String(candidate.summary ?? '').trim() || undefined;
+    }
+    return sourceExcerpt || undefined;
 }
 
 /**
