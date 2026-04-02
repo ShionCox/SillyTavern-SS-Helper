@@ -3,6 +3,7 @@ import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer
 import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
 import { readMemoryOSSettings } from '../settings/store';
+import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 
 /**
  * 功能：定义接管结构化任务的真实请求体。
@@ -217,7 +218,7 @@ function enrichTakeoverSample(sectionName: string, sample: unknown): unknown {
                 actorKey: 'lina',
                 displayName: '莉娜',
                 aliases: [],
-                identityFacts: ['与主角同行的银发精灵'],
+                identityFacts: ['与{{user}}同行的银发精灵'],
                 originFacts: [],
                 traits: ['谨慎', '会照顾人'],
             },
@@ -230,8 +231,8 @@ function enrichTakeoverSample(sectionName: string, sample: unknown): unknown {
                 targetActorKey: 'lina',
                 participants: ['user', 'lina'],
                 relationTag: '朋友',
-                state: '双方已经形成稳定同行与互相信任。',
-                summary: '主角与莉娜在同行中建立了明确的信任关系。',
+                state: '{{user}}与莉娜已经形成稳定同行与互相信任。',
+                summary: '{{user}}与莉娜在同行中建立了明确的信任关系。',
                 trust: 0.72,
                 affection: 0.48,
                 tension: 0.12,
@@ -262,6 +263,7 @@ export async function buildTakeoverStructuredTaskRequest(input: {
     extraSystemInstruction?: string;
 }): Promise<TakeoverStructuredTaskRequest> {
     const promptPack = await loadPromptPackSections();
+    const userDisplayName = resolveTakeoverPromptUserName(input.payload);
     const schema = enrichTakeoverSchema(
         input.schemaSection,
         normalizeMemoryPromptSchema(
@@ -275,11 +277,18 @@ export async function buildTakeoverStructuredTaskRequest(input: {
     );
     const systemPrompt = renderPromptTemplate(
         String(promptPack[input.systemSection as keyof typeof promptPack] ?? ''),
-        input.renderData ?? {},
+        {
+            user: '{{user}}',
+            userDisplayName: '{{user}}',
+            ...(input.renderData ?? {}),
+        },
     );
     const extraInstruction: string = String(input.extraSystemInstruction ?? '').trim();
     const userPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(input.payload, null, 2),
+        JSON.stringify(normalizeNarrativeValueWithUserPlaceholder({
+            ...input.payload,
+            userPlaceholder: '{{user}}',
+        }, userDisplayName), null, 2),
         JSON.stringify(schema ?? {}, null, 2),
         JSON.stringify(sample ?? {}, null, 2),
     );
@@ -300,6 +309,28 @@ export async function buildTakeoverStructuredTaskRequest(input: {
         ],
         schema,
     };
+}
+
+/**
+ * 功能：为旧聊天送模请求推断当前用户名，优先使用 payload 中显式携带的名字。
+ * @param payload 接管任务 payload。
+ * @returns 当前用户名或兜底值。
+ */
+function resolveTakeoverPromptUserName(payload: Record<string, unknown>): string {
+    const directUserName = String(
+        (payload.userSnapshot as Record<string, unknown> | undefined)?.userName
+        ?? '',
+    ).trim();
+    if (directUserName) {
+        return directUserName;
+    }
+    const messages = Array.isArray(payload.messages) ? payload.messages as Array<Record<string, unknown>> : [];
+    const userMessageName = messages.find((item) => String(item.role ?? '').trim() === 'user');
+    const fallbackUserName = String(userMessageName?.name ?? '').trim();
+    if (fallbackUserName) {
+        return fallbackUserName;
+    }
+    return resolveCurrentNarrativeUserName();
 }
 
 /**

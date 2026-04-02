@@ -19,6 +19,7 @@ import {
     resolveDisplayLabel,
     stripComparePrefix,
 } from './display-label-resolver';
+import { sanitizeWorkbenchDisplayText } from './workbench-text';
 import { promoteFactsToEvents, type PromotedMemoryEvent } from './fact-event-promoter';
 import { createGraphEdgeLedger } from './graph-edge-ledger';
 import { type MemoryGraphMode, type WorkbenchMemoryGraph, type WorkbenchMemoryGraphNode, type WorkbenchMemoryGraphSection } from './memoryGraphTypes';
@@ -66,7 +67,7 @@ function sanitizeWorkbenchNode(
  * @returns 清洗后的文本
  */
 function sanitizeWorkbenchText(value: unknown, fallback = ''): string {
-    const text = String(value ?? '').trim();
+    const text = sanitizeWorkbenchDisplayText(value, fallback);
     if (!text) {
         return fallback;
     }
@@ -79,7 +80,7 @@ function sanitizeWorkbenchText(value: unknown, fallback = ''): string {
     if (text.includes('涓栫晫鐘舵')) {
         return '世界状态';
     }
-    return text;
+    return sanitizeWorkbenchDisplayText(text, fallback);
 }
 
 /**

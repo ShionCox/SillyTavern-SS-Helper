@@ -14,6 +14,7 @@ import {
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 
 interface InspectorSection {
     title: string;
@@ -62,9 +63,9 @@ export function buildEntriesViewMarkup(
                     <div class="stx-memory-workbench__list" data-entry-list-scroll="true">
                         ${filteredEntries.length > 0 ? filteredEntries.map((entry: MemoryEntry): string => `
                             <button class="stx-memory-workbench__list-item${entry.entryId === state.selectedEntryId ? ' is-active' : ''}" data-select-entry="${escapeAttr(entry.entryId)}">
-                                <h4>${escapeHtml(entry.title)}</h4>
+                                <h4>${escapeHtml(sanitizeWorkbenchDisplayText(entry.title, '未命名词条'))}</h4>
                                 <div class="stx-memory-workbench__meta">${escapeHtml(typeMap.get(entry.entryType)?.label || resolveEntryTypeLabel(entry.entryType))} · ${escapeHtml(entry.category)}</div>
-                                <div class="stx-memory-workbench__detail-clamp">${escapeHtml(entry.summary || entry.detail || resolveEntriesWorkbenchText('empty_content'))}</div>
+                                <div class="stx-memory-workbench__detail-clamp">${escapeHtml(sanitizeWorkbenchDisplayText(entry.summary || entry.detail, resolveEntriesWorkbenchText('empty_content')))}</div>
                                 <div class="stx-memory-workbench__badge-row">
                                     ${(entry.tags ?? []).slice(0, 3).map((tag: string): string => `<span class="stx-memory-workbench__badge">${escapeHtml(tag)}</span>`).join('')}
                                     ${(entry.tags ?? []).length > 3 ? `<span class="stx-memory-workbench__badge">+${entry.tags.length - 3}</span>` : ''}
@@ -161,7 +162,7 @@ function buildEntryBindingRows(snapshot: WorkbenchSnapshot, selectedEntry: Memor
         const actor = actorMap.get(binding.actorKey);
         return `
             <article class="stx-memory-workbench__card">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(actor?.displayName || binding.actorKey)}</div>
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(actor?.displayName || binding.actorKey, '未命名角色'))}</div>
                 <div class="stx-memory-workbench__info-list">
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('actor_key'))}</span><strong>${escapeHtml(binding.actorKey)}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('memory_strength'))}</span><strong>${escapeHtml(String(binding.memoryPercent))}%</strong></div>

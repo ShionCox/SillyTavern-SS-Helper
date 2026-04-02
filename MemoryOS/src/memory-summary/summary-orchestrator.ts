@@ -22,7 +22,7 @@ import {
 import { buildSummaryWindow, type SummaryWindowMessage } from './summary-window';
 import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
 import type { MemoryLLMApi } from './llm-types';
-import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { readMemoryOSSettings } from '../settings/store';
 import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
 import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
@@ -76,6 +76,8 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const settings = readMemoryOSSettings();
     const budget = resolvePipelineBudgetPolicy(settings);
     const userDisplayName = resolveCurrentNarrativeUserName();
+    const promptUserDisplayName = resolveSummaryPromptUserName(input.messages, userDisplayName);
+    const userPlaceholder = '{{user}}';
     const summaryLanguageInstruction = '除 action、targetKind、candidateId、compareKey、reasonCodes 及各类键名外，所有自然语言内容必须使用简体中文。';
 
     await input.dependencies.appendMutationHistory({
@@ -171,12 +173,14 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         const plannerSchema = normalizeMemoryPromptSchema('SUMMARY_PLANNER_SCHEMA', parseJsonSection(promptPack.SUMMARY_PLANNER_SCHEMA));
         const plannerSample = parseJsonSection(promptPack.SUMMARY_PLANNER_OUTPUT_SAMPLE);
         const plannerSystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_PLANNER_SYSTEM, {
-            userDisplayName,
-        })}\n\n当前用户自然语言称呼固定为“${userDisplayName}”。结构化锚点仍然必须使用 \`user\`，但 reasons、topics 以及其它自然语言字段不得写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
-        const lightweightPlannerInput = {
+            worldProfile: plannerResult.diagnostics.worldProfile,
+            user: userPlaceholder,
+            userDisplayName: userPlaceholder,
+        })}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+        const lightweightPlannerInput = normalizeNarrativeValueWithUserPlaceholder({
             ...buildLightweightPlannerInput(plannerResult.context),
-            userDisplayName,
-        };
+            userPlaceholder,
+        }, promptUserDisplayName);
         const plannerUserPayload = buildStructuredTaskUserPayload(
             JSON.stringify(lightweightPlannerInput, null, 2),
             JSON.stringify(plannerSchema ?? {}, null, 2),
@@ -206,7 +210,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 topics: plannerDecision.topics,
                 reasons: plannerDecision.reasons,
                 narrativeStyle: plannerResult.context.narrativeStyle,
-                userDisplayName,
+                userPlaceholder,
             },
         });
         appendSummaryMutationStagingSnapshot(summaryJobId, {
@@ -283,8 +287,9 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const patchModeInstruction = '本次输出为稀疏 patch 模式：payload 中只输出发生变化的字段，未变化字段不要出现。严禁在 payload 中重复旧 state 的完整内容。若某字段无变化，直接省略该字段。';
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
-        userDisplayName,
-    })}\n\n当前用户自然语言称呼固定为"${userDisplayName}"。结构化锚点仍然必须使用 \`user\`，但 title、summary、detail、state 以及可写文本字段不得写成"用户"或"主角"。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
+        user: userPlaceholder,
+        userDisplayName: userPlaceholder,
+    })}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
     upsertPipelineJobRecord({
         jobId: summaryJobId,
@@ -360,7 +365,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             batchPlan.candidateIds,
         );
         const summaryUserPayload = buildStructuredTaskUserPayload(
-            JSON.stringify({ ...mutationContext, userDisplayName }, null, 2),
+            JSON.stringify(normalizeNarrativeValueWithUserPlaceholder({ ...mutationContext, userPlaceholder }, promptUserDisplayName), null, 2),
             JSON.stringify(strictSummarySchema ?? {}, null, 2),
             JSON.stringify(summaryOutputSample ?? {}, null, 2),
         );
@@ -682,6 +687,23 @@ function normalizeStringArray(value: unknown): string[] {
         }
     }
     return result;
+}
+
+/**
+ * 功能：为总结送模推断当前用户名，优先读取消息上的 user.name。
+ * @param messages 当前窗口消息。
+ * @param fallbackUserName 兜底用户名。
+ * @returns 用于送模脱敏的用户名。
+ */
+function resolveSummaryPromptUserName(
+    messages: SummaryWindowMessage[],
+    fallbackUserName: string,
+): string {
+    const matchedUserName = [...messages]
+        .reverse()
+        .find((item: SummaryWindowMessage): boolean => String(item.role ?? '').trim() === 'user');
+    const promptUserName = String((matchedUserName as { name?: string } | undefined)?.name ?? '').trim();
+    return promptUserName || fallbackUserName;
 }
 
 /**

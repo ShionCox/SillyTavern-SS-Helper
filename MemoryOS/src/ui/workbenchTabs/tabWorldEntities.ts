@@ -13,6 +13,7 @@ import {
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { MemoryEntry } from '../../types';
 
 const WORLD_ENTITY_TYPES: string[] = [
@@ -80,11 +81,11 @@ function resolveSelectedWorldEntity(entities: MemoryEntry[], state: WorkbenchSta
  * @returns 短摘要文本。
  */
 function buildEntityListSummary(entry: MemoryEntry): string {
-    const summary = String(entry.summary ?? '').trim();
+    const summary = sanitizeWorkbenchDisplayText(entry.summary);
     if (summary) {
         return summary;
     }
-    const detail = String(entry.detail ?? '').trim();
+    const detail = sanitizeWorkbenchDisplayText(entry.detail);
     if (detail) {
         return detail;
     }
@@ -97,7 +98,7 @@ function buildEntityListSummary(entry: MemoryEntry): string {
  * @returns 清洗后的标题文本
  */
 function resolveWorldEntityDisplayTitle(entry: MemoryEntry): string {
-    const rawTitle = String(entry.title ?? '').trim();
+    const rawTitle = sanitizeWorkbenchDisplayText(entry.title);
     if (!rawTitle) {
         return resolveWorldEntityText('unnamed_entity');
     }
@@ -213,11 +214,11 @@ function buildEntityContentMarkup(entry: MemoryEntry): string {
     return `
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveWorldEntityText('summary_title'))}</div>
-            <div class="stx-memory-workbench__detail-block">${escapeHtml(entry.summary || resolveWorldEntityText('no_summary'))}</div>
+            <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(entry.summary, resolveWorldEntityText('no_summary')))}</div>
         </div>
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveWorldEntityText('detail_title'))}</div>
-            <div class="stx-memory-workbench__detail-block">${escapeHtml(entry.detail || resolveWorldEntityText('no_detail'))}</div>
+            <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(entry.detail, resolveWorldEntityText('no_detail')))}</div>
         </div>
     `;
 }

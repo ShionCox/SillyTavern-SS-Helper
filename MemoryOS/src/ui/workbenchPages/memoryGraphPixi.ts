@@ -226,6 +226,7 @@ export async function createMemoryGraphPixiRenderer(
     let hoveredEdgeCandidateId = '';
     let dragState: DragState | null = null;
     let suppressTapUntil = 0;
+    let suppressHoverUntil = 0;
     let destroyed = false;
     let cameraTween: gsap.core.Tween | null = null;
     let flowTween: gsap.core.Timeline | null = null;
@@ -248,6 +249,11 @@ export async function createMemoryGraphPixiRenderer(
     let hoverArmTimer: number | null = null;
     let hoverVisualTween: gsap.core.Tween | null = null;
     let selectionRippleTween: gsap.core.Timeline | null = null;
+    let dragFrameId: number | null = null;
+    const pendingDragCamera = {
+        translateX: camera.translateX,
+        translateY: camera.translateY,
+    };
 
     stage.eventMode = 'static';
     stage.hitArea = app.screen;
@@ -320,6 +326,7 @@ export async function createMemoryGraphPixiRenderer(
         label.position.set(0, getRenderedNodeRadius(node) + 8);
         content.addChild(label);
         root.on('pointerdown', (event: FederatedPointerEvent): void => {
+            handleDragStart(event);
             event.stopPropagation();
         });
         root.on('pointertap', (event: FederatedPointerEvent): void => {
@@ -548,6 +555,8 @@ export async function createMemoryGraphPixiRenderer(
         cameraTween?.kill();
         cameraTween = null;
         resetHoveredEdge(true);
+        pendingDragCamera.translateX = camera.translateX;
+        pendingDragCamera.translateY = camera.translateY;
         dragState = {
             pointerId: event.pointerId,
             startX: event.global.x,
@@ -577,6 +586,34 @@ export async function createMemoryGraphPixiRenderer(
     }
 
     /**
+     * 功能：把拖拽期间累计的相机位移合帧提交到渲染层。
+     * @returns 无返回值。
+     */
+    function flushDragCameraTransform(): void {
+        camera.translateX = pendingDragCamera.translateX;
+        camera.translateY = pendingDragCamera.translateY;
+        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
+        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
+    }
+
+    /**
+     * 功能：使用 requestAnimationFrame 合并拖拽期间的高频相机更新。
+     * @returns 无返回值。
+     */
+    function scheduleDragCameraTransform(): void {
+        if (dragFrameId !== null) {
+            return;
+        }
+        dragFrameId = window.requestAnimationFrame((): void => {
+            dragFrameId = null;
+            if (destroyed) {
+                return;
+            }
+            flushDragCameraTransform();
+        });
+    }
+
+    /**
      * 功能：处理拖拽中的相机移动。
      * @param event Pixi 指针事件。
      * @returns 无返回值。
@@ -584,6 +621,10 @@ export async function createMemoryGraphPixiRenderer(
     function handleGlobalPointerMove(event: FederatedPointerEvent): void {
         if (!dragState || dragState.pointerId !== event.pointerId) {
             if (dragState) {
+                return;
+            }
+            if (performance.now() < suppressHoverUntil) {
+                scheduleHoveredEdge('');
                 return;
             }
             const worldPoint = world.toLocal(event.global);
@@ -598,12 +639,9 @@ export async function createMemoryGraphPixiRenderer(
         if (!dragState.moved && Math.hypot(deltaX, deltaY) >= 4) {
             dragState.moved = true;
         }
-        camera.translateX = dragState.originX + deltaX;
-        camera.translateY = dragState.originY + deltaY;
-        applyCamera(world, cosmicLayer, rippleLayer, camera, app.screen.width, app.screen.height, cosmicDepthState);
-        syncNodeDepth(nodeSprites, camera.scale);
-        syncSelectionRippleAnchor(nodeMap, selectedNodeId, camera, selectionRippleState);
-        syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, true);
+        pendingDragCamera.translateX = dragState.originX + deltaX;
+        pendingDragCamera.translateY = dragState.originY + deltaY;
+        scheduleDragCameraTransform();
     }
 
     /**
@@ -620,10 +658,17 @@ export async function createMemoryGraphPixiRenderer(
         }
         if (dragState.moved) {
             suppressTapUntil = performance.now() + 140;
+            suppressHoverUntil = performance.now() + 260;
         }
+        if (dragFrameId !== null) {
+            window.cancelAnimationFrame(dragFrameId);
+            dragFrameId = null;
+        }
+        flushDragCameraTransform();
         dragState = null;
         background.cursor = 'grab';
         container.style.cursor = 'grab';
+        syncNodeDepth(nodeSprites, camera.scale);
         syncDetailLevel(nodeSprites, connectedNodeIds, selectedNodeId, camera.scale, false);
     }
 
@@ -942,6 +987,10 @@ export async function createMemoryGraphPixiRenderer(
         }
         destroyed = true;
         clearHoverArmTimer();
+        if (dragFrameId !== null) {
+            window.cancelAnimationFrame(dragFrameId);
+            dragFrameId = null;
+        }
         resizeObserver.disconnect();
         app.ticker.remove(handleCosmicTick);
         app.canvas.removeEventListener('wheel', handleWheel);

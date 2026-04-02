@@ -147,7 +147,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     const segments = segmentColdStartSourceBundle(input.sourceBundle);
     const limitedPhase1Payload = limitBootstrapPhasePayload(segments.phase1, settings.bootstrapCorePhaseMaxItems);
     const limitedPhase2Payload = limitBootstrapPhasePayload(segments.phase2, settings.bootstrapStatePhaseMaxItems);
-    const actorKeyHints = buildBootstrapActorKeyHints(input.sourceBundle);
+    const actorKeyHints = buildBootstrapActorKeyHints();
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_started',
         payload: { phase: 'phase1', description: '核心实体与角色抽取' },
@@ -163,7 +163,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             payload: {
                 sourceBundle: limitedPhase1Payload,
                 actorKeyHints,
-                userDisplayName,
+                userPlaceholder: '{{user}}',
             },
         });
     await input.dependencies.appendMutationHistory({
@@ -192,7 +192,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
             payload: {
                 sourceBundle: limitedPhase2Payload,
                 actorKeyHints,
-                userDisplayName,
+                userPlaceholder: '{{user}}',
             },
         });
     await input.dependencies.appendMutationHistory({
@@ -481,22 +481,20 @@ function limitBootstrapPhasePayload(payload: Record<string, unknown>, maxItems: 
 
 /**
  * 功能：构建冷启动 actorKey 提示。
- * @param sourceBundle 冷启动源数据。
  * @returns actorKey 提示。
  */
-function buildBootstrapActorKeyHints(sourceBundle: ColdStartSourceBundle): {
+function buildBootstrapActorKeyHints(): {
     currentUser: {
         actorKey: string;
         displayName: string;
         note: string;
     };
 } {
-    const userDisplayName = resolveCurrentNarrativeUserName(sourceBundle.user.userName);
     return {
         currentUser: {
             actorKey: 'user',
-            displayName: userDisplayName,
-            note: `当关系对象是当前用户时，必须固定使用 actorKey \`user\`；自然语言称呼优先使用“${userDisplayName}”。`,
+            displayName: '{{user}}',
+            note: '当关系对象是当前用户时，必须固定使用 actorKey `user`；所有自然语言字段一律使用 `{{user}}`，不要展开为真实名字。',
         },
     };
 }

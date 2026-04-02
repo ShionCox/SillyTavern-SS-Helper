@@ -22,6 +22,8 @@ const STRUCTURED_SKIP_KEYS = new Set<string>([
     'relationTag',
 ]);
 
+const USER_PLACEHOLDER: string = '{{user}}';
+
 /**
  * 功能：解析当前叙事语义里应该使用的用户称呼。
  * @param preferredName 优先使用的名字，例如冷启动输入里的用户名。
@@ -92,6 +94,65 @@ export function normalizeNarrativeValue<T>(value: T, userDisplayName: string, cu
 }
 
 /**
+ * 功能：把自然语言里的当前用户名统一替换为 `{{user}}` 占位。
+ * @param text 原始文本。
+ * @param userDisplayName 当前用户显示名。
+ * @returns 替换后的文本。
+ */
+export function replaceCurrentUserNameWithPlaceholder(text: string, userDisplayName?: string): string {
+    const source = String(text ?? '');
+    if (!source.trim()) {
+        return source;
+    }
+    let output = source
+        .replace(/\{\{\s*userDisplayName\s*\}\}/gi, USER_PLACEHOLDER)
+        .replace(/当前用户/g, USER_PLACEHOLDER)
+        .replace(/该用户/g, USER_PLACEHOLDER)
+        .replace(/主角/g, USER_PLACEHOLDER)
+        .replace(/主人公/g, USER_PLACEHOLDER)
+        .replace(/对方/g, USER_PLACEHOLDER)
+        .replace(/用户(?!名)/g, USER_PLACEHOLDER);
+    const resolvedUserName = resolveCurrentNarrativeUserName(userDisplayName);
+    if (resolvedUserName && resolvedUserName !== '你') {
+        output = output.replace(new RegExp(escapeRegExp(resolvedUserName), 'g'), USER_PLACEHOLDER);
+    }
+    return output;
+}
+
+/**
+ * 功能：递归把对象中的当前用户名替换为 `{{user}}` 占位。
+ * @param value 原始值。
+ * @param userDisplayName 当前用户显示名。
+ * @param currentKey 当前字段名。
+ * @returns 替换后的值。
+ */
+export function normalizeNarrativeValueWithUserPlaceholder<T>(value: T, userDisplayName?: string, currentKey?: string): T {
+    if (typeof value === 'string') {
+        if (shouldSkipNarrativeNormalization(currentKey)) {
+            return value;
+        }
+        return replaceCurrentUserNameWithPlaceholder(value, userDisplayName) as T;
+    }
+    if (Array.isArray(value)) {
+        if (shouldSkipNarrativeNormalization(currentKey)) {
+            return value;
+        }
+        return value.map((item: unknown): unknown => normalizeNarrativeValueWithUserPlaceholder(item, userDisplayName)) as T;
+    }
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    if (shouldSkipNarrativeNormalization(currentKey)) {
+        return value;
+    }
+    const output: Record<string, unknown> = {};
+    for (const [key, childValue] of Object.entries(value as Record<string, unknown>)) {
+        output[key] = normalizeNarrativeValueWithUserPlaceholder(childValue, userDisplayName, key);
+    }
+    return output as T;
+}
+
+/**
  * 功能：判断当前字段是否应跳过自然语言替换。
  * @param key 当前字段名。
  * @returns 是否跳过。
@@ -102,6 +163,15 @@ function shouldSkipNarrativeNormalization(key?: string): boolean {
         return false;
     }
     return STRUCTURED_SKIP_KEYS.has(normalizedKey);
+}
+
+/**
+ * 功能：转义正则中的特殊字符。
+ * @param value 原始文本。
+ * @returns 转义后的文本。
+ */
+function escapeRegExp(value: string): string {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

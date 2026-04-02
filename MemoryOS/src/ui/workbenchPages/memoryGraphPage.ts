@@ -6,6 +6,7 @@ import {
 } from '../workbenchLocale';
 import type { WorkbenchSnapshot, WorkbenchState } from '../workbenchTabs/shared';
 import { escapeAttr } from '../workbenchTabs/shared';
+import { sanitizeWorkbenchDisplayText } from '../workbenchTabs/shared/workbench-text';
 import type {
     MemoryGraphMode,
     WorkbenchMemoryGraph,
@@ -310,7 +311,7 @@ function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graph: WorkbenchMe
                 </div>
                 <div class="stx-memory-graph-detail__hero-copy">
                     <div class="stx-memory-graph-detail__eyebrow">${escapeHtml(resolveMemoryGraphText('node_detail'))}</div>
-                    <strong class="stx-memory-graph-detail__title">${escapeHtml(node.label)}</strong>
+                    <strong class="stx-memory-graph-detail__title">${escapeHtml(sanitizeWorkbenchDisplayText(node.label, '未命名节点'))}</strong>
                 </div>
             </div>
             <div class="stx-memory-graph-detail__chip-row">
@@ -356,7 +357,7 @@ function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMe
                 </div>
                 <div class="stx-memory-graph-detail__hero-copy">
                     <div class="stx-memory-graph-detail__eyebrow">${escapeHtml(resolveMemoryGraphText('edge_detail'))}</div>
-                    <strong class="stx-memory-graph-detail__title">${escapeHtml(label || resolveMemoryGraphText('unnamed_relation'))}</strong>
+                    <strong class="stx-memory-graph-detail__title">${escapeHtml(sanitizeWorkbenchDisplayText(label || resolveMemoryGraphText('unnamed_relation'), resolveMemoryGraphText('unnamed_relation')))}</strong>
                 </div>
             </div>
             <div class="stx-memory-graph-detail__chip-row">
@@ -366,12 +367,12 @@ function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMe
             <div class="stx-memory-graph-detail__route">
                 <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(sourceNode?.id ?? edge.source)}">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${escapeHtml(sourceNode?.label ?? edge.source)}</span>
+                    <span>${escapeHtml(sanitizeWorkbenchDisplayText(sourceNode?.label ?? edge.source, '未命名节点'))}</span>
                 </button>
                 <i class="fa-solid fa-arrow-right-long stx-memory-graph-detail__route-arrow"></i>
                 <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(targetNode?.id ?? edge.target)}">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${escapeHtml(targetNode?.label ?? edge.target)}</span>
+                    <span>${escapeHtml(sanitizeWorkbenchDisplayText(targetNode?.label ?? edge.target, '未命名节点'))}</span>
                 </button>
             </div>
         </div>
@@ -388,7 +389,7 @@ function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMe
  * @returns 标签 HTML。
  */
 function buildGraphChipMarkup(text: string, icon: string, color: string): string {
-    const normalizedText = String(text ?? '').trim();
+    const normalizedText = sanitizeWorkbenchDisplayText(text);
     if (!normalizedText) {
         return '';
     }
@@ -413,7 +414,7 @@ function buildGraphSummaryCardMarkup(text: string, icon: string): string {
                 <i class="${escapeAttr(icon)}"></i>
                 <span>${escapeHtml(resolveMemoryGraphText('summary_title'))}</span>
             </div>
-            <div class="stx-memory-graph-detail__summary">${escapeHtml(text)}</div>
+            <div class="stx-memory-graph-detail__summary">${escapeHtml(sanitizeWorkbenchDisplayText(text, '暂无'))}</div>
         </section>
     `;
 }
@@ -442,7 +443,7 @@ function buildGraphTagSectionMarkup(title: string, icon: string, values: string[
                 ${normalizedValues.map((value: string): string => `
                     <span class="stx-memory-graph-detail__tag">
                         <i class="fa-solid fa-hashtag"></i>
-                        <span>${escapeHtml(value)}</span>
+                        <span>${escapeHtml(sanitizeWorkbenchDisplayText(value))}</span>
                     </span>
                 `).join('')}
             </div>
@@ -474,7 +475,7 @@ function buildGraphMetricListMarkup(title: string, icon: string, rows: Array<[st
                 ${visibleRows.map(([label, value]: [string, string]): string => `
                     <div class="stx-memory-graph-detail__metric-row">
                         <span>${escapeHtml(resolveMemoryGraphFieldLabel(label))}</span>
-                        <strong>${escapeHtml(resolveMemoryGraphFieldValue(value))}</strong>
+                        <strong>${escapeHtml(sanitizeWorkbenchDisplayText(resolveMemoryGraphFieldValue(value)))}</strong>
                     </div>
                 `).join('')}
             </div>
@@ -508,7 +509,7 @@ function renderSections(
                 <section class="stx-memory-graph-detail__section">
                     <div class="stx-memory-graph-detail__section-title">
                         <i class="fa-solid fa-folder-tree"></i>
-                        <span>${escapeHtml(section.title)}</span>
+                        <span>${escapeHtml(sanitizeWorkbenchDisplayText(section.title))}</span>
                     </div>
                     <div class="stx-memory-graph-detail__field-list">
                         ${visibleFields.map((field) => {
@@ -516,7 +517,7 @@ function renderSections(
                             return `
                             <div class="stx-memory-graph-detail__field-card">
                                 <div class="stx-memory-graph-detail__field-head">
-                                    <div class="stx-memory-graph-detail__field-label">${escapeHtml(resolveMemoryGraphFieldLabel(field.label))}</div>
+                                    <div class="stx-memory-graph-detail__field-label">${escapeHtml(sanitizeWorkbenchDisplayText(resolveMemoryGraphFieldLabel(field.label)))}</div>
                                     ${relatedNodeId ? `
                                         <button
                                             type="button"
@@ -530,7 +531,7 @@ function renderSections(
                                         </button>
                                     ` : ''}
                                 </div>
-                                <div class="stx-memory-graph-detail__field-value">${escapeHtml(resolveMemoryGraphFieldValue(field.value))}</div>
+                                <div class="stx-memory-graph-detail__field-value">${escapeHtml(sanitizeWorkbenchDisplayText(resolveMemoryGraphFieldValue(field.value)))}</div>
                             </div>
                         `;
                         }).join('')}

@@ -1,7 +1,8 @@
 import { loadPromptPackSections, type PromptPackSections } from '../memory-prompts/prompt-loader';
 import { normalizeMemoryPromptSchema } from '../memory-prompts/schema-normalizer';
-import { buildStructuredTaskUserPayload, renderPromptTemplate } from '../memory-prompts/prompt-renderer';
+import { buildStructuredTaskUserPayload } from '../memory-prompts/prompt-renderer';
 import type { MemoryLLMApi } from '../memory-summary';
+import { normalizeNarrativeValueWithUserPlaceholder } from '../utils/narrative-user-name';
 
 /**
  * 功能：执行单个冷启动阶段抽取任务。
@@ -20,7 +21,7 @@ export async function runBootstrapPhase(input: {
     const coldStartSchema = normalizeMemoryPromptSchema(promptSections.schemaSectionName, parseJsonSection(promptSections.schema));
     const coldStartOutputSample = parseJsonSection(promptSections.sample);
     const userPayload = buildStructuredTaskUserPayload(
-        JSON.stringify(input.payload, null, 2),
+        JSON.stringify(normalizeNarrativeValueWithUserPlaceholder(input.payload, input.userDisplayName), null, 2),
         JSON.stringify(coldStartSchema ?? {}, null, 2),
         JSON.stringify(coldStartOutputSample ?? {}, null, 2),
     );
@@ -36,7 +37,7 @@ export async function runBootstrapPhase(input: {
             messages: [
                 {
                     role: 'system',
-                    content: `${renderPromptTemplate(promptSections.system, { userDisplayName: input.userDisplayName })}\n\n${phaseInstruction}\n\n除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。`,
+                    content: `${promptSections.system}\n\n${phaseInstruction}\n\n除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。`,
                 },
                 { role: 'user', content: userPayload },
             ],

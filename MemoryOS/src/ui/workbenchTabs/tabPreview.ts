@@ -37,6 +37,7 @@ import {
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 
 type PreviewTraceRecord = {
     ts: number;
@@ -111,7 +112,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
                     <div class="stx-memory-workbench__info-list">
-                        <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.preview?.query || '未提供')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.preview?.query, '未提供'))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>命中角色数</span><strong>${escapeHtml(String(snapshot.preview?.matchedActorKeys.length ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>命中词条数</span><strong>${escapeHtml(String(snapshot.preview?.matchedEntryIds.length ?? 0))}</strong></div>
@@ -165,7 +166,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>记录来源</span><strong>${escapeHtml(resolveRecallSourceLabel(snapshot.recallExplanation.source || 'unified_memory'))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.recallExplanation.generatedAt))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(snapshot.recallExplanation.query || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.recallExplanation.query, '暂无'))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>最终链路</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.finalProviderId || snapshot.recallExplanation.retrievalProviderId || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>基线种子</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.seedProviderId || ''))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(resolveRetrievalRulePackLabel(snapshot.recallExplanation.retrievalRulePack || ''))}</strong></div>
@@ -199,10 +200,10 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                         ${snapshot.summaries.map((summary): string => `
                             <article class="stx-memory-workbench__card">
                                 <div class="stx-memory-workbench__split-head">
-                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(summary.title || '未命名总结')}</div>
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(summary.title, '未命名总结'))}</div>
                                     <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(summary.updatedAt))}</span>
                                 </div>
-                                <div class="stx-memory-workbench__detail-block">${escapeHtml(summary.content || '暂无内容')}</div>
+                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(summary.content, '暂无内容'))}</div>
                             </article>
                         `).join('') || '<div class="stx-memory-workbench__empty">当前还没有总结快照数据。</div>'}
                     </div>
@@ -217,7 +218,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveMutationActionLabel(history.action))}</div>
                                     <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(history.ts))}</span>
                                 </div>
-                                <div class="stx-memory-workbench__detail-block">${escapeHtml(buildHistorySummary(history.action, history.payload))}</div>
+                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(buildHistorySummary(history.action, history.payload)))}</div>
                                 <details class="stx-memory-workbench__details">
                                     <summary>查看原始数据</summary>
                                     <pre>${escapeHtml(stringifyData(history.payload))}</pre>
@@ -810,8 +811,8 @@ function resolveAuditDetailText(audit: Record<string, unknown>): string {
     }
     const afterEntry = normalizeRecord(audit.afterEntry);
     const beforeEntry = normalizeRecord(audit.beforeEntry);
-    const summary = String(afterEntry.summary ?? beforeEntry.summary ?? '').trim();
-    const detail = String(afterEntry.detail ?? beforeEntry.detail ?? '').trim();
+    const summary = sanitizeWorkbenchDisplayText(afterEntry.summary ?? beforeEntry.summary);
+    const detail = sanitizeWorkbenchDisplayText(afterEntry.detail ?? beforeEntry.detail);
     return summary || detail || '本次记录没有可直接显示的摘要。';
 }
 
@@ -825,7 +826,7 @@ function formatAuditFieldValue(value: unknown): string {
         return '空';
     }
     if (typeof value === 'string') {
-        return truncateText(value, 80);
+        return truncateText(sanitizeWorkbenchDisplayText(value), 80);
     }
     return truncateText(formatDisplayValue(value), 80);
 }

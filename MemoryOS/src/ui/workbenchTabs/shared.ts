@@ -16,6 +16,7 @@ import type {
 import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 import { listRelationTagPresets } from '../../constants/relationTags';
 import type { MemoryGraphMode } from './shared/memoryGraphTypes';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../../types/vector-document';
 import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
@@ -567,14 +568,16 @@ export function formatDisplayValue(value: unknown): string {
         return Number.isFinite(value) ? String(value) : '暂无';
     }
     if (Array.isArray(value)) {
-        const items = value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean);
+        const items = value
+            .map((item: unknown): string => sanitizeWorkbenchDisplayText(item))
+            .filter(Boolean);
         return items.length > 0 ? items.join('、') : '暂无';
     }
     if (typeof value === 'object') {
         const keys = Object.keys(toRecord(value));
         return keys.length > 0 ? stringifyData(value) : '暂无';
     }
-    const normalized = String(value).trim();
+    const normalized = sanitizeWorkbenchDisplayText(value);
     return normalized || '暂无';
 }
 
@@ -663,7 +666,7 @@ export function readRecordPath(record: Record<string, unknown>, path: string): u
  * @returns 截断后的文本。
  */
 export function truncateText(value: string, maxLength: number = 72): string {
-    const normalized = String(value ?? '').trim();
+    const normalized = sanitizeWorkbenchDisplayText(value);
     if (!normalized) {
         return '';
     }

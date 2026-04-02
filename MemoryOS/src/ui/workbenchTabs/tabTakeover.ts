@@ -8,6 +8,7 @@ import {
     type WorkbenchSnapshot,
     type WorkbenchState,
 } from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { MemoryTakeoverConsolidationResult } from '../../types';
 import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
 
@@ -108,7 +109,7 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                             <div class="stx-memory-workbench__info-row"><span>隔离批次</span><strong>${escapeHtml(String(isolatedCount))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>当前进度</span><strong>${escapeHtml(`${progressPercent}%`)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>最近检查点</span><strong>${escapeHtml(formatTimestamp(plan.lastCheckpointAt))}</strong></div>
-                            ${plan.lastError ? `<div class="stx-memory-workbench__info-row"><span>最近错误</span><strong>${escapeHtml(plan.lastError)}</strong></div>` : ''}
+                            ${plan.lastError ? `<div class="stx-memory-workbench__info-row"><span>最近错误</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(plan.lastError))}</strong></div>` : ''}
                         </div>
                     ` : '<div class="stx-memory-workbench__empty">当前聊天还没有接管任务。</div>'}
                 </div>
@@ -124,8 +125,8 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                             <div class="stx-memory-workbench__info-row"><span>准入</span><strong>${escapeHtml(currentBatch.admissionState ?? 'pending')}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>开始时间</span><strong>${escapeHtml(formatTimestamp(currentBatch.startedAt))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>结束时间</span><strong>${escapeHtml(formatTimestamp(currentBatch.finishedAt))}</strong></div>
-                            ${Array.isArray(currentBatch.validationErrors) && currentBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(currentBatch.validationErrors.join('；'))}</div>` : ''}
-                            ${currentBatch.error ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(currentBatch.error)}</div>` : ''}
+                            ${Array.isArray(currentBatch.validationErrors) && currentBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(currentBatch.validationErrors.join('；')))}</div>` : ''}
+                            ${currentBatch.error ? `<div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(currentBatch.error))}</div>` : ''}
                         </div>
                     ` : '<div class="stx-memory-workbench__empty">当前没有运行中的批次。</div>'}
                 </div>
@@ -134,13 +135,13 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                     <div class="stx-memory-workbench__panel-title">最近活跃快照</div>
                     ${state.takeoverProgressLoading && !activeSnapshot ? '<div class="stx-memory-workbench__empty">正在加载最近快照...</div>' : activeSnapshot ? `
                         <div class="stx-memory-workbench__info-list">
-                            <div class="stx-memory-workbench__info-row"><span>当前场景</span><strong>${escapeHtml(activeSnapshot.currentScene || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>当前位置</span><strong>${escapeHtml(activeSnapshot.currentLocation || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>时间线索</span><strong>${escapeHtml(activeSnapshot.currentTimeHint || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>活跃目标</span><strong>${escapeHtml(activeSnapshot.activeGoals.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>未结线索</span><strong>${escapeHtml(activeSnapshot.openThreads.join('、') || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>当前场景</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.currentScene, '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>当前位置</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.currentLocation, '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>时间线索</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.currentTimeHint, '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>活跃目标</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.activeGoals.join('、'), '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>未结线索</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.openThreads.join('、'), '暂无'))}</strong></div>
                         </div>
-                        <div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(activeSnapshot.recentDigest || '暂无最近摘要')}</div>
+                        <div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(sanitizeWorkbenchDisplayText(activeSnapshot.recentDigest, '暂无最近摘要'))}</div>
                     ` : '<div class="stx-memory-workbench__empty">最近活跃快照尚未生成。</div>'}
                 </div>
 
@@ -150,11 +151,11 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                         <div class="stx-memory-workbench__info-list">
                             <div class="stx-memory-workbench__info-row"><span>批次</span><strong>${escapeHtml(latestBatch.batchId)}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>准入结果</span><strong>${escapeHtml(latestBatch.isolated ? 'isolated' : (latestBatch.repairedOnce ? 'repaired' : (latestBatch.validated ? 'validated' : 'pending')))}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>章节标签</span><strong>${escapeHtml(latestBatch.chapterTags.join('、') || '暂无')}</strong></div>
-                            <div class="stx-memory-workbench__info-row"><span>开放线索</span><strong>${escapeHtml(latestBatch.openThreads.join('、') || '暂无')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>章节标签</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(latestBatch.chapterTags.join('、'), '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>开放线索</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(latestBatch.openThreads.join('、'), '暂无'))}</strong></div>
                         </div>
-                        ${Array.isArray(latestBatch.validationErrors) && latestBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(latestBatch.validationErrors.join('；'))}</div>` : ''}
-                        <div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(latestBatch.summary || '暂无批次摘要')}</div>
+                        ${Array.isArray(latestBatch.validationErrors) && latestBatch.validationErrors.length > 0 ? `<div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(sanitizeWorkbenchDisplayText(latestBatch.validationErrors.join('；')))}</div>` : ''}
+                        <div class="stx-memory-workbench__detail-block" style="margin-top:12px;">${escapeHtml(sanitizeWorkbenchDisplayText(latestBatch.summary, '暂无批次摘要'))}</div>
                     ` : '<div class="stx-memory-workbench__empty">还没有生成批次摘要。</div>'}
                 </div>
 
@@ -275,7 +276,7 @@ function buildTakeoverConflictResolutionMarkup(
                                     <div class="stx-memory-workbench__info-list">
                                         <div class="stx-memory-workbench__info-row"><span>动作</span><strong>${escapeHtml(String(resolution.action ?? '').trim() || 'unknown')}</strong></div>
                                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('selected_primary'))}</span><strong>${escapeHtml(String(resolution.selectedPrimaryKey ?? resolution.primaryKey ?? '').trim() || '暂无')}</strong></div>
-                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('selection_reason'))}</span><strong>${escapeHtml(String(resolution.selectionReason ?? '').trim() || '暂无')}</strong></div>
+                                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('selection_reason'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(String(resolution.selectionReason ?? '').trim(), '暂无'))}</strong></div>
                                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('applied_fields'))}</span><strong>${escapeHtml((resolution.appliedFieldNames ?? []).join('、') || '无')}</strong></div>
                                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveTakeoverWorkbenchText('resolver_source'))}</span><strong>${escapeHtml(resolveTakeoverWorkbenchText(String(resolution.resolverSource ?? 'deterministic_fallback').trim()))}</strong></div>
                                     </div>

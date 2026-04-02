@@ -4,6 +4,7 @@ import {
     resolveEntryTypeLabel,
 } from '../workbenchLocale';
 import { escapeAttr, formatTimestamp, isUserActorKey, summarizeDetailPayload, type WorkbenchSnapshot, type WorkbenchState } from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { ActorMemoryProfile, MemoryEntry, MemoryEntryType, RoleEntryMemory, SummarySnapshot } from '../../types';
 
 /**
@@ -68,7 +69,7 @@ function buildActorAttributesMarkup(selectedActor: ActorMemoryProfile | null): s
                 <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveActorsWorkbenchText('current_profile'))}</div>
                 <div class="stx-memory-workbench__info-list">
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('actor_key'))}</span><strong>${escapeHtml(selectedActor?.actorKey ?? resolveActorsWorkbenchText('not_created'))}</strong></div>
-                    <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('display_name'))}</span><strong>${escapeHtml(selectedActor?.displayName ?? resolveActorsWorkbenchText('unnamed'))}</strong></div>
+                    <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('display_name'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(selectedActor?.displayName, resolveActorsWorkbenchText('unnamed')))}</strong></div>
                     ${isUserActor ? '' : `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('memory_stat_badge'))}</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 60))}</strong></div>`}
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('created_at'))}</span><strong>${escapeHtml(formatTimestamp(selectedActor?.createdAt))}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(selectedActor?.updatedAt))}</strong></div>
@@ -113,7 +114,7 @@ function buildActorMemoryMarkup(
                         </button>
                     </div>
                 </div>
-                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(entry?.summary || entry?.detail || resolveActorsWorkbenchText('no_detail'))}</div>
+                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(sanitizeWorkbenchDisplayText(entry?.summary || entry?.detail, resolveActorsWorkbenchText('no_detail')))}</div>
                 <div style="font-size: 11px; display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid var(--mw-line);">
                     <span style="color: var(--mw-muted);">${escapeHtml(resolveActorsWorkbenchText('structured_facts'))}：</span>
                     <span style="color: var(--mw-accent-cyan); font-family: monospace; line-height: 1.4;">${escapeHtml(summarizeDetailPayload(entry?.detailPayload))}</span>
@@ -133,7 +134,7 @@ function buildActorMemoryMarkup(
             </div>
         </div>
         <div class="stx-memory-workbench__section-title" style="margin-top:16px;">${escapeHtml(resolveActorsWorkbenchText('deep_memory'))}</div>
-        <div class="stx-memory-workbench__meta">${escapeHtml(resolveActorsWorkbenchText('current_actor_prefix'))}：${escapeHtml(selectedActor?.displayName ?? '未选择角色')}，共 ${selectedActorMemories.length} ${escapeHtml(resolveActorsWorkbenchText('real_binding_count_suffix'))}</div>
+        <div class="stx-memory-workbench__meta">${escapeHtml(resolveActorsWorkbenchText('current_actor_prefix'))}：${escapeHtml(sanitizeWorkbenchDisplayText(selectedActor?.displayName, '未选择角色'))}，共 ${selectedActorMemories.length} ${escapeHtml(resolveActorsWorkbenchText('real_binding_count_suffix'))}</div>
         <div class="stx-memory-workbench__stack" style="margin-top:8px;">
             ${memoryRows || `<div class="stx-memory-workbench__empty">${escapeHtml(resolveActorsWorkbenchText('no_real_memory'))}</div>`}
         </div>
@@ -199,7 +200,7 @@ function buildActorRelationshipsMarkup(
                     <div class="stx-memory-workbench__meta" style="color: ${typeColor}; font-weight: bold; text-wrap-mode: nowrap;">${escapeHtml(link.label || '关系')}</div>
                 </div>
                 <div class="stx-memory-workbench__meta" style="margin-bottom: 8px;">${escapeHtml(resolveActorsWorkbenchText('signal'))} ${escapeHtml(memoryRow ? String(memoryRow.memoryPercent) + '%' : resolveActorsWorkbenchText('not_bound'))}</div>
-                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(link.summary || link.label || resolveActorsWorkbenchText('no_detail'))}</div>
+                <div class="stx-memory-workbench__detail-block" style="margin-bottom: 8px;">${escapeHtml(sanitizeWorkbenchDisplayText(link.summary || link.label, resolveActorsWorkbenchText('no_detail')))}</div>
             </article>
         `;
     }).join('');
@@ -207,9 +208,9 @@ function buildActorRelationshipsMarkup(
     const summaryList = summaryRows.map((summary: SummarySnapshot): string => {
         return `
             <article class="stx-memory-workbench__card">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(summary.title || '未命名总结')}</div>
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(summary.title, '未命名总结'))}</div>
                 <div class="stx-memory-workbench__meta">${escapeHtml(resolveActorsWorkbenchText('updated_at'))} ${escapeHtml(formatTimestamp(summary.updatedAt))}</div>
-                <div class="stx-memory-workbench__detail-block">${escapeHtml(summary.content || resolveActorsWorkbenchText('no_detail'))}</div>
+                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(summary.content, resolveActorsWorkbenchText('no_detail')))}</div>
             </article>
         `;
     }).join('');
@@ -232,7 +233,7 @@ function buildActorRelationshipsMarkup(
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveActorsWorkbenchText('actor_attributes'))}</div>
                     <div class="stx-memory-workbench__info-list">
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('actor_key'))}</span><strong>${escapeHtml(selectedActor?.actorKey ?? resolveActorsWorkbenchText('not_selected'))}</strong></div>
-                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('display_name'))}</span><strong>${escapeHtml(selectedActor?.displayName ?? resolveActorsWorkbenchText('unnamed'))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('display_name'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(selectedActor?.displayName, resolveActorsWorkbenchText('unnamed')))}</strong></div>
                         ${isUserActor ? '' : `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('memory_stat_badge'))}</span><strong>${escapeHtml(String(selectedActor?.memoryStat ?? 0))}</strong></div>`}
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('real_relation_count'))}</span><strong>${escapeHtml(String(graphNode?.relationCount ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveActorsWorkbenchText('bind_new_entry'))}</span><strong>${escapeHtml(String(selectedActorMemories.length))}</strong></div>
@@ -357,7 +358,7 @@ export function buildActorsViewMarkup(
                     <div class="stx-memory-workbench__list">
                         ${displayActors.length > 0 ? displayActors.map((item: ActorMemoryProfile): string => `
                             <button class="stx-memory-workbench__list-item${item.actorKey === state.selectedActorKey ? ' is-active' : ''}" data-select-actor="${escapeAttr(item.actorKey)}">
-                                <h4>${escapeHtml(item.displayName || item.actorKey)}</h4>
+                                <h4>${escapeHtml(sanitizeWorkbenchDisplayText(item.displayName || item.actorKey, '未命名角色'))}</h4>
                                 <div class="stx-memory-workbench__meta">${escapeHtml(item.actorKey)}</div>
                                 <div style="font-size: 10px; color: var(--mw-muted); margin-top: 2px;">
                                     ${Array.from(actorTagsMap.get(item.actorKey) || []).slice(0, 3).map((tag: string) => `<span style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 4px; margin-right: 4px;">${escapeHtml(tag)}</span>`).join('')}
