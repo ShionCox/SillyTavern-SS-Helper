@@ -3,6 +3,7 @@ import { type RetentionStage } from '../memory-retention';
 import { renderEventMemoryNarrative } from './narrative-renderer/event-renderer';
 import { renderRelationshipNarrative } from './narrative-renderer/relationship-renderer';
 import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
+import { buildTimeLabel } from '../memory-time/time-ranking';
 
 /**
  * 功能：角色可见记忆视图。
@@ -48,6 +49,10 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     });
     const actorLabel = targetRoleEntries[0]?.actorLabel || activeActorKey || '当前角色';
 
+    const currentMaxFloor = input.entries.reduce((max: number, e: MemoryEntry): number => {
+        return Math.max(max, e.timeContext?.sequenceTime?.lastFloor ?? 0);
+    }, 0);
+
     const worldBaseLines = input.entries
         .filter((entry: MemoryEntry): boolean => isWorldBaseType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
@@ -56,7 +61,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     const sceneSharedLines = input.entries
         .filter((entry: MemoryEntry): boolean => isSceneSharedType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`);
+        .map((entry: MemoryEntry): string => appendTimeLabel(`${entry.title}：${entry.summary || entry.detail || '暂无详情'}`, entry, currentMaxFloor));
 
     const entityLines = input.entries
         .filter((entry: MemoryEntry): boolean => isEntityType(entry.entryType))
@@ -250,4 +255,22 @@ function resolveRetentionStageFromRoleEntry(entry: PromptAssemblyRoleEntry): Ret
  */
 function normalizeType(entryType: string): string {
     return String(entryType ?? '').trim().toLowerCase();
+}
+
+/**
+ * 功能：为注入行追加时间标签后缀。
+ * @param text 原始文本行。
+ * @param entry 记忆条目。
+ * @param currentMaxFloor 当前最大楼层号。
+ * @returns 追加时间标签后的文本行。
+ */
+function appendTimeLabel(text: string, entry: MemoryEntry, currentMaxFloor: number): string {
+    if (!entry.timeContext) {
+        return text;
+    }
+    const label = buildTimeLabel(entry.timeContext, currentMaxFloor);
+    if (!label) {
+        return text;
+    }
+    return `${text}（${label}）`;
 }

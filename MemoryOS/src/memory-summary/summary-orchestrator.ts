@@ -26,6 +26,10 @@ import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUser
 import { readMemoryOSSettings } from '../settings/store';
 import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
 import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
+import { assessBatchTime } from '../memory-time/batch-time-assessment';
+import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
+import { buildTimeMetaByEntryType } from '../memory-time/time-context';
+import { logTimeDebug } from '../memory-time/time-debug';
 
 /**
  * 功能：定义总结编排器依赖。
@@ -461,6 +465,35 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 
     updatePipelineJobPhase(summaryJobId, 'apply');
     const finalMutationDocument = finalizeSummaryMutationSnapshot(stagingSnapshot);
+
+    // ── 为总结批次生成时间评估 ──
+    const summaryBatchTimeAssessment = assessBatchTime({
+        batchId: summaryJobId,
+        batchText: resumedPlannerContext.window.summaryText,
+        startFloor: finalMutationDocument.window.fromTurn,
+        endFloor: finalMutationDocument.window.toTurn,
+    });
+    finalMutationDocument.batchTimeAssessment = summaryBatchTimeAssessment;
+
+    // 为每个 action 补充时间上下文
+    const summaryTimeCtx = mapBatchToMemoryTimeContext({
+        assessment: summaryBatchTimeAssessment,
+        firstFloor: finalMutationDocument.window.fromTurn,
+        lastFloor: finalMutationDocument.window.toTurn,
+        source: 'summary_batch',
+    });
+    for (const action of finalMutationDocument.actions) {
+        if (!action.timeContext) {
+            action.timeContext = summaryTimeCtx;
+        }
+    }
+    logTimeDebug('summary_batch_time_assessment', {
+        summaryJobId,
+        mode: summaryTimeCtx.mode,
+        confidence: summaryBatchTimeAssessment.confidence,
+        explicitMentions: summaryBatchTimeAssessment.explicitMentions,
+    });
+
     await input.dependencies.appendMutationHistory({
         action: 'mutation_validated',
         payload: {

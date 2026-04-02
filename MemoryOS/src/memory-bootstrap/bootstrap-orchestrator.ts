@@ -21,6 +21,9 @@ import {
     clearBootstrapStagingSnapshot,
     saveBootstrapStagingSnapshot,
 } from './bootstrap-staging-store';
+import { detectTimelineProfile, createSequenceOnlyProfile } from '../memory-time/timeline-profile';
+import { logTimeDebug } from '../memory-time/time-debug';
+import type { MemoryTimelineProfile } from '../memory-time/time-types';
 
 /**
  * 功能：定义冷启动编排依赖。
@@ -35,6 +38,7 @@ export interface BootstrapOrchestratorDependencies {
         reasonCodes: string[];
         detectedFrom: string[];
     }): Promise<unknown>;
+    putTimelineProfile?(profile: MemoryTimelineProfile): Promise<unknown>;
     appendMutationHistory(input: {
         action: string;
         payload: Record<string, unknown>;
@@ -68,6 +72,7 @@ export interface RunBootstrapOrchestratorResult {
         confidence: number;
         reasonCodes: string[];
     };
+    timelineProfile?: MemoryTimelineProfile;
 }
 
 /**
@@ -446,6 +451,32 @@ export async function applyBootstrapCandidates(input: {
             entityCardCount: countEntityCards(normalizedDocument.entityCards),
         },
     });
+
+    // ── 时间画像检测 ──
+    const timelineProfile = detectTimelineProfile({
+        texts: sourceTexts,
+        anchorFloor: 0,
+    });
+    logTimeDebug('cold_start_timeline_profile', {
+        mode: timelineProfile.mode,
+        calendarKind: timelineProfile.calendarKind,
+        anchorTimeText: timelineProfile.anchorTimeText,
+        confidence: timelineProfile.confidence,
+        signalCount: timelineProfile.signals?.length ?? 0,
+    });
+    if (input.dependencies.putTimelineProfile) {
+        await input.dependencies.putTimelineProfile(timelineProfile);
+    }
+    await input.dependencies.appendMutationHistory({
+        action: 'timeline_profile_detected',
+        payload: {
+            mode: timelineProfile.mode,
+            calendarKind: timelineProfile.calendarKind,
+            anchorTimeText: timelineProfile.anchorTimeText,
+            confidence: timelineProfile.confidence,
+        },
+    });
+
     return { worldProfile };
 }
 

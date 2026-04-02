@@ -196,6 +196,9 @@ async function applySingleAction(input: {
     if (!upsert) {
         return;
     }
+    if (input.action.timeContext) {
+        upsert.timeContext = input.action.timeContext;
+    }
     input.entryUpserts.push(upsert);
     for (const actorKey of input.actorKeys) {
         input.refreshBindings.push({
@@ -242,6 +245,9 @@ async function applyMergeAction(input: {
         input.userDisplayName,
     );
     if (primaryUpsert) {
+        if (input.action.timeContext) {
+            primaryUpsert.timeContext = input.action.timeContext;
+        }
         input.entryUpserts.push(primaryUpsert);
         for (const actorKey of input.actorKeys) {
             input.refreshBindings.push({

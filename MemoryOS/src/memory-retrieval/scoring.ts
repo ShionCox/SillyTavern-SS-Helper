@@ -149,7 +149,19 @@ export function mergeSeedScoreBreakdown(parts: {
     editDistance: number;
     memoryWeight: number;
     recencyWeight: number;
+    timeBoost?: number;
 }): number {
+    const timeBoost = Number(parts.timeBoost) || 0;
+    if (timeBoost > 0) {
+        return clamp01(Number((
+            parts.bm25 * 0.47
+            + parts.ngram * 0.13
+            + parts.editDistance * 0.07
+            + parts.memoryWeight * 0.10
+            + parts.recencyWeight * 0.08
+            + timeBoost * 0.15
+        ).toFixed(6)));
+    }
     return clamp01(Number((
         parts.bm25 * 0.55
         + parts.ngram * 0.15

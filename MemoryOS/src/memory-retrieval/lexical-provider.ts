@@ -9,6 +9,7 @@ import type { RetrievalMode } from './retrieval-mode';
 import type { PayloadFilter } from './payload-filter';
 import { applyPayloadFilter } from './payload-filter';
 import { clamp01, computeEditSimilarity, computeMemoryWeight, computeNGramSimilarity, computeRecencyWeight, mergeSeedScoreBreakdown, tokenizeText } from './scoring';
+import { computeTimeBoost } from '../memory-time/time-ranking';
 
 /**
  * 功能：基于 BM25 + n-gram + 编辑距离的词法检索 Provider。
@@ -72,6 +73,10 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
         });
         const maxBm25 = Math.max(...bm25RawScores, 0.0001);
 
+        const currentMaxFloor = effectiveCandidates.reduce((max: number, c: RetrievalCandidate): number => {
+            return Math.max(max, c.timeContext?.sequenceTime?.lastFloor ?? 0);
+        }, 0);
+
         const scored = effectiveCandidates.map((candidate: RetrievalCandidate, index: number): RetrievalResultItem => {
             const candidateText = LexicalRetrievalProvider.buildCandidateText(candidate);
             const bm25 = clamp01(bm25RawScores[index] / maxBm25);
@@ -79,8 +84,9 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             const editDistance = computeEditSimilarity(normalizedQuery, candidateText);
             const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
             const recencyWeight = computeRecencyWeight(candidate.updatedAt);
-            const score = mergeSeedScoreBreakdown({ bm25, ngram, editDistance, memoryWeight, recencyWeight });
-            const breakdown: RetrievalScoreBreakdown = { bm25, ngram, editDistance, memoryWeight, recencyWeight };
+            const timeBoost = candidate.timeContext ? computeTimeBoost(normalizedQuery, candidate.timeContext, currentMaxFloor) : 0;
+            const score = mergeSeedScoreBreakdown({ bm25, ngram, editDistance, memoryWeight, recencyWeight, timeBoost });
+            const breakdown: RetrievalScoreBreakdown = { bm25, ngram, editDistance, memoryWeight, recencyWeight, timeBoost };
             return {
                 candidate,
                 score,

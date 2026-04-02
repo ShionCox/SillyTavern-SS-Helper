@@ -3,6 +3,8 @@
  */
 export type SummaryMutationActionType = 'ADD' | 'MERGE' | 'UPDATE' | 'INVALIDATE' | 'DELETE' | 'NOOP';
 
+import type { BatchTimeAssessment, MemoryTimeContext } from '../memory-time/time-types';
+
 /**
  * 功能：定义总结 Planner 输出。
  */
@@ -46,6 +48,8 @@ export interface SummaryMutationAction {
     newRecord?: Record<string, unknown>;
     payload?: Record<string, unknown>;
     reasonCodes?: string[];
+    /** 时间上下文（由时间引擎生成或 AI 输出） */
+    timeContext?: MemoryTimeContext;
 }
 
 /**
@@ -57,6 +61,8 @@ export interface SummaryMutationDocument {
         fromTurn: number;
         toTurn: number;
     };
+    /** 批次时间评估（由时间引擎生成） */
+    batchTimeAssessment?: BatchTimeAssessment;
     actions: SummaryMutationAction[];
 }
 

@@ -3,6 +3,8 @@
  */
 export type MemoryTakeoverMode = 'full' | 'recent' | 'custom_range';
 
+import type { BatchTimeAssessment } from '../memory-time/time-types';
+
 /**
  * 功能：定义旧聊天接管任务状态。
  */
@@ -366,6 +368,8 @@ export interface MemoryTakeoverBatchResult {
     takeoverId: string;
     batchId: string;
     summary: string;
+    /** 批次时间评估 */
+    batchTimeAssessment?: BatchTimeAssessment;
     actorCards: MemoryTakeoverActorCardCandidate[];
     candidateActors?: MemoryTakeoverCandidateActorMention[];
     rejectedMentions?: MemoryTakeoverRejectedMention[];

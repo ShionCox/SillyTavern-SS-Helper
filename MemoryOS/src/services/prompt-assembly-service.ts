@@ -377,6 +377,7 @@ export class PromptAssemblyService {
                 compareKey: resolvedCompareKey,
                 injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
                 aliasTexts,
+                timeContext: entry.timeContext,
             };
         });
     }

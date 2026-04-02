@@ -1,0 +1,151 @@
+/**
+ * 功能：聊天级时间画像检测与管理。
+ */
+
+import type {
+    CalendarKind,
+    FallbackTimeRules,
+    MemoryTimelineProfile,
+    TimelineProfileMode,
+    TimelineSignal,
+    DEFAULT_FALLBACK_RULES,
+} from './time-types';
+import { DEFAULT_FALLBACK_RULES as DEFAULTS } from './time-types';
+import { extractTimeSignals } from './story-time-parser';
+
+/**
+ * 功能：从一组文本中检测并构建聊天级时间画像。
+ * @param input 检测输入。
+ * @returns 时间画像。
+ */
+export function detectTimelineProfile(input: {
+    texts: string[];
+    anchorFloor?: number;
+    existingProfile?: MemoryTimelineProfile | null;
+}): MemoryTimelineProfile {
+    const allSignals: TimelineSignal[] = [];
+    for (const text of input.texts) {
+        allSignals.push(...extractTimeSignals(text, input.anchorFloor));
+    }
+
+    const explicitDateSignals = allSignals.filter(s => s.kind === 'explicit_date');
+    const calendarHintSignals = allSignals.filter(s => s.kind === 'calendar_hint');
+    const relativeTimeSignals = allSignals.filter(s => s.kind === 'relative_time');
+    const scheduleHintSignals = allSignals.filter(s => s.kind === 'schedule_hint');
+    const sceneSignals = allSignals.filter(s => s.kind === 'scene_transition');
+
+    // 第一层：显式时间体系识别
+    let mode: TimelineProfileMode = 'sequence_only';
+    let calendarKind: CalendarKind = 'unknown';
+    let anchorTimeText: string | undefined;
+    let confidence = 0.3;
+
+    if (explicitDateSignals.length > 0) {
+        mode = 'explicit_world_time';
+        calendarKind = 'gregorian';
+        const best = explicitDateSignals.reduce((a, b) => a.confidence > b.confidence ? a : b);
+        anchorTimeText = best.text;
+        confidence = Math.min(0.95, best.confidence + explicitDateSignals.length * 0.02);
+    } else if (calendarHintSignals.length > 0) {
+        mode = 'explicit_world_time';
+        calendarKind = inferCalendarKind(calendarHintSignals);
+        const best = calendarHintSignals.reduce((a, b) => a.confidence > b.confidence ? a : b);
+        anchorTimeText = best.text;
+        confidence = Math.min(0.92, best.confidence + calendarHintSignals.length * 0.02);
+    } else if (scheduleHintSignals.length > 0) {
+        mode = 'explicit_world_time';
+        calendarKind = 'academic_term';
+        const best = scheduleHintSignals.reduce((a, b) => a.confidence > b.confidence ? a : b);
+        anchorTimeText = best.text;
+        confidence = Math.min(0.85, best.confidence + scheduleHintSignals.length * 0.02);
+    } else if (relativeTimeSignals.length >= 2) {
+        // 第二层：隐式时间体系
+        mode = 'implicit_world_time';
+        calendarKind = 'floating';
+        const best = relativeTimeSignals.reduce((a, b) => a.confidence > b.confidence ? a : b);
+        anchorTimeText = best.text;
+        confidence = Math.min(0.78, 0.5 + relativeTimeSignals.length * 0.04);
+    } else if (relativeTimeSignals.length === 1 || sceneSignals.length >= 2) {
+        mode = 'implicit_world_time';
+        calendarKind = 'floating';
+        confidence = 0.45;
+    }
+    // 否则保持 sequence_only
+
+    const profileId = input.existingProfile?.profileId || `tp_${Date.now().toString(36)}`;
+    const version = (input.existingProfile?.version ?? 0) + 1;
+
+    return {
+        profileId,
+        mode,
+        calendarKind,
+        anchorFloor: input.anchorFloor ?? 0,
+        anchorTimeText,
+        confidence,
+        fallbackRules: input.existingProfile?.fallbackRules ?? { ...DEFAULTS },
+        signals: allSignals.length > 20 ? allSignals.slice(0, 20) : allSignals,
+        version,
+        updatedAt: Date.now(),
+    };
+}
+
+/**
+ * 功能：根据日历提示信号推断历法类型。
+ */
+function inferCalendarKind(signals: TimelineSignal[]): CalendarKind {
+    const texts = signals.map(s => s.text).join(' ');
+
+    if (/[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]/.test(texts)) {
+        return 'lunar';
+    }
+    if (/[\u4e00-\u9fff]+年/.test(texts) && /[春夏秋冬]|腊月|正月/.test(texts)) {
+        return 'ancient_era';
+    }
+    if (/历\s*\d+\s*年|第[一二三四五六七八九十]+纪/.test(texts)) {
+        return 'fantasy_custom';
+    }
+    if (/[\u4e00-\u9fff]+年/.test(texts)) {
+        return 'ancient_era';
+    }
+    return 'unknown';
+}
+
+/**
+ * 功能：检查画像是否需要更新。
+ */
+export function shouldUpdateProfile(
+    existing: MemoryTimelineProfile | null,
+    newSignals: TimelineSignal[],
+): boolean {
+    if (!existing) return true;
+    if (newSignals.length === 0) return false;
+
+    // 如果新信号中有更高置信度的显式时间，则更新
+    const maxNew = Math.max(...newSignals.map(s => s.confidence));
+    if (maxNew > existing.confidence + 0.1) return true;
+
+    // 如果模式从 sequence_only 可以升级
+    if (existing.mode === 'sequence_only') {
+        const hasExplicit = newSignals.some(s => s.kind === 'explicit_date' || s.kind === 'calendar_hint');
+        const hasRelative = newSignals.filter(s => s.kind === 'relative_time').length >= 2;
+        if (hasExplicit || hasRelative) return true;
+    }
+
+    return false;
+}
+
+/**
+ * 功能：创建空白序列模式画像。
+ */
+export function createSequenceOnlyProfile(): MemoryTimelineProfile {
+    return {
+        profileId: `tp_${Date.now().toString(36)}`,
+        mode: 'sequence_only',
+        calendarKind: 'unknown',
+        anchorFloor: 0,
+        confidence: 0.3,
+        fallbackRules: { ...DEFAULTS },
+        version: 1,
+        updatedAt: Date.now(),
+    };
+}

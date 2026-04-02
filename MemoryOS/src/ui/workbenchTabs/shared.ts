@@ -206,6 +206,10 @@ export interface WorkbenchState {
     contentLabEnableToolArtifactDetection: boolean;
     contentLabEnableAIClassifier: boolean;
     contentLabEditingRuleIndex: number;
+    /** 时间模式过滤 */
+    entryTimeFilter: 'all' | 'story_explicit' | 'story_inferred' | 'sequence_fallback' | 'no_time';
+    /** 条目排序方式 */
+    entrySortOrder: 'updated-desc' | 'updated-asc' | 'floor-desc' | 'floor-asc' | 'confidence-desc';
 }
 
 export interface WorkbenchSnapshot {

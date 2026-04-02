@@ -160,6 +160,18 @@ export interface DBMemoryEntry {
     detailSchemaVersion: number;
     detailPayload: Record<string, unknown>;
     sourceSummaryIds: string[];
+    /** 时间上下文 */
+    timeContext?: Record<string, unknown>;
+    /** 稳定事实类：首次观测时间 */
+    firstObservedAt?: Record<string, unknown>;
+    /** 稳定事实类：最后观测时间 */
+    lastObservedAt?: Record<string, unknown>;
+    /** 区间类：生效起始时间 */
+    validFrom?: Record<string, unknown>;
+    /** 区间类：生效结束时间 */
+    validTo?: Record<string, unknown>;
+    /** 区间类：是否仍在持续 */
+    ongoing?: boolean;
     createdAt: number;
     updatedAt: number;
 }

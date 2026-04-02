@@ -2,6 +2,7 @@ import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger
 import type { RetrievalContextRoute, RetrievalDiagnostics, RetrievalRulePackMode } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetentionStage } from '../memory-retention/retention-types';
+import type { MemoryTimeContext } from '../memory-time/time-types';
 
 export type MemoryEntryCategory =
     | '世界基础'
@@ -61,6 +62,18 @@ export interface MemoryEntry {
     detailSchemaVersion: number;
     detailPayload: Record<string, unknown>;
     sourceSummaryIds: string[];
+    /** 时间上下文 */
+    timeContext?: MemoryTimeContext;
+    /** 稳定事实类：首次观测时间 */
+    firstObservedAt?: MemoryTimeContext;
+    /** 稳定事实类：最后观测时间 */
+    lastObservedAt?: MemoryTimeContext;
+    /** 区间类：生效起始时间 */
+    validFrom?: MemoryTimeContext;
+    /** 区间类：生效结束时间 */
+    validTo?: MemoryTimeContext;
+    /** 区间类：是否仍在持续 */
+    ongoing?: boolean;
     createdAt: number;
     updatedAt: number;
 }
@@ -154,6 +167,8 @@ export interface SummaryEntryUpsert {
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE';
     reasonCodes?: string[];
     sourceLabel?: string;
+    /** 时间上下文 */
+    timeContext?: MemoryTimeContext;
 }
 
 export interface SummaryRefreshBinding {
@@ -230,6 +245,8 @@ export interface LedgerMutation {
     bindings?: Partial<StructuredBindings>;
     reasonCodes?: string[];
     sourceContext?: Record<string, unknown>;
+    /** 时间上下文 */
+    timeContext?: MemoryTimeContext;
 }
 
 export interface LedgerMutationBatchContext {

@@ -98,3 +98,26 @@ export type {
     VectorRerankInput,
     VectorRerankResult,
 } from './vector-rerank';
+
+export type {
+    TimelineProfileMode,
+    CalendarKind,
+    PartOfDay,
+    NormalizedTime,
+    TimeSignalKind,
+    TimelineSignal,
+    FallbackTimeRules,
+    MemoryTimelineProfile,
+    TimeUnit,
+    DurationHint,
+    BatchTimeAssessment,
+    MemoryTimeMode,
+    StoryTime,
+    SequenceTime,
+    TimeContextSource,
+    MemoryTimeContext,
+    StableFactTimeMeta,
+    EventTimeMeta,
+    IntervalTimeMeta,
+    MemoryTimeIndex,
+} from '../memory-time/time-types';

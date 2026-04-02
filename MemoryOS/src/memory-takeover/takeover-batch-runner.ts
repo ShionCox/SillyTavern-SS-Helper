@@ -31,6 +31,8 @@ import {
     buildTaskCompareKey,
     buildWorldStateCompareKey,
 } from '../core/compare-key';
+import { assessBatchTime } from '../memory-time/batch-time-assessment';
+import { logTimeDebug } from '../memory-time/time-debug';
 
 /**
  * 功能：定义旧聊天批处理可复用的分类对象提示。
@@ -902,10 +904,28 @@ export async function runTakeoverBatch(input: {
         .slice(0, 6)
         .map((message: MemoryTakeoverMessageSlice): string => `第${message.floor}层[${message.role}] ${message.content}`)
         .join('\n');
+
+    // ── 批次时间评估 ──
+    const batchText = input.messages.map(m => m.content).join('\n');
+    const batchTimeResult = assessBatchTime({
+        batchId: input.batch.batchId,
+        batchText,
+        startFloor: input.batch.range.startFloor,
+        endFloor: input.batch.range.endFloor,
+    });
+    logTimeDebug('takeover_batch_time_assessment', {
+        batchId: input.batch.batchId,
+        explicitMentions: batchTimeResult.explicitMentions,
+        sceneTransitions: batchTimeResult.sceneTransitions,
+        inferredElapsed: batchTimeResult.inferredElapsed,
+        confidence: batchTimeResult.confidence,
+    });
+
     const fallback: MemoryTakeoverBatchResult = {
         takeoverId: input.batch.takeoverId,
         batchId: input.batch.batchId,
         summary: summary || `第${input.batch.range.startFloor} ~ ${input.batch.range.endFloor}层没有可提取摘要。`,
+        batchTimeAssessment: batchTimeResult,
         actorCards: [],
         relationships: [],
         entityCards: [],

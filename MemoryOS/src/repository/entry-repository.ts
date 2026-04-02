@@ -244,6 +244,12 @@ export class EntryRepository {
             detailSchemaVersion: Math.max(1, Number(input.detailSchemaVersion ?? existing?.detailSchemaVersion ?? 1) || 1),
             detailPayload: this.normalizeRecord(input.detailPayload ?? existing?.detailPayload ?? {}),
             sourceSummaryIds: this.normalizeTags(input.sourceSummaryIds),
+            timeContext: input.timeContext ? (input.timeContext as unknown as Record<string, unknown>) : existing?.timeContext,
+            firstObservedAt: input.firstObservedAt ? (input.firstObservedAt as unknown as Record<string, unknown>) : existing?.firstObservedAt,
+            lastObservedAt: input.lastObservedAt ? (input.lastObservedAt as unknown as Record<string, unknown>) : existing?.lastObservedAt,
+            validFrom: input.validFrom ? (input.validFrom as unknown as Record<string, unknown>) : existing?.validFrom,
+            validTo: input.validTo ? (input.validTo as unknown as Record<string, unknown>) : existing?.validTo,
+            ongoing: input.ongoing ?? existing?.ongoing,
             createdAt: existing?.createdAt ?? now,
             updatedAt: now,
         };
@@ -627,6 +633,7 @@ export class EntryRepository {
                 detailPayload: this.buildLedgerDetailPayload(mutation, targetEntry, resolvedBindings.bindings),
                 tags: mutation.tags,
                 sourceSummaryIds: context.summaryId ? [context.summaryId] : [],
+                ...(mutation.timeContext ? { timeContext: mutation.timeContext } : {}),
             }, {
                 actionType: action as EntryAuditWriteOptions['actionType'],
                 summaryId: context.summaryId,
@@ -725,6 +732,7 @@ export class EntryRepository {
             detailPayload: upsert.detailPayload,
             tags: upsert.tags,
             reasonCodes: upsert.reasonCodes,
+            timeContext: upsert.timeContext,
         }));
         const mutationApplyDiagnostics = await this.applyLedgerMutationBatch(mutations, {
             chatKey: this.chatKey,

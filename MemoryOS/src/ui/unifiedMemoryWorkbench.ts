@@ -144,13 +144,26 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
     const typeMap = new Map(snapshot.entryTypes.map((item: MemoryEntryType): [string, MemoryEntryType] => [item.key, item]));
     const filteredEntries = snapshot.entries.filter((entry: MemoryEntry): boolean => {
         const query = state.entryQuery.toLowerCase();
-        if (!query) {
-            return true;
+        if (query) {
+            const matched = [entry.title, entry.summary, entry.detail, entry.entryType, entry.category, ...(entry.tags ?? [])]
+                .join(' ')
+                .toLowerCase()
+                .includes(query);
+            if (!matched) return false;
         }
-        return [entry.title, entry.summary, entry.detail, entry.entryType, entry.category, ...(entry.tags ?? [])]
-            .join(' ')
-            .toLowerCase()
-            .includes(query);
+        const tf = state.entryTimeFilter;
+        if (tf === 'story_explicit') return entry.timeContext?.mode === 'story_explicit';
+        if (tf === 'story_inferred') return entry.timeContext?.mode === 'story_inferred';
+        if (tf === 'sequence_fallback') return entry.timeContext?.mode === 'sequence_fallback';
+        if (tf === 'no_time') return !entry.timeContext;
+        return true;
+    }).sort((a: MemoryEntry, b: MemoryEntry): number => {
+        const so = state.entrySortOrder;
+        if (so === 'updated-asc') return a.updatedAt - b.updatedAt;
+        if (so === 'floor-desc') return (b.timeContext?.sequenceTime?.lastFloor ?? 0) - (a.timeContext?.sequenceTime?.lastFloor ?? 0);
+        if (so === 'floor-asc') return (a.timeContext?.sequenceTime?.firstFloor ?? 0) - (b.timeContext?.sequenceTime?.firstFloor ?? 0);
+        if (so === 'confidence-desc') return (b.timeContext?.confidence ?? 0) - (a.timeContext?.confidence ?? 0);
+        return b.updatedAt - a.updatedAt;
     });
     const selectedEntry = resolveSelectedEntry(snapshot, state);
     const selectedEntryType = typeMap.get(selectedEntry?.entryType ?? '') ?? resolveSelectedType(snapshot, state);
@@ -345,6 +358,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         contentLabEnableToolArtifactDetection: true,
         contentLabEnableAIClassifier: false,
         contentLabEditingRuleIndex: -1,
+        entryTimeFilter: 'all',
+        entrySortOrder: 'updated-desc',
     };
     let takeoverPreviewSequence = 0;
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
@@ -1175,6 +1190,18 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const entryQueryInput = root.querySelector('#stx-memory-entry-query') as HTMLInputElement | null;
         entryQueryInput?.addEventListener('input', (): void => {
             state.entryQuery = String(entryQueryInput.value ?? '').trim();
+            void render();
+        });
+
+        const entryTimeFilterSelect = root.querySelector('#stx-memory-entry-time-filter') as HTMLSelectElement | null;
+        entryTimeFilterSelect?.addEventListener('change', (): void => {
+            state.entryTimeFilter = (entryTimeFilterSelect.value ?? 'all') as WorkbenchState['entryTimeFilter'];
+            void render();
+        });
+
+        const entrySortOrderSelect = root.querySelector('#stx-memory-entry-sort-order') as HTMLSelectElement | null;
+        entrySortOrderSelect?.addEventListener('change', (): void => {
+            state.entrySortOrder = (entrySortOrderSelect.value ?? 'updated-desc') as WorkbenchState['entrySortOrder'];
             void render();
         });
 

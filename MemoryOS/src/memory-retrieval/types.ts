@@ -1,5 +1,6 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalMode } from './retrieval-mode';
+import type { MemoryTimeContext } from '../memory-time/time-types';
 
 /**
  * 功能：定义可检索候选记录。
@@ -26,6 +27,8 @@ export interface RetrievalCandidate {
     compareKey?: string;
     injectToSystem?: boolean;
     aliasTexts?: string[];
+    /** 时间上下文 */
+    timeContext?: MemoryTimeContext;
 }
 
 /**
@@ -98,6 +101,8 @@ export interface RetrievalScoreBreakdown {
     recencyWeight?: number;
     graphBoost?: number;
     diversityPenalty?: number;
+    /** 时间敏感加权 */
+    timeBoost?: number;
 }
 
 /**

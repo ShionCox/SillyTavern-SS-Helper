@@ -15,6 +15,8 @@ import {
     type WorkbenchState,
 } from './shared';
 import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
+import { formatTimeMode, formatTimeSource, formatConfidence } from '../../memory-time/time-format';
+import { buildTimeLabel } from '../../memory-time/time-ranking';
 
 interface InspectorSection {
     title: string;
@@ -55,6 +57,20 @@ export function buildEntriesViewMarkup(
                 <div class="stx-memory-workbench__section-title">${escapeHtml(resolveEntriesWorkbenchText('section_title'))}</div>
                 <div class="stx-memory-workbench__toolbar">
                     <input class="stx-memory-workbench__input" id="stx-memory-entry-query" placeholder="${escapeAttr(resolveEntriesWorkbenchText('search_placeholder'))}" style="width:240px" value="${escapeAttr(state.entryQuery)}">
+                    <select class="stx-memory-workbench__input" id="stx-memory-entry-time-filter" style="width:140px">
+                        <option value="all"${state.entryTimeFilter === 'all' ? ' selected' : ''}>全部时间</option>
+                        <option value="story_explicit"${state.entryTimeFilter === 'story_explicit' ? ' selected' : ''}>明确故事时间</option>
+                        <option value="story_inferred"${state.entryTimeFilter === 'story_inferred' ? ' selected' : ''}>推断时间</option>
+                        <option value="sequence_fallback"${state.entryTimeFilter === 'sequence_fallback' ? ' selected' : ''}>系统时序</option>
+                        <option value="no_time"${state.entryTimeFilter === 'no_time' ? ' selected' : ''}>无时间</option>
+                    </select>
+                    <select class="stx-memory-workbench__input" id="stx-memory-entry-sort-order" style="width:130px">
+                        <option value="updated-desc"${state.entrySortOrder === 'updated-desc' ? ' selected' : ''}>最近更新</option>
+                        <option value="updated-asc"${state.entrySortOrder === 'updated-asc' ? ' selected' : ''}>最早更新</option>
+                        <option value="floor-desc"${state.entrySortOrder === 'floor-desc' ? ' selected' : ''}>楼层倒序</option>
+                        <option value="floor-asc"${state.entrySortOrder === 'floor-asc' ? ' selected' : ''}>楼层正序</option>
+                        <option value="confidence-desc"${state.entrySortOrder === 'confidence-desc' ? ' selected' : ''}>置信度倒序</option>
+                    </select>
                     <button class="stx-memory-workbench__button" data-action="create-entry"><i class="fa-solid fa-plus"></i> ${escapeHtml(resolveEntriesWorkbenchText('create_entry'))}</button>
                 </div>
             </div>
@@ -64,7 +80,7 @@ export function buildEntriesViewMarkup(
                         ${filteredEntries.length > 0 ? filteredEntries.map((entry: MemoryEntry): string => `
                             <button class="stx-memory-workbench__list-item${entry.entryId === state.selectedEntryId ? ' is-active' : ''}" data-select-entry="${escapeAttr(entry.entryId)}">
                                 <h4>${escapeHtml(sanitizeWorkbenchDisplayText(entry.title, '未命名词条'))}</h4>
-                                <div class="stx-memory-workbench__meta">${escapeHtml(typeMap.get(entry.entryType)?.label || resolveEntryTypeLabel(entry.entryType))} · ${escapeHtml(entry.category)}</div>
+                                <div class="stx-memory-workbench__meta">${escapeHtml(typeMap.get(entry.entryType)?.label || resolveEntryTypeLabel(entry.entryType))} · ${escapeHtml(entry.category)}${entry.timeContext ? ` · ${escapeHtml(renderEntryCardTimeLabel(entry, filteredEntries))}` : ''}</div>
                                 <div class="stx-memory-workbench__detail-clamp">${escapeHtml(sanitizeWorkbenchDisplayText(entry.summary || entry.detail, resolveEntriesWorkbenchText('empty_content')))}</div>
                                 <div class="stx-memory-workbench__badge-row">
                                     ${(entry.tags ?? []).slice(0, 3).map((tag: string): string => `<span class="stx-memory-workbench__badge">${escapeHtml(tag)}</span>`).join('')}
@@ -252,6 +268,30 @@ function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot)
         });
     }
 
+    if (entry.timeContext) {
+        const tc = entry.timeContext;
+        const timeRows: Array<{ label: string; value: unknown }> = [
+            { label: '时间模式', value: formatTimeMode(tc.mode) },
+        ];
+        if (tc.storyTime?.absoluteText) {
+            timeRows.push({ label: '故事时间', value: tc.storyTime.absoluteText });
+        }
+        if (tc.storyTime?.relativeText) {
+            timeRows.push({ label: '相对时间', value: tc.storyTime.relativeText });
+        }
+        timeRows.push({ label: '楼层范围', value: `${tc.sequenceTime.firstFloor} - ${tc.sequenceTime.lastFloor}` });
+        timeRows.push({ label: '序号', value: tc.sequenceTime.orderIndex });
+        if (tc.durationHint?.text) {
+            timeRows.push({ label: '经过时长', value: tc.durationHint.text });
+        }
+        timeRows.push({ label: '来源', value: formatTimeSource(tc.source) });
+        timeRows.push({ label: '置信度', value: formatConfidence(tc.confidence) });
+        if (entry.ongoing !== undefined) {
+            timeRows.push({ label: '持续中', value: entry.ongoing ? '是' : '否' });
+        }
+        sections.push({ title: '时间信息', rows: timeRows });
+    }
+
     sections.push({
         title: resolveEntriesWorkbenchText('debug_info'),
         rows: [
@@ -342,4 +382,20 @@ function renderInspectorSection(section: InspectorSection): string {
             <div class="stx-memory-workbench__info-list">${rows}</div>
         </div>
     `;
+}
+
+/**
+ * 功能：渲染条目卡片中的时间标签。
+ * @param entry 当前条目。
+ * @param allEntries 全部可见条目（用于计算最大楼层）。
+ * @returns 时间标签文本。
+ */
+function renderEntryCardTimeLabel(entry: MemoryEntry, allEntries: MemoryEntry[]): string {
+    if (!entry.timeContext) {
+        return '';
+    }
+    const currentMaxFloor = allEntries.reduce((max: number, e: MemoryEntry): number => {
+        return Math.max(max, e.timeContext?.sequenceTime?.lastFloor ?? 0);
+    }, 0);
+    return buildTimeLabel(entry.timeContext, currentMaxFloor);
 }
