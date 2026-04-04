@@ -1,5 +1,5 @@
 import * as PIXI from 'pixi.js';
-import { Application, BlurFilter, Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { Application, Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { gsap } from 'gsap';
 import { PixiPlugin } from 'gsap/PixiPlugin';
 import type { FederatedPointerEvent } from 'pixi.js';
@@ -117,11 +117,14 @@ let persistedCameraState: GraphCameraState | null = null;
 const EDGE_SEGMENT_COUNT = 14;
 const FLOW_SEGMENT_COUNT = 12;
 const FLOW_TAIL_LENGTH = 0.26;
+const FLOW_SELECTED_REDRAW_INTERVAL_MS = 33;
+const FLOW_HOVER_REDRAW_INTERVAL_MS = 66;
 const MEMORY_GRAPH_NODE_SCALE = 0.78;
 const COSMIC_PARALLAX_STRENGTH = 0.032;
 const COSMIC_SCALE_STRENGTH = 0.05;
 const EDGE_HOVER_DELAY_MS = 720;
 const NODE_DEPTH_SCALE_STRENGTH = 0.08;
+const FPS_PANEL_UPDATE_INTERVAL_MS = 320;
 
 gsap.registerPlugin(PixiPlugin);
 PixiPlugin.registerPIXI(PIXI);
@@ -205,6 +208,41 @@ export async function createMemoryGraphPixiRenderer(
     });
 
     container.appendChild(app.canvas as HTMLCanvasElement);
+    const overlayControls = document.createElement('div');
+    overlayControls.style.position = 'absolute';
+    overlayControls.style.top = '10px';
+    overlayControls.style.left = '10px';
+    overlayControls.style.zIndex = '4';
+    overlayControls.style.display = 'flex';
+    overlayControls.style.alignItems = 'center';
+    overlayControls.style.gap = '8px';
+    overlayControls.style.pointerEvents = 'none';
+    container.appendChild(overlayControls);
+    const fpsBadge = document.createElement('div');
+    fpsBadge.style.padding = '4px 8px';
+    fpsBadge.style.borderRadius = '999px';
+    fpsBadge.style.background = 'rgba(2, 6, 23, 0.72)';
+    fpsBadge.style.border = '1px solid rgba(148, 163, 184, 0.28)';
+    fpsBadge.style.color = '#e2e8f0';
+    fpsBadge.style.fontSize = '11px';
+    fpsBadge.style.lineHeight = '1';
+    fpsBadge.style.fontFamily = 'Consolas, "Microsoft YaHei", monospace';
+    fpsBadge.style.pointerEvents = 'none';
+    fpsBadge.textContent = 'FPS --';
+    overlayControls.appendChild(fpsBadge);
+    const backgroundToggle = document.createElement('button');
+    backgroundToggle.type = 'button';
+    backgroundToggle.style.padding = '4px 10px';
+    backgroundToggle.style.borderRadius = '999px';
+    backgroundToggle.style.border = '1px solid rgba(148, 163, 184, 0.28)';
+    backgroundToggle.style.background = 'rgba(2, 6, 23, 0.72)';
+    backgroundToggle.style.color = '#e2e8f0';
+    backgroundToggle.style.fontSize = '11px';
+    backgroundToggle.style.lineHeight = '1';
+    backgroundToggle.style.fontFamily = 'Consolas, "Microsoft YaHei", monospace';
+    backgroundToggle.style.pointerEvents = 'auto';
+    backgroundToggle.style.cursor = 'pointer';
+    overlayControls.appendChild(backgroundToggle);
     const stage = app.stage;
     const background = new Graphics();
     const cosmicLayer = new Container();
@@ -250,10 +288,29 @@ export async function createMemoryGraphPixiRenderer(
     let hoverVisualTween: gsap.core.Tween | null = null;
     let selectionRippleTween: gsap.core.Timeline | null = null;
     let dragFrameId: number | null = null;
+    let fpsFrameCount = 0;
+    let fpsElapsedMs = 0;
+    let backgroundAnimationEnabled = true;
+    let lastSelectedFlowRedrawAt = 0;
+    let lastHoverFlowRedrawAt = 0;
     const pendingDragCamera = {
         translateX: camera.translateX,
         translateY: camera.translateY,
     };
+
+    /**
+     * 功能：同步左上角背景动画按钮文案与状态。
+     * @returns 无返回值。
+     */
+    function syncBackgroundToggleLabel(): void {
+        backgroundToggle.textContent = `背景动画 ${backgroundAnimationEnabled ? '开' : '关'}`;
+        backgroundToggle.style.opacity = backgroundAnimationEnabled ? '1' : '0.78';
+    }
+    syncBackgroundToggleLabel();
+    backgroundToggle.addEventListener('click', (): void => {
+        backgroundAnimationEnabled = !backgroundAnimationEnabled;
+        syncBackgroundToggleLabel();
+    });
 
     stage.eventMode = 'static';
     stage.hitArea = app.screen;
@@ -398,6 +455,36 @@ export async function createMemoryGraphPixiRenderer(
             hoverVisualState.intensity,
             camera.scale,
             isDragging,
+            flowState.progress,
+            flowState.intensity,
+        );
+    }
+
+    /**
+     * 功能：按频率限制流光层重绘，避免高频 onUpdate 持续压榨主线程和 GPU 提交。
+     * @param mode 当前流光模式。
+     * @param force 是否忽略频率限制强制重绘。
+     * @returns 无返回值。
+     */
+    function redrawFlowLayerThrottled(mode: 'selected' | 'hover', force: boolean = false): void {
+        const now = performance.now();
+        const interval = mode === 'selected' ? FLOW_SELECTED_REDRAW_INTERVAL_MS : FLOW_HOVER_REDRAW_INTERVAL_MS;
+        const lastRedrawAt = mode === 'selected' ? lastSelectedFlowRedrawAt : lastHoverFlowRedrawAt;
+        if (!force && (now - lastRedrawAt) < interval) {
+            return;
+        }
+        if (mode === 'selected') {
+            lastSelectedFlowRedrawAt = now;
+        } else {
+            lastHoverFlowRedrawAt = now;
+        }
+        redrawFlowLayer(
+            flowGraphics,
+            edgeSprites,
+            selectedNodeId,
+            selectedEdgeId,
+            hoveredEdgeId,
+            hoverVisualState.intensity,
             flowState.progress,
             flowState.intensity,
         );
@@ -820,19 +907,24 @@ export async function createMemoryGraphPixiRenderer(
      */
     const handleCosmicTick = (): void => {
         cosmicTime += app.ticker.deltaMS * 0.001;
-        animateCosmicBackground(cosmicStars, cosmicDepthState, cosmicTime);
-        drawSelectionRipple(rippleLayer, selectionRippleState, cosmicTime);
+        fpsFrameCount += 1;
+        fpsElapsedMs += app.ticker.deltaMS;
+        if (fpsElapsedMs >= FPS_PANEL_UPDATE_INTERVAL_MS) {
+            const fps = Math.max(0, Math.round((fpsFrameCount * 1000) / fpsElapsedMs));
+            fpsBadge.textContent = `FPS ${String(fps).padStart(2, ' ')}`;
+            fpsFrameCount = 0;
+            fpsElapsedMs = 0;
+        }
+        if (backgroundAnimationEnabled) {
+            animateCosmicBackground(cosmicStars, cosmicDepthState, cosmicTime);
+            drawSelectionRipple(rippleLayer, selectionRippleState, cosmicTime);
+        } else {
+            rippleLayer.clear();
+        }
         if (!selectedNodeId && !selectedEdgeId && hoveredEdgeId) {
-            redrawFlowLayer(
-                flowGraphics,
-                edgeSprites,
-                selectedNodeId,
-                selectedEdgeId,
-                hoveredEdgeId,
-                hoverVisualState.intensity,
-                (cosmicTime * 0.72) % 1,
-                0.78,
-            );
+            flowState.progress = (cosmicTime * 0.72) % 1;
+            flowState.intensity = 0.78;
+            redrawFlowLayerThrottled('hover');
         }
     };
     app.ticker.add(handleCosmicTick);
@@ -943,13 +1035,13 @@ export async function createMemoryGraphPixiRenderer(
         });
         flowState.progress = 0;
         flowState.intensity = 1;
-        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
+        redrawFlowLayerThrottled('selected', true);
         flowTween = gsap.timeline({ repeat: -1 });
         flowTween.set(flowState, {
             progress: 0,
             intensity: 1,
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
+                redrawFlowLayerThrottled('selected');
             },
         });
         flowTween.to(flowState, {
@@ -957,7 +1049,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 1.28,
             ease: 'none',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
+                redrawFlowLayerThrottled('selected');
             },
         });
         flowTween.to(flowState, {
@@ -965,7 +1057,7 @@ export async function createMemoryGraphPixiRenderer(
             duration: 0.18,
             ease: 'power1.out',
             onUpdate: (): void => {
-                redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoverVisualState.intensity, flowState.progress, flowState.intensity);
+                redrawFlowLayerThrottled('selected');
             },
         });
         flowTween.to(flowState, {
@@ -1218,7 +1310,11 @@ function syncSelectionVisuals(
     });
 
     redrawEdgeLayer(edgeGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoveredEdgeIntensity);
-    redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoveredEdgeIntensity, flowProgress, flowIntensity);
+    if (selectedNodeId || selectedEdgeId) {
+        redrawFlowLayer(flowGraphics, edgeSprites, selectedNodeId, selectedEdgeId, hoveredEdgeId, hoveredEdgeIntensity, flowProgress, flowIntensity);
+    } else if (!hoveredEdgeId || hoveredEdgeIntensity <= 0.01) {
+        flowGraphics.clear();
+    }
 }
 
 /**
@@ -1702,19 +1798,16 @@ function buildCosmicBackground(
     drawCosmicGlow(nebula, width * 0.16, height * 0.24, Math.max(220, width * 0.24), 0x1d4ed8, 0.008);
     drawCosmicGlow(nebula, width * 0.78, height * 0.2, Math.max(210, width * 0.22), 0x38bdf8, 0.007);
     drawCosmicGlow(nebula, width * 0.58, height * 0.76, Math.max(240, width * 0.26), 0x6366f1, 0.006);
-    nebula.filters = [new BlurFilter({ strength: 28, quality: 2 })];
     cosmicLayer.addChild(nebula);
 
     const milkyWayDust = new Graphics();
     const milkyWayDustSeed = createDeterministicRandom(Math.round((width * 23) + (height * 13) + 157));
     drawMilkyWayDust(milkyWayDust, width, height, milkyWayDustSeed);
-    milkyWayDust.filters = [new BlurFilter({ strength: 14, quality: 1 })];
     cosmicLayer.addChild(milkyWayDust);
 
     const milkyWay = new Graphics();
     const milkyWaySeed = createDeterministicRandom(Math.round((width * 17) + (height * 19) + 311));
     drawMilkyWayBand(milkyWay, width, height, milkyWaySeed);
-    milkyWay.filters = [new BlurFilter({ strength: 20, quality: 1 })];
     cosmicLayer.addChild(milkyWay);
 
     const dust = new Graphics();
@@ -1758,8 +1851,6 @@ function buildCosmicBackground(
             drawStarCross(glow, glowRadius * 1.35, starColor, 0.11 + (starSeed() * 0.05));
         }
         core.circle(0, 0, radius).fill({ color: 0xffffff, alpha: brightStar ? 0.96 : 0.76 + (starSeed() * 0.18) });
-        haze.filters = [new BlurFilter({ strength: brightStar ? 8 : 6, quality: 1 })];
-        glow.filters = [new BlurFilter({ strength: brightStar ? 4 : 3, quality: 1 })];
         root.addChild(haze);
         root.addChild(glow);
         root.addChild(core);

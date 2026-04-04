@@ -1243,6 +1243,26 @@
   grid-column: 1 / -1;
 }
 
+.stx-vector-lab__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stx-vector-lab__field-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148,163,184,0.92);
+}
+
+.stx-vector-lab__field > .stx-memory-workbench__input,
+.stx-vector-lab__field > .stx-memory-workbench__select,
+.stx-vector-lab__field > .stx-memory-workbench__textarea {
+  width: 100%;
+}
+
 .stx-vector-lab__switches--compact {
   grid-template-columns: 1fr;
 }

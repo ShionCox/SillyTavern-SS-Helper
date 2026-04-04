@@ -8,7 +8,7 @@ describe('retention narrative stage', () => {
         expect(computeRetentionState({ memoryPercent: 10 }).stage).toBe('distorted');
 
         expect(renderRetentionNarrativePrefix('clear')).toContain('记得');
-        expect(renderRetentionNarrativePrefix('blur')).toContain('记得');
-        expect(renderRetentionNarrativePrefix('distorted')).toContain('认为');
+        expect(renderRetentionNarrativePrefix('blur')).toBe('她隐约记得：');
+        expect(renderRetentionNarrativePrefix('distorted')).toBe('她记忆失真，误以为：');
     });
 });

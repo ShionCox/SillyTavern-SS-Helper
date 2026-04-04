@@ -9,7 +9,7 @@ import type { RetrievalMode } from './retrieval-mode';
 import type { PayloadFilter } from './payload-filter';
 import { applyPayloadFilter } from './payload-filter';
 import { clamp01, computeEditSimilarity, computeMemoryWeight, computeNGramSimilarity, computeRecencyWeight, mergeSeedScoreBreakdown, tokenizeText } from './scoring';
-import { computeTimeBoost } from '../memory-time/time-ranking';
+import { computeTemporalIntentBoost } from '../memory-time/time-ranking';
 
 /**
  * 功能：基于 BM25 + n-gram + 编辑距离的词法检索 Provider。
@@ -84,9 +84,22 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             const editDistance = computeEditSimilarity(normalizedQuery, candidateText);
             const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
             const recencyWeight = computeRecencyWeight(candidate.updatedAt);
-            const timeBoost = candidate.timeContext ? computeTimeBoost(normalizedQuery, candidate.timeContext, currentMaxFloor) : 0;
+            const temporal = computeTemporalIntentBoost(normalizedQuery, candidate.timeContext, currentMaxFloor, candidate);
+            const timeBoost = temporal.finalScore;
             const score = mergeSeedScoreBreakdown({ bm25, ngram, editDistance, memoryWeight, recencyWeight, timeBoost });
-            const breakdown: RetrievalScoreBreakdown = { bm25, ngram, editDistance, memoryWeight, recencyWeight, timeBoost };
+            const breakdown: RetrievalScoreBreakdown = {
+                bm25,
+                ngram,
+                editDistance,
+                memoryWeight,
+                recencyWeight,
+                timeBoost,
+                timeIntent: temporal.intent,
+                stateBoost: temporal.stateBoost,
+                outcomeBoost: temporal.outcomeBoost,
+                temporalWeight: temporal.temporalWeight,
+                temporalReason: temporal.explanation,
+            };
             return {
                 candidate,
                 score,

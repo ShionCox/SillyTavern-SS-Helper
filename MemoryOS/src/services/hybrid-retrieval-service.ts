@@ -20,7 +20,7 @@ import { VectorStoreAdapterService } from './vector-store-adapter';
 import { VectorStrategyRouter, type VectorStrategyRouterConfig } from './vector-strategy-router';
 import { VectorRerankService } from './vector-rerank-service';
 import { LLMHubRerankService } from './llmhub-rerank-service';
-import { computeTimeBoost } from '../memory-time/time-ranking';
+import { computeTemporalIntentBoost, resolveQueryTimeIntent, type QueryTimeIntent } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 import { readMemoryOSSettings } from '../settings/store';
 
@@ -70,6 +70,8 @@ export interface HybridRetrievalOutput {
     vectorAvailable: boolean;
     /** 向量不可用原因 */
     vectorUnavailableReason: string | null;
+    /** 查询时间意图 */
+    queryTimeIntent: QueryTimeIntent;
 }
 
 interface InternalRerankResult {
@@ -169,6 +171,7 @@ export class HybridRetrievalService {
                 rerankSource: 'none',
                 vectorAvailable: this.isVectorAvailable(),
                 vectorUnavailableReason: this.getVectorUnavailableReason(),
+                queryTimeIntent: resolveQueryTimeIntent(query),
             };
         }
 
@@ -193,6 +196,7 @@ export class HybridRetrievalService {
                     rerankSource: 'none',
                     vectorAvailable: false,
                     vectorUnavailableReason,
+                    queryTimeIntent: resolveQueryTimeIntent(query),
                 };
             }
             logger.info('[HybridRetrieval] hybrid 模式下向量不可用，使用词法结果');
@@ -209,6 +213,7 @@ export class HybridRetrievalService {
                 rerankSource: 'none',
                 vectorAvailable: false,
                 vectorUnavailableReason,
+                queryTimeIntent: resolveQueryTimeIntent(query),
             };
         }
 
@@ -232,6 +237,7 @@ export class HybridRetrievalService {
                     rerankSource: 'none',
                     vectorAvailable: true,
                     vectorUnavailableReason: null,
+                    queryTimeIntent: resolveQueryTimeIntent(query),
                 };
             }
             return {
@@ -247,6 +253,7 @@ export class HybridRetrievalService {
                 rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
+                queryTimeIntent: resolveQueryTimeIntent(query),
             };
         }
 
@@ -259,7 +266,11 @@ export class HybridRetrievalService {
             minScore: 0.1,
         });
 
-        const vectorResults = this.mapVectorHits(vectorHits, input.candidates);
+        const vectorResults = this.applyTemporalRescore(
+            this.mapVectorHits(vectorHits, input.candidates),
+            query,
+            input.queryContext?.mergedContextText || '',
+        );
 
         if (retrievalMode === 'vector_only') {
             this.emitProgress(input.onProgress, 'vector_finalize', '整理向量结果', '正在整理仅向量模式下的候选结果。', 0.9);
@@ -366,6 +377,50 @@ export class HybridRetrievalService {
     }
 
     /**
+     * 功能：对向量候选执行时间重打分。
+     * @param items 候选列表。
+     * @param query 查询文本。
+     * @param queryContextText 查询上下文文本。
+     * @returns 重打分后的候选。
+     */
+    private applyTemporalRescore(
+        items: RetrievalResultItem[],
+        query: string,
+        queryContextText: string,
+    ): RetrievalResultItem[] {
+        if (items.length <= 0) {
+            return [];
+        }
+        const queryText = `${String(query ?? '').trim()} ${String(queryContextText ?? '').trim()}`.trim();
+        const currentMaxFloor = items.reduce((max: number, item: RetrievalResultItem): number => (
+            Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0)
+        ), 0);
+        return items
+            .map((item: RetrievalResultItem): RetrievalResultItem => {
+                const temporal = computeTemporalIntentBoost(queryText, item.candidate.timeContext, currentMaxFloor, item.candidate);
+                const score = temporal.temporalWeight > 0
+                    ? Math.max(0, Math.min(1, Number((
+                        item.score * (1 - temporal.temporalWeight) + temporal.featureScore * temporal.temporalWeight
+                    ).toFixed(6))))
+                    : item.score;
+                return {
+                    ...item,
+                    score,
+                    breakdown: {
+                        ...item.breakdown,
+                        timeBoost: temporal.finalScore,
+                        timeIntent: temporal.intent,
+                        stateBoost: temporal.stateBoost,
+                        outcomeBoost: temporal.outcomeBoost,
+                        temporalWeight: temporal.temporalWeight,
+                        temporalReason: temporal.explanation,
+                    },
+                };
+            })
+            .sort((left: RetrievalResultItem, right: RetrievalResultItem): number => right.score - left.score);
+    }
+
+    /**
      * 功能：处理 vector_only 模式。
      * @param vectorResults 向量结果。
      * @param decision 策略决策。
@@ -400,6 +455,7 @@ export class HybridRetrievalService {
                 rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
+                queryTimeIntent: resolveQueryTimeIntent(query),
             };
         }
 
@@ -425,6 +481,7 @@ export class HybridRetrievalService {
             rerankSource: rerankResult.source,
             vectorAvailable: true,
             vectorUnavailableReason: null,
+            queryTimeIntent: resolveQueryTimeIntent(query),
         };
     }
 
@@ -466,6 +523,7 @@ export class HybridRetrievalService {
                 rerankSource: 'none',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
+                queryTimeIntent: resolveQueryTimeIntent(query),
             };
         }
 
@@ -491,6 +549,7 @@ export class HybridRetrievalService {
             rerankSource: rerankResult.source,
             vectorAvailable: true,
             vectorUnavailableReason: null,
+            queryTimeIntent: resolveQueryTimeIntent(query),
         };
     }
 
@@ -605,6 +664,7 @@ export class HybridRetrievalService {
     ): RetrievalResultItem[] {
         const seen = new Map<string, RetrievalResultItem>();
         const queryText = `${String(query ?? '').trim()} ${String(queryContextText ?? '').trim()}`.trim();
+        const queryIntent = resolveQueryTimeIntent(queryText);
         const currentMaxFloor = [...lexical, ...vector].reduce((max: number, item: RetrievalResultItem): number => (
             Math.max(max, item.candidate.timeContext?.sequenceTime?.lastFloor ?? 0)
         ), 0);
@@ -636,13 +696,15 @@ export class HybridRetrievalService {
 
         return Array.from(seen.values())
             .map((item: RetrievalResultItem): RetrievalResultItem => {
+                const temporal = computeTemporalIntentBoost(queryText, item.candidate.timeContext, currentMaxFloor, item.candidate);
                 const existingTimeBoost = Number(item.breakdown.timeBoost) || 0;
-                const computedTimeBoost = item.candidate.timeContext
-                    ? Math.max(0, computeTimeBoost(queryText, item.candidate.timeContext, currentMaxFloor))
-                    : 0;
-                const timeBoost = Math.max(existingTimeBoost, computedTimeBoost);
+                const timeBoost = Math.max(existingTimeBoost, temporal.finalScore);
+                const temporalWeight = Math.max(
+                    Number(item.breakdown.temporalWeight) || 0,
+                    this.resolveMergeTemporalWeight(queryIntent, temporal.temporalWeight),
+                );
                 const mergedScore = Math.max(0, Math.min(1, Number((
-                    item.score * (timeBoost > 0 ? 0.92 : 1) + timeBoost * 0.08
+                    item.score * (temporalWeight > 0 ? (1 - temporalWeight) : 1) + timeBoost * temporalWeight
                 ).toFixed(6))));
                 return {
                     ...item,
@@ -650,8 +712,33 @@ export class HybridRetrievalService {
                     breakdown: {
                         ...item.breakdown,
                         timeBoost,
+                        timeIntent: temporal.intent,
+                        stateBoost: Math.max(Number(item.breakdown.stateBoost) || 0, temporal.stateBoost),
+                        outcomeBoost: Math.max(Number(item.breakdown.outcomeBoost) || 0, temporal.outcomeBoost),
+                        temporalWeight,
+                        temporalReason: temporal.explanation,
                     },
                 };
             });
+    }
+
+    /**
+     * 功能：根据时间意图解析 merge 阶段时间权重。
+     * @param intent 查询时间意图。
+     * @param fallback 默认权重。
+     * @returns 权重。
+     */
+    private resolveMergeTemporalWeight(intent: QueryTimeIntent, fallback: number): number {
+        switch (intent) {
+            case 'recent':
+            case 'early':
+                return 0.1;
+            case 'current_state':
+                return 0.14;
+            case 'final_outcome':
+                return 0.15;
+            default:
+                return fallback > 0 ? fallback : 0;
+        }
     }
 }

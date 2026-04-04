@@ -64,9 +64,9 @@ export function renderRetentionNarrativePrefix(stage: RetentionStage): string {
         return '她隐约记得：';
     }
     if (stage === 'distorted') {
-        return '她模糊地误以为：';
+        return '她记忆失真，误以为：';
     }
-    return '她清晰记得：';
+    return '她清楚记得：';
 }
 
 /**

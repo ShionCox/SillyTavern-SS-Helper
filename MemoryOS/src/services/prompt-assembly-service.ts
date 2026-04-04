@@ -392,6 +392,8 @@ export class PromptAssemblyService {
                 compareKey: resolvedCompareKey,
                 injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
                 aliasTexts,
+                detailPayload: payload,
+                ongoing: entry.ongoing,
                 timeContext: entry.timeContext,
                 promptTimeMeta: entry.timeContext
                     ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
@@ -526,12 +528,12 @@ export class PromptAssemblyService {
     private renderDistortedSummary(entry: MemoryEntry, distortionTemplateId?: string): string {
         const summary = entry.summary || entry.detail || entry.title;
         if (distortionTemplateId === 'relationship_attitude_shift') {
-            return '她记不清细节，只觉得这段关系大概已经变了味道。';
+            return '这段关系在她记忆里已经失真，她只一厢情愿地觉得彼此态度大概变了。';
         }
         if (distortionTemplateId === 'critical_fact_fragmented') {
-            return `她只记得其中一部分，好像和“${entry.title}”有关，但顺序已经错乱。`;
+            return `这件事在她记忆里已经残缺失真，只剩下和“${entry.title}”有关的片段，前后顺序也对不上。`;
         }
-        return `她只模糊记得：${summary.slice(0, Math.min(summary.length, 18))}……`;
+        return `这段记忆已经失真，她只抓住了“${summary.slice(0, Math.min(summary.length, 18))}……”这样的零碎印象。`;
     }
 
     /**

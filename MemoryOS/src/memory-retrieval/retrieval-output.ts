@@ -2,6 +2,7 @@ import type { RetrievalMode } from './retrieval-mode';
 import type { RetrievalContextRoute, RetrievalResultItem, RetrievalFacet } from './types';
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { VectorStrategyDecision } from '../types/vector-strategy';
+import type { QueryTimeIntent } from '../memory-time/time-ranking';
 
 /**
  * 功能：统一检索输出。
@@ -77,6 +78,8 @@ export interface RetrievalOutputDiagnostics {
     rankingChanges?: RetrievalRankingChangeItem[];
     /** 最终结果中受到时间偏置影响的条目数量 */
     timeBiasedCount?: number;
+    /** 查询时间意图 */
+    queryTimeIntent?: QueryTimeIntent;
 }
 
 /**
@@ -98,6 +101,11 @@ export interface RetrievalStageRankingItem {
     title: string;
     score: number;
     source: 'lexical' | 'vector' | 'graph_expansion' | 'coverage_supplement';
+    timeIntent?: QueryTimeIntent;
+    timeBoost?: number;
+    stateBoost?: number;
+    outcomeBoost?: number;
+    temporalWeight?: number;
 }
 
 /**

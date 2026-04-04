@@ -115,6 +115,9 @@ function formatScoreBreakdown(breakdown: RetrievalScoreBreakdown): string {
     if ((breakdown.recencyWeight ?? 0) > 0) parts.push(`时效性=${(breakdown.recencyWeight ?? 0).toFixed(3)}`);
     if ((breakdown.graphBoost ?? 0) > 0) parts.push(`图扩展=${(breakdown.graphBoost ?? 0).toFixed(3)}`);
     if ((breakdown.timeBoost ?? 0) > 0) parts.push(`时间加权=${(breakdown.timeBoost ?? 0).toFixed(3)}`);
+    if ((breakdown.stateBoost ?? 0) > 0) parts.push(`状态加权=${(breakdown.stateBoost ?? 0).toFixed(3)}`);
+    if ((breakdown.outcomeBoost ?? 0) > 0) parts.push(`结果加权=${(breakdown.outcomeBoost ?? 0).toFixed(3)}`);
+    if ((breakdown.temporalWeight ?? 0) > 0) parts.push(`时间权重=${(breakdown.temporalWeight ?? 0).toFixed(3)}`);
     if ((breakdown.diversityPenalty ?? 0) > 0) parts.push(`多样性惩罚=${(breakdown.diversityPenalty ?? 0).toFixed(3)}`);
     return parts.join(' | ') || '无具体分解';
 }
@@ -136,6 +139,8 @@ function buildReasonSummary(
             if (breakdown.memoryWeight > 0.5) reasons.push('记忆度较高');
             if ((breakdown.recencyWeight ?? 0) > 0.5) reasons.push('近期更新');
             if ((breakdown.timeBoost ?? 0) > 0.2) reasons.push('时间方向匹配');
+            if ((breakdown.stateBoost ?? 0) > 0.2) reasons.push('状态特征匹配');
+            if ((breakdown.outcomeBoost ?? 0) > 0.2) reasons.push('结果特征匹配');
             return reasons.join('、') || '词法检索命中';
         }
         case 'vector':

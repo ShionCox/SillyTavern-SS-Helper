@@ -1,6 +1,7 @@
 import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger';
 import type { RetrievalMode } from './retrieval-mode';
 import type { MemoryTimeContext, PromptTimeMeta } from '../memory-time/time-types';
+import type { QueryTimeIntent } from '../memory-time/time-ranking';
 
 /**
  * 功能：定义可检索候选记录。
@@ -27,6 +28,10 @@ export interface RetrievalCandidate {
     compareKey?: string;
     injectToSystem?: boolean;
     aliasTexts?: string[];
+    /** 结构化字段，仅用于高级排序与诊断 */
+    detailPayload?: Record<string, unknown>;
+    /** 是否仍处于进行中 */
+    ongoing?: boolean;
     /** 时间上下文 */
     timeContext?: MemoryTimeContext;
     /** 提示词时间元信息，仅用于运行时注入 */
@@ -105,6 +110,16 @@ export interface RetrievalScoreBreakdown {
     diversityPenalty?: number;
     /** 时间敏感加权 */
     timeBoost?: number;
+    /** 查询时间意图 */
+    timeIntent?: QueryTimeIntent;
+    /** 状态型加权 */
+    stateBoost?: number;
+    /** 结果型加权 */
+    outcomeBoost?: number;
+    /** 时间偏置总权重 */
+    temporalWeight?: number;
+    /** 时间说明 */
+    temporalReason?: string;
 }
 
 /**

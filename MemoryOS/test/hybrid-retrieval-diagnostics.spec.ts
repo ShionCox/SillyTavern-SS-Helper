@@ -170,12 +170,15 @@ describe('MemoryRetrievalService final provider semantics', () => {
                 },
                 finalProviderId: 'hybrid_vector_rule_rerank',
                 vectorHits: [{ vectorDocId: 'v1', sourceKind: 'entry', sourceId: 'e1', score: 0.88 }],
+                preRerankItems: [],
+                postRerankItems: [],
                 mergeUsed: true,
                 rerankUsed: true,
                 rerankReasonCodes: ['rerank_hybrid'],
                 rerankSource: 'rule',
                 vectorAvailable: true,
                 vectorUnavailableReason: null,
+                queryTimeIntent: 'none',
             })),
         } as unknown as HybridRetrievalService);
 
@@ -240,12 +243,15 @@ describe('MemoryRetrievalService final provider semantics', () => {
             strategyDecision: null,
             finalProviderId: 'hybrid_vector',
             vectorHits: [],
+            preRerankItems: [],
+            postRerankItems: [],
             mergeUsed: false,
             rerankUsed: false,
             rerankReasonCodes: [],
             rerankSource: 'none',
             vectorAvailable: true,
             vectorUnavailableReason: null,
+            queryTimeIntent: 'none',
             echoQueryContext: input.queryContext,
         }));
 

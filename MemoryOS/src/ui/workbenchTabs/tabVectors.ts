@@ -238,16 +238,31 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                                 <i class="fa-solid fa-play"></i> ${escapeHtml(state.vectorTestRunning ? resolveVectorWorkbenchText('testing') : resolveVectorWorkbenchText('start_test'))}
                                             </button>
                                         </div>
-                                        <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="${escapeAttr(resolveVectorWorkbenchText('query_placeholder'))}">${escapeHtml(state.vectorQuery)}</textarea>
+                                        <label class="stx-vector-lab__field">
+                                            <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('query_label'))}</span>
+                                            <textarea id="stx-vector-query" class="stx-memory-workbench__textarea" placeholder="${escapeAttr(resolveVectorWorkbenchText('query_placeholder'))}">${escapeHtml(state.vectorQuery)}</textarea>
+                                        </label>
                                         <div class="stx-vector-lab__test-controls">
-                                            <select id="stx-vector-mode" class="stx-memory-workbench__select">
-                                                <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
-                                                <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
-                                                <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
-                                            </select>
-                                            <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('topk_placeholder'))}">
-                                            <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('deep_window_placeholder'))}">
-                                            <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('final_topk_placeholder'))}">
+                                            <label class="stx-vector-lab__field">
+                                                <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('mode_label'))}</span>
+                                                <select id="stx-vector-mode" class="stx-memory-workbench__select">
+                                                    <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
+                                                    <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
+                                                    <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
+                                                </select>
+                                            </label>
+                                            <label class="stx-vector-lab__field">
+                                                <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('topk_label'))}</span>
+                                                <input id="stx-vector-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('topk_placeholder'))}">
+                                            </label>
+                                            <label class="stx-vector-lab__field">
+                                                <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('deep_window_label'))}</span>
+                                                <input id="stx-vector-deep-window" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorDeepWindowTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('deep_window_placeholder'))}">
+                                            </label>
+                                            <label class="stx-vector-lab__field">
+                                                <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('final_topk_label'))}</span>
+                                                <input id="stx-vector-final-topk" class="stx-memory-workbench__input" type="number" min="1" value="${escapeAttr(state.vectorFinalTopKTest)}" placeholder="${escapeAttr(resolveVectorWorkbenchText('final_topk_placeholder'))}">
+                                            </label>
                                         </div>
                                     </div>
 
@@ -298,6 +313,7 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                                     ${buildMetricChip(resolveVectorWorkbenchText('seed_provider'), resolveRetrievalProviderLabel(testResult.diagnostics.seedProviderId || 'none'))}
                                                     ${buildMetricChip(resolveVectorWorkbenchText('strategy_route'), resolveStrategyRouteLabel(testResult.diagnostics.strategyDecision?.route))}
                                                     ${buildMetricChip(resolveVectorWorkbenchText('vector_hit_count'), String(testResult.diagnostics.vectorHitCount ?? 0))}
+                                                    ${buildMetricChip(resolveVectorWorkbenchText('query_time_intent'), resolveTimeIntentLabel(testResult.diagnostics.queryTimeIntent))}
                                                     ${buildMetricChip(resolveVectorWorkbenchText('merge_used'), testResult.diagnostics.mergeUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
                                                     ${buildMetricChip(resolveVectorWorkbenchText('rerank_used'), testResult.diagnostics.rerankUsed ? resolveVectorWorkbenchText('yes') : resolveVectorWorkbenchText('no'))}
                                                     ${buildMetricChip(resolveVectorWorkbenchText('rerank_source'), resolveRerankSourceLabel(testResult.diagnostics.rerankSource))}
@@ -374,7 +390,7 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
  * @returns HTML。
  */
 function buildRankingStageList(
-    items: Array<{ rank: number; title: string; score: number; source?: string }>,
+    items: Array<{ rank: number; title: string; score: number; source?: string; timeBoost?: number; stateBoost?: number; outcomeBoost?: number; temporalWeight?: number; timeIntent?: string }>,
     compact: boolean = false,
 ): string {
     if (!Array.isArray(items) || items.length <= 0) {
@@ -389,6 +405,7 @@ function buildRankingStageList(
                         ${item.source ? `<span>${escapeHtml(resolveResultSourceLabel(item.source))}</span>` : ''}
                     </div>
                     <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
+                    ${buildTemporalCompactLine(item)}
                 </article>
             `).join('')}
         </div>
@@ -627,6 +644,56 @@ function resolveRerankSourceLabel(value?: 'none' | 'rule' | 'llmhub'): string {
         return resolveVectorWorkbenchText('rerank_source_rule');
     }
     return resolveVectorWorkbenchText('rerank_source_none');
+}
+
+/**
+ * 功能：解析时间意图标签。
+ * @param value 时间意图。
+ * @returns 中文标签。
+ */
+function resolveTimeIntentLabel(value?: string): string {
+    const mapping: Record<string, string> = {
+        none: resolveVectorWorkbenchText('time_intent_none'),
+        recent: resolveVectorWorkbenchText('time_intent_recent'),
+        early: resolveVectorWorkbenchText('time_intent_early'),
+        final_outcome: resolveVectorWorkbenchText('time_intent_final_outcome'),
+        current_state: resolveVectorWorkbenchText('time_intent_current_state'),
+    };
+    return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('time_intent_none');
+}
+
+/**
+ * 功能：构建紧凑的时间分解说明。
+ * @param item 排序项。
+ * @returns HTML。
+ */
+function buildTemporalCompactLine(item: {
+    timeBoost?: number;
+    stateBoost?: number;
+    outcomeBoost?: number;
+    temporalWeight?: number;
+    timeIntent?: string;
+}): string {
+    const parts: string[] = [];
+    if (item.timeIntent && item.timeIntent !== 'none') {
+        parts.push(resolveTimeIntentLabel(item.timeIntent));
+    }
+    if ((item.timeBoost ?? 0) > 0) {
+        parts.push(`T ${Number(item.timeBoost).toFixed(3)}`);
+    }
+    if ((item.stateBoost ?? 0) > 0) {
+        parts.push(`S ${Number(item.stateBoost).toFixed(3)}`);
+    }
+    if ((item.outcomeBoost ?? 0) > 0) {
+        parts.push(`O ${Number(item.outcomeBoost).toFixed(3)}`);
+    }
+    if ((item.temporalWeight ?? 0) > 0) {
+        parts.push(`W ${Number(item.temporalWeight).toFixed(3)}`);
+    }
+    if (parts.length <= 0) {
+        return '';
+    }
+    return `<div class="stx-vector-lab__result-meta">${escapeHtml(parts.join(' / '))}</div>`;
 }
 
 /**

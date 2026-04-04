@@ -5,7 +5,7 @@
  */
 
 import type { RetrievalResultItem } from '../memory-retrieval/types';
-import { computeTimeBoost } from '../memory-time/time-ranking';
+import { computeTemporalIntentBoost } from '../memory-time/time-ranking';
 import type { VectorRerankInput, VectorRerankResult } from '../types/vector-rerank';
 
 /**
@@ -28,6 +28,8 @@ const VECTOR_ONLY_WEIGHTS = {
     anchorConsistency: 0.10,
     recencyWeight: 0.03,
     memoryWeight: 0.02,
+    stateBoost: 0.08,
+    outcomeBoost: 0.08,
 };
 
 /** hybrid 模式下的权重 */
@@ -39,6 +41,8 @@ const HYBRID_WEIGHTS = {
     recencyWeight: 0.03,
     memoryWeight: 0.02,
     timeBoost: 0.08,
+    stateBoost: 0.06,
+    outcomeBoost: 0.08,
 };
 
 /** vector_only 模式下的时间偏置权重 */
@@ -173,9 +177,10 @@ export class VectorRerankService {
             const memoryWeight = clamp01(breakdown.memoryWeight ?? 0);
 
             // 时间方向偏置
-            const timeBoost = item.candidate.timeContext
-                ? clamp01(computeTimeBoost(queryContext, item.candidate.timeContext, currentMaxFloor))
-                : clamp01(breakdown.timeBoost ?? 0);
+            const temporal = computeTemporalIntentBoost(queryContext, item.candidate.timeContext, currentMaxFloor, item.candidate);
+            const timeBoost = clamp01(temporal.finalScore || (breakdown.timeBoost ?? 0));
+            const stateBoost = clamp01(Math.max(temporal.stateBoost, breakdown.stateBoost ?? 0));
+            const outcomeBoost = clamp01(Math.max(temporal.outcomeBoost, breakdown.outcomeBoost ?? 0));
 
             // 加权求和
             const rerankScore =
@@ -185,7 +190,9 @@ export class VectorRerankService {
                 anchorConsistency * weights.anchorConsistency +
                 recencyWeight * weights.recencyWeight +
                 memoryWeight * weights.memoryWeight +
-                timeBoost * timeWeight;
+                timeBoost * timeWeight +
+                stateBoost * weights.stateBoost +
+                outcomeBoost * weights.outcomeBoost;
 
             return {
                 item: {
@@ -194,6 +201,11 @@ export class VectorRerankService {
                     breakdown: {
                         ...item.breakdown,
                         timeBoost,
+                        timeIntent: temporal.intent,
+                        stateBoost,
+                        outcomeBoost,
+                        temporalWeight: temporal.temporalWeight,
+                        temporalReason: temporal.explanation,
                     },
                 },
                 rerankScore,

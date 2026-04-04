@@ -1,5 +1,5 @@
 import type { RetrievalResultItem } from '../memory-retrieval/types';
-import { computeTimeBoost } from '../memory-time/time-ranking';
+import { buildTimeLabel, computeTemporalIntentBoost, resolveQueryTimeIntent } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 
 /**
@@ -105,6 +105,20 @@ function buildRerankDocText(item: RetrievalResultItem): string {
     if ((candidate.tags?.length ?? 0) > 0) {
         parts.push(`标签：${candidate.tags?.join('、')}`);
     }
+    if (candidate.timeContext) {
+        parts.push(`时间：${buildTimeLabel(candidate.timeContext, candidate.timeContext.sequenceTime.lastFloor)}`);
+    }
+    if (candidate.ongoing !== undefined) {
+        parts.push(`进行中：${candidate.ongoing ? '是' : '否'}`);
+    }
+    const stateBoost = Number(item.breakdown.stateBoost) || 0;
+    const outcomeBoost = Number(item.breakdown.outcomeBoost) || 0;
+    if (stateBoost > 0) {
+        parts.push(`状态型：${stateBoost.toFixed(3)}`);
+    }
+    if (outcomeBoost > 0) {
+        parts.push(`结果型：${outcomeBoost.toFixed(3)}`);
+    }
     return parts.join('\n').slice(0, 1200);
 }
 
@@ -124,12 +138,14 @@ function applyLLMHubTimeBias(query: string, items: RetrievalResultItem[]): Retri
     const queryText = String(query ?? '').trim();
     return items
         .map((item: RetrievalResultItem): RetrievalResultItem => {
-            const timeBoost = item.candidate.timeContext
-                ? computeTimeBoost(queryText, item.candidate.timeContext, currentMaxFloor)
-                : (item.breakdown.timeBoost ?? 0);
+            const temporal = computeTemporalIntentBoost(queryText, item.candidate.timeContext, currentMaxFloor, item.candidate);
+            const timeBoost = temporal.finalScore || (item.breakdown.timeBoost ?? 0);
             const llmScore = Math.max(0, Math.min(1, Number(item.score) || 0));
+            const temporalWeight = temporal.temporalWeight > 0
+                ? temporal.temporalWeight
+                : (resolveQueryTimeIntent(queryText) === 'none' ? 0 : 0.08);
             const rerankScore = Math.max(0, Math.min(1, Number((
-                llmScore * 0.92 + Math.max(0, Number(timeBoost) || 0) * 0.08
+                llmScore * (1 - temporalWeight) + Math.max(0, Number(timeBoost) || 0) * temporalWeight
             ).toFixed(6))));
             return {
                 ...item,
@@ -137,6 +153,11 @@ function applyLLMHubTimeBias(query: string, items: RetrievalResultItem[]): Retri
                 breakdown: {
                     ...item.breakdown,
                     timeBoost: Math.max(0, Number(timeBoost) || 0),
+                    timeIntent: temporal.intent,
+                    stateBoost: Math.max(Number(item.breakdown.stateBoost) || 0, temporal.stateBoost),
+                    outcomeBoost: Math.max(Number(item.breakdown.outcomeBoost) || 0, temporal.outcomeBoost),
+                    temporalWeight,
+                    temporalReason: temporal.explanation,
                 },
             };
         })

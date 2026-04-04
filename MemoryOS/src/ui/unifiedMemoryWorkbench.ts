@@ -248,6 +248,8 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
  */
 export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOptions = {}): void {
     ensureWorkbenchStyle();
+    let cleanupWorkbench: (() => void) | null = null;
+    let dialogClosed = false;
     openSharedDialog({
         id: 'stx-memory-unified-workbench',
         size: 'fullscreen',
@@ -255,10 +257,23 @@ export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOp
         chrome: false,
         bodyHtml: '<div id="stx-memory-workbench-root"></div>',
         onMount: (instance: SharedDialogInstance): void => {
-            void mountWorkbench(instance, options).catch((error: unknown): void => {
-                logger.error('挂载 MemoryOS 工作台失败', error);
-                toast.error(`工作台加载失败：${String((error as Error)?.message ?? error)}`);
-            });
+            void mountWorkbench(instance, options)
+                .then((cleanup: () => void): void => {
+                    if (dialogClosed) {
+                        cleanup();
+                        return;
+                    }
+                    cleanupWorkbench = cleanup;
+                })
+                .catch((error: unknown): void => {
+                    logger.error('挂载 MemoryOS 工作台失败', error);
+                    toast.error(`工作台加载失败：${String((error as Error)?.message ?? error)}`);
+                });
+        },
+        onClose: (): void => {
+            dialogClosed = true;
+            cleanupWorkbench?.();
+            cleanupWorkbench = null;
         },
     });
 }
@@ -269,7 +284,7 @@ export function openUnifiedMemoryWorkbench(options: UnifiedMemoryWorkbenchOpenOp
  * @param options 打开参数。
  * @returns 异步挂载结果。
  */
-async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMemoryWorkbenchOpenOptions): Promise<void> {
+async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMemoryWorkbenchOpenOptions): Promise<() => void> {
     const memory = getActiveMemorySdk();
     const bindingStatus = getMemoryBindingStatus();
     const settings = readMemoryOSSettings();
@@ -283,12 +298,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 ${detail ? `<div style="margin-top:8px;color:var(--mw-warn);">${escapeHtml(detail)}</div>` : ''}
             </div>
         `;
-        return;
+        return (): void => {
+            destroyMemoryGraphPage();
+        };
     }
 
     const root = instance.content.querySelector('#stx-memory-workbench-root') as HTMLElement | null;
     if (!root) {
-        return;
+        return (): void => {
+            destroyMemoryGraphPage();
+        };
     }
 
     const state: WorkbenchState = {
@@ -375,6 +394,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let contentLabSettingsCache: ContentLabSettings | null = null;
     let contentLabSourceMessages: MemoryTakeoverMessageSlice[] = [];
     let contentLabPreviewFloor: RawFloorRecord | undefined = undefined;
+    let disposed = false;
 
     /**
      * 功能：构造空的向量快照，占位表示尚未加载。
@@ -435,6 +455,25 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 工作台快照。
      */
     const loadCoreSnapshot = async (): Promise<WorkbenchSnapshot> => {
+        if (disposed) {
+            return {
+                entryTypes: [],
+                entries: [],
+                actors: [],
+                roleMemories: [],
+                summaries: [],
+                preview: previewCache,
+                worldProfileBinding: null,
+                mutationHistory: [],
+                entryAuditRecords: [],
+                recallExplanation: previewRecallExplanationCache,
+                actorGraph: { nodes: [], links: [] },
+                memoryGraph: graphService.buildTakeoverGraph(null),
+                takeoverProgress: takeoverProgressCache,
+                vectorSnapshot: vectorCache,
+                contentLabSnapshot: buildContentLabSnapshot(),
+            };
+        }
         const [
             entryTypes,
             entries,
@@ -1455,11 +1494,31 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
+     * 功能：统一清理工作台后台任务与重型渲染器。
+     * @returns 无返回值。
+     */
+    const cleanupWorkbench = (): void => {
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        takeoverPreviewSequence += 1;
+        takeoverProgressSequence += 1;
+        vectorLoadSequence += 1;
+        contentLabLoadSequence += 1;
+        stopTakeoverProgressPolling();
+        destroyMemoryGraphPage();
+    };
+
+    /**
      * 功能：在后台执行接管动作，避免工作台被长任务阻塞。
      * @param runner 实际执行逻辑。
      * @returns 无返回值。
      */
     const runTakeoverActionInBackground = (runner: () => Promise<void>): void => {
+        if (disposed) {
+            return;
+        }
         if (state.takeoverActionRunning) {
             toast.info('旧聊天接管正在执行，请稍候。');
             return;
@@ -1469,6 +1528,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         void (async (): Promise<void> => {
             await render();
             try {
+                if (disposed) {
+                    return;
+                }
                 await runner();
             } catch (error) {
                 logger.error('旧聊天接管后台执行失败', error);
@@ -1476,8 +1538,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             } finally {
                 state.takeoverActionRunning = false;
                 stopTakeoverProgressPolling();
-                await refreshTakeoverProgress();
-                await render();
+                if (!disposed) {
+                    await refreshTakeoverProgress();
+                    await render();
+                }
             }
         })();
     };
@@ -1487,6 +1551,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 无返回值。
      */
     const refreshPreviewSnapshot = async (): Promise<void> => {
+        if (disposed) {
+            return;
+        }
         if (state.currentView !== 'preview') {
             state.previewTabLoading = false;
             return;
@@ -1505,7 +1572,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             toast.error(`诊断加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
             state.previewTabLoading = false;
-            if (state.currentView === 'preview') {
+            if (!disposed && state.currentView === 'preview') {
                 await render();
             }
         }
@@ -1516,6 +1583,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 无返回值
      */
     const refreshTakeoverPreview = async (): Promise<void> => {
+        if (disposed) {
+            return;
+        }
         if (state.currentView !== 'takeover') {
             state.takeoverPreviewLoading = false;
             return;
@@ -1573,6 +1643,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 异步完成。
      */
     const loadContentLabSnapshot = async (): Promise<void> => {
+        if (disposed) {
+            return;
+        }
         if (state.contentLabTabLoaded && contentLabSettingsCache && contentLabSourceMessages.length > 0) {
             return;
         }
@@ -1585,6 +1658,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 contentLabSettingsCache ? Promise.resolve(contentLabSettingsCache) : memory.chatState.getContentLabSettings(),
                 Promise.resolve(collectTakeoverSourceBundle()),
             ]);
+            if (disposed) {
+                return;
+            }
             if (currentSequence !== contentLabLoadSequence) {
                 return;
             }
@@ -1600,7 +1676,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             logger.warn('内容实验室加载消息失败', error);
             toast.error(`内容实验室加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
-            if (currentSequence === contentLabLoadSequence) {
+            if (!disposed && currentSequence === contentLabLoadSequence) {
                 state.contentLabTabLoading = false;
                 await render();
             }
@@ -1612,6 +1688,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 异步完成。
      */
     const refreshVectorSnapshot = async (): Promise<void> => {
+        if (disposed) {
+            return;
+        }
         const currentSequence = ++vectorLoadSequence;
         state.vectorTabLoading = true;
         await render();
@@ -1630,6 +1709,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 memory.unifiedMemory.diagnostics.listVectorRecallStats(),
                 memory.unifiedMemory.diagnostics.getVectorIndexStats(),
             ]);
+            if (disposed) {
+                return;
+            }
             if (currentSequence !== vectorLoadSequence) {
                 return;
             }
@@ -1649,7 +1731,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             logger.warn('加载向量实验室快照失败', error);
             toast.error(`向量实验室加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
-            if (currentSequence === vectorLoadSequence) {
+            if (!disposed && currentSequence === vectorLoadSequence) {
                 state.vectorTabLoading = false;
                 await render();
             }
@@ -1680,6 +1762,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 异步完成。
      */
     const refreshTakeoverProgress = async (): Promise<void> => {
+        if (disposed) {
+            return;
+        }
         if (state.currentView !== 'takeover') {
             state.takeoverProgressLoading = false;
             return;
@@ -1690,6 +1775,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         await waitForUiPaint();
         try {
             const progress = await memory.chatState.getTakeoverStatus();
+            if (disposed) {
+                return;
+            }
             if (currentSequence !== takeoverProgressSequence) {
                 return;
             }
@@ -1700,7 +1788,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             logger.warn('加载旧聊天处理进度失败', error);
         } finally {
-            if (currentSequence === takeoverProgressSequence) {
+            if (!disposed && currentSequence === takeoverProgressSequence) {
                 state.takeoverProgressLoading = false;
                 await render();
             }
@@ -1708,6 +1796,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     const render = async (): Promise<void> => {
+        if (disposed || !root.isConnected) {
+            return;
+        }
         const entryList = root.querySelector('[data-entry-list-scroll="true"]') as HTMLElement | null;
         const preservedEntryListScrollTop = entryList?.scrollTop ?? 0;
         const typeList = root.querySelector('[data-type-list-scroll="true"]') as HTMLElement | null;
@@ -1735,6 +1826,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const nextVectorDocList = root.querySelector('[data-vector-doc-list-scroll="true"]') as HTMLElement | null;
         if (nextVectorDocList) {
             nextVectorDocList.scrollTop = preservedVectorDocListScrollTop;
+        }
+        if (disposed || !root.isConnected) {
+            destroyMemoryGraphPage();
+            return;
         }
         bindEvents(snapshot);
 
@@ -1774,6 +1869,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     if (state.currentView === 'takeover') {
         void refreshTakeoverProgress();
     }
+    return cleanupWorkbench;
 }
 
 /**

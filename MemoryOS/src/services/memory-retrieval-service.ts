@@ -9,6 +9,7 @@ import type {
     RetrievalRankingChangeItem,
 } from '../memory-retrieval/retrieval-output';
 import type { RetrievalCandidate, RetrievalFacet } from '../memory-retrieval/types';
+import type { QueryTimeIntent } from '../memory-time/time-ranking';
 import type { RecallConfig } from '../memory-retrieval/recall-config';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { buildDefaultRecallConfig, mergeRecallConfig } from '../memory-retrieval/recall-config';
@@ -121,6 +122,7 @@ export class MemoryRetrievalService {
         let rerankedRanking: RetrievalStageRankingItem[] = [];
         let rankingChanges: RetrievalRankingChangeItem[] = [];
         let timeBiasedCount = 0;
+        let queryTimeIntent: QueryTimeIntent = 'none';
 
         if (needsVectorChain && this.hybridService) {
             const enableQueryContextBuilder = resolveRetrievalEnableQueryContextBuilder(config.retrievalMode);
@@ -155,6 +157,7 @@ export class MemoryRetrievalService {
             hybridRerankUsed = hybridResult.rerankUsed;
             hybridRerankReasonCodes = hybridResult.rerankReasonCodes;
             hybridRerankSource = hybridResult.rerankSource;
+            queryTimeIntent = hybridResult.queryTimeIntent;
             vectorTopHits = hybridResult.vectorHits.map((hit, index): RetrievalVectorTopHit => ({
                 rank: index + 1,
                 sourceId: hit.sourceId,
@@ -205,6 +208,7 @@ export class MemoryRetrievalService {
                 vectorHitIds: new Set<string>(),
             });
             timeBiasedCount = finalItems.filter((item) => (item.breakdown.timeBoost ?? 0) > 0).length;
+            queryTimeIntent = finalItems.find((item) => item.breakdown.timeIntent)?.breakdown.timeIntent ?? 'none';
         }
 
         const vectorProviderStatus: VectorProviderStatus = {
@@ -241,6 +245,7 @@ export class MemoryRetrievalService {
             rerankedRanking,
             rankingChanges,
             timeBiasedCount,
+            queryTimeIntent,
         };
 
         return {
@@ -322,6 +327,11 @@ export class MemoryRetrievalService {
             title: item.candidate.title || item.candidate.entryId,
             score: Number(item.score ?? 0),
             source: this.resolveResultSource(item, vectorHitIds),
+            timeIntent: item.breakdown.timeIntent,
+            timeBoost: Number(item.breakdown.timeBoost ?? 0),
+            stateBoost: Number(item.breakdown.stateBoost ?? 0),
+            outcomeBoost: Number(item.breakdown.outcomeBoost ?? 0),
+            temporalWeight: Number(item.breakdown.temporalWeight ?? 0),
         }));
     }
 

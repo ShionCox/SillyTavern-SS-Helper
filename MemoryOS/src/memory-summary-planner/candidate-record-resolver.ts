@@ -214,6 +214,9 @@ function buildSummaryRetrievalCandidate(
         locationKey: locationKey || undefined,
         worldKeys: entry.entryType.startsWith('world_') ? Array.from(new Set([...worldKeys, entry.title])) : worldKeys,
         aliasTexts: aliases,
+        detailPayload: payload,
+        ongoing: entry.ongoing,
+        timeContext: entry.timeContext,
     };
 }
 

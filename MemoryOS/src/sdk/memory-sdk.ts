@@ -55,7 +55,7 @@ import {
 } from '../db/db';
 import { readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 import { detectWorldProfile } from '../memory-world-profile';
-import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
+import { normalizeUserNarrativeText, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
@@ -1029,7 +1029,8 @@ export class MemorySDKImpl {
                 preview: async (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => this.promptAssemblyService.buildPromptAssembly(input ?? {}),
                 inject: async (input: UnifiedPromptInjectInput): Promise<UnifiedPromptInjectResult> => {
                     const snapshot = input.snapshot;
-                    const content = String(snapshot.finalText ?? '').trim();
+                    const userDisplayName = resolveCurrentNarrativeUserName();
+                    const content = normalizeUserNarrativeText(String(snapshot.finalText ?? ''), userDisplayName).trim();
                     const shouldInject = content.length > 0;
                     const insertIndex = this.resolveInsertIndex(input.promptMessages);
                     if (shouldInject && insertIndex >= 0) {

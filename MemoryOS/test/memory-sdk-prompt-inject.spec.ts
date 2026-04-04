@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { MemorySDKImpl } from '../src/sdk/memory-sdk';
 import type { PromptAssemblySnapshot } from '../src/types';
 
@@ -63,5 +64,26 @@ describe('MemorySDKImpl prompt inject', () => {
             matchedEntryIds: ['entry:from_snapshot'],
             matchedActorKeys: ['actor:from_snapshot'],
         });
+    });
+
+    it('会在真正送模前把 {{user}} 渲染为自然语言称呼', async () => {
+        const sdk = new MemorySDKImpl('chat-1') as unknown as MemorySDKImpl & {
+            promptAssemblyService: { buildPromptAssembly: ReturnType<typeof vi.fn> };
+        };
+        const buildPromptAssembly = vi.fn(async (): Promise<PromptAssemblySnapshot> => buildPromptAssemblySnapshot());
+        sdk.promptAssemblyService = { buildPromptAssembly };
+        const snapshot = buildPromptAssemblySnapshot({
+            finalText: '<memory_context version="1.0">\n- {{user}}仍在林间小屋接受治疗\n</memory_context>',
+        });
+        const promptMessages = [{ role: 'user', content: '你好' }] as unknown as Parameters<MemorySDKImpl['unifiedMemory']['prompts']['inject']>[0]['promptMessages'];
+
+        await sdk.unifiedMemory.prompts.inject({
+            promptMessages,
+            snapshot,
+        });
+
+        const injectedContent = String((promptMessages[0] as Record<string, unknown>)?.content ?? '');
+        expect(injectedContent).toContain('你仍在林间小屋接受治疗');
+        expect(injectedContent).not.toContain('{{user}}');
     });
 });
