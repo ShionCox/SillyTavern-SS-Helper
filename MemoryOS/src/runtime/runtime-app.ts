@@ -30,6 +30,7 @@ import {
 } from '../ui/summary-progress-float';
 import { ensureSdkFloatingToolbar, removeSdkFloatingToolbarGroup, SDK_FLOATING_TOOLBAR_ID } from '../../../SDK/toolbar';
 import { initVectorRuntime } from './vector-runtime';
+import { DreamSchedulerService, initializeDreamScheduler } from '../services/dream-scheduler-service';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -223,9 +224,13 @@ export class MemoryOS {
     private readonly coldStartRunningChats: Set<string>;
     private readonly takeoverPromptedChats: Set<string>;
     private readonly takeoverRunningChats: Set<string>;
+    private readonly dreamRunningChats: Set<string>;
+    private readonly summaryRunningChats: Set<string>;
     private refreshChatBindingHandler: ((force?: boolean) => Promise<void>) | null;
     private rebuildingDatabase: boolean;
     private reloadingAfterDatabaseRebuild: boolean;
+    private dreamScheduler: DreamSchedulerService | null;
+    private dreamIdleTimerHandle: ReturnType<typeof setInterval> | null;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -238,8 +243,12 @@ export class MemoryOS {
         this.coldStartRunningChats = new Set<string>();
         this.takeoverPromptedChats = new Set<string>();
         this.takeoverRunningChats = new Set<string>();
+        this.dreamRunningChats = new Set<string>();
+        this.summaryRunningChats = new Set<string>();
         this.rebuildingDatabase = false;
         this.reloadingAfterDatabaseRebuild = false;
+        this.dreamScheduler = null;
+        this.dreamIdleTimerHandle = null;
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -345,6 +354,17 @@ export class MemoryOS {
                     order: 10,
                 },
                 {
+                    key: 'dream',
+                    iconClassName: 'fa-solid fa-moon',
+                    tooltip: '手动触发梦境',
+                    ariaLabel: '手动触发梦境',
+                    buttonClassName: 'stx-sdk-toolbar-action-memoryos-dream',
+                    attributes: {
+                        'data-memoryos-toolbar-action': 'dream',
+                    },
+                    order: 15,
+                },
+                {
                     key: 'workbench',
                     iconClassName: 'fa-solid fa-table-cells-large',
                     tooltip: '打开记忆工作台',
@@ -379,6 +399,10 @@ export class MemoryOS {
                 openUnifiedMemoryWorkbench();
                 return;
             }
+            if (action === 'dream') {
+                void this.manualTriggerDream();
+                return;
+            }
             if (action === 'summary-progress') {
                 const settings = this.readSettings();
                 if (!settings.summaryProgressOverlayEnabled) {
@@ -391,6 +415,57 @@ export class MemoryOS {
                 }
             }
         });
+    }
+
+    /**
+     * 功能：手动触发当前聊天的梦境会话。
+     */
+    private async manualTriggerDream(): Promise<void> {
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.dreamEnabled) {
+            toast.info('请先在 MemoryOS 设置中启用梦境系统。');
+            return;
+        }
+        const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+        if (!memory) {
+            toast.info('当前聊天尚未连接到记忆主链，请稍后再试。');
+            return;
+        }
+        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+        if (!chatKey) {
+            toast.warning('当前无法识别聊天上下文，暂时不能启动梦境。');
+            return;
+        }
+        if (this.dreamRunningChats.has(chatKey)) {
+            toast.info('当前聊天已有梦境会话正在运行。');
+            return;
+        }
+        this.dreamRunningChats.add(chatKey);
+        toast.info('正在整理本轮梦境上下文，请稍候。');
+        try {
+            const result = await memory.chatState.startDreamSession('manual');
+            if (!result.ok) {
+                toast.error(`梦境执行失败：${result.errorMessage || result.reasonCode || '未知错误'}`);
+                return;
+            }
+            if (result.status === 'approved') {
+                toast.success('梦境提案已审批并写回主记忆链。');
+                return;
+            }
+            if (result.status === 'rejected') {
+                toast.info('已拒绝本轮梦境提案，主记忆链未受影响。');
+                return;
+            }
+            if (result.status === 'deferred') {
+                toast.info('本轮梦境已生成，提案暂未写回。');
+                return;
+            }
+            toast.success('梦境会话已生成。');
+        } catch (error) {
+            toast.error(`梦境执行失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            this.dreamRunningChats.delete(chatKey);
+        }
     }
 
     /**
@@ -425,6 +500,8 @@ export class MemoryOS {
      * @returns 无返回值。
      */
     private clearActiveMemoryBinding(): void {
+        this.clearDreamIdleTimer();
+        this.dreamScheduler = null;
         try {
             const oldMemory = (window as unknown as { STX?: { memory?: { template?: { destroy?: () => void } } } })?.STX?.memory;
             oldMemory?.template?.destroy?.();
@@ -854,6 +931,7 @@ export class MemoryOS {
             currentChatKey = chatKey;
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);
             void this.refreshSummaryProgressUi();
+            this.initDreamSchedulerForChat(chatKey, sdk);
             void (async (): Promise<void> => {
                 const takeoverHandled = await this.maybePromptTakeover(chatKey, sdk);
                 if (!takeoverHandled) {
@@ -905,17 +983,30 @@ export class MemoryOS {
         });
         eventSource.on(types.GENERATION_ENDED || 'generation_ended', (): void => {
             const settings = this.readSettings();
-            if (!settings.enabled || !settings.summaryAutoTriggerEnabled) {
+            if (!settings.enabled) {
                 return;
             }
             const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
             if (!memory) {
                 return;
             }
-            void memory.postGeneration.scheduleRoundProcessing('generation_ended').catch((error: unknown): void => {
-                logger.warn('轮次总结失败', error);
-            });
+            if (settings.summaryAutoTriggerEnabled) {
+                const summaryKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+                if (summaryKey) {
+                    this.summaryRunningChats.add(summaryKey);
+                }
+                void memory.postGeneration.scheduleRoundProcessing('generation_ended').catch((error: unknown): void => {
+                    logger.warn('轮次总结失败', error);
+                }).finally((): void => {
+                    if (summaryKey) {
+                        this.summaryRunningChats.delete(summaryKey);
+                    }
+                });
+            }
             void this.refreshSummaryProgressUi();
+            void this.maybeEnqueueDreamOnGenerationEnded(memory).catch((error: unknown): void => {
+                logger.warn('generation_ended 自动做梦调度失败', error);
+            });
         });
 
         let lastPromptReadyTs = 0;
@@ -987,5 +1078,157 @@ export class MemoryOS {
             },
             { from: 'stx_llmhub' },
         );
+    }
+
+    /**
+     * 功能：为当前聊天初始化 Dream Scheduler 并启动 idle 计时。
+     * @param chatKey 当前聊天键。
+     * @param sdk 当前聊天的 Memory SDK。
+     */
+    private initDreamSchedulerForChat(chatKey: string, sdk: MemorySDKImpl): void {
+        this.clearDreamIdleTimer();
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.dreamEnabled || !settings.dreamSchedulerEnabled) {
+            this.dreamScheduler = null;
+            return;
+        }
+        this.dreamScheduler = initializeDreamScheduler(chatKey);
+        if (settings.dreamSchedulerAllowIdleTrigger) {
+            this.startDreamIdleTimer(chatKey, sdk);
+        }
+        logger.info(`[DreamScheduler] 已为 ${chatKey} 初始化 dream scheduler`);
+    }
+
+    /**
+     * 功能：启动 dream idle 计时器。
+     * @param chatKey 当前聊天键。
+     * @param sdk 当前聊天的 Memory SDK。
+     */
+    private startDreamIdleTimer(chatKey: string, sdk: MemorySDKImpl): void {
+        this.clearDreamIdleTimer();
+        const settings = this.readSettings();
+        const idleMs = Math.max(1, settings.dreamSchedulerIdleMinutes) * 60 * 1000;
+        let lastActivityTs = Date.now();
+
+        const onUserActivity = (): void => {
+            lastActivityTs = Date.now();
+        };
+        document.addEventListener('keydown', onUserActivity, { passive: true });
+        document.addEventListener('pointerdown', onUserActivity, { passive: true });
+
+        this.dreamIdleTimerHandle = window.setInterval((): void => {
+            const now = Date.now();
+            const currentSettings = this.readSettings();
+            if (!currentSettings.enabled || !currentSettings.dreamEnabled
+                || !currentSettings.dreamSchedulerEnabled || !currentSettings.dreamSchedulerAllowIdleTrigger) {
+                return;
+            }
+            if (now - lastActivityTs < idleMs) {
+                return;
+            }
+            const currentMemory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+            if (!currentMemory || currentMemory !== sdk) {
+                return;
+            }
+            lastActivityTs = now;
+            void this.maybeEnqueueDreamOnIdle(chatKey, sdk).catch((error: unknown): void => {
+                logger.warn('[DreamScheduler] idle 自动做梦调度失败', error);
+            });
+        }, 60_000);
+    }
+
+    /**
+     * 功能：清除 dream idle 计时器。
+     */
+    private clearDreamIdleTimer(): void {
+        if (this.dreamIdleTimerHandle !== null) {
+            window.clearInterval(this.dreamIdleTimerHandle);
+            this.dreamIdleTimerHandle = null;
+        }
+    }
+
+    /**
+     * 功能：generation_ended 后检查是否满足自动做梦条件并入队。
+     * @param memory 当前聊天的 Memory SDK。
+     */
+    private async maybeEnqueueDreamOnGenerationEnded(memory: MemorySDKImpl): Promise<void> {
+        const settings = this.readSettings();
+        if (!settings.dreamEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowGenerationEndedTrigger) {
+            return;
+        }
+        if (!this.dreamScheduler) {
+            return;
+        }
+        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+        if (!chatKey) {
+            return;
+        }
+        const blockedBy: string[] = [];
+        if (this.coldStartRunningChats.has(chatKey)) {
+            blockedBy.push('cold_start_running');
+        }
+        if (this.takeoverRunningChats.has(chatKey)) {
+            blockedBy.push('takeover_running');
+        }
+        if (this.dreamRunningChats.has(chatKey)) {
+            blockedBy.push('dream_already_running');
+        }
+        if (this.summaryRunningChats.has(chatKey)) {
+            blockedBy.push('summary_running');
+        }
+
+        const decision = await this.dreamScheduler.enqueueDreamJob({
+            chatKey,
+            triggerSource: 'generation_ended',
+            blockedBy,
+            execute: async (): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+                const result = await memory.chatState.startDreamSession('generation_ended');
+                return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
+            },
+        });
+        if (decision.shouldTrigger) {
+            logger.info(`[DreamScheduler] generation_ended 已排入 dream 队列: ${chatKey}`);
+        }
+    }
+
+    /**
+     * 功能：idle 触发时检查是否满足自动做梦条件并入队。
+     * @param chatKey 当前聊天键。
+     * @param memory 当前聊天的 Memory SDK。
+     */
+    private async maybeEnqueueDreamOnIdle(chatKey: string, memory: MemorySDKImpl): Promise<void> {
+        const settings = this.readSettings();
+        if (!settings.dreamEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowIdleTrigger) {
+            return;
+        }
+        if (!this.dreamScheduler) {
+            return;
+        }
+        const blockedBy: string[] = [];
+        if (this.coldStartRunningChats.has(chatKey)) {
+            blockedBy.push('cold_start_running');
+        }
+        if (this.takeoverRunningChats.has(chatKey)) {
+            blockedBy.push('takeover_running');
+        }
+        if (this.dreamRunningChats.has(chatKey)) {
+            blockedBy.push('dream_already_running');
+        }
+        if (this.summaryRunningChats.has(chatKey)) {
+            blockedBy.push('summary_running');
+        }
+
+        const decision = await this.dreamScheduler.enqueueDreamJob({
+            chatKey,
+            triggerSource: 'idle',
+            blockedBy,
+            execute: async (): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+                const result = await memory.chatState.startDreamSession('idle');
+                return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
+            },
+        });
+        if (decision.shouldTrigger) {
+            logger.info(`[DreamScheduler] idle 已排入 dream 队列: ${chatKey}`);
+        }
     }
 }

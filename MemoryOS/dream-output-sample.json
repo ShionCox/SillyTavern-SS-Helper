@@ -1,0 +1,59 @@
+{
+  "narrative": "梦里，最近几轮对话中反复出现的犹豫与更早之前建立的责任感纠缠在一起，像两股水流在同一处回旋。角色并没有得出新的硬结论，但她对当前关系的信任已经从谨慎试探转向了可以短暂依靠的程度。",
+  "highlights": [
+    "近期情绪波动与中期关系积累形成了同一条心理变化线索",
+    "部分状态更适合写成推断性软记忆，而不是硬事实",
+    "关系信任值存在温和上调空间"
+  ],
+  "proposedMutations": [
+    {
+      "mutationId": "dream_mut_001",
+      "mutationType": "entry_create",
+      "confidence": 0.81,
+      "reason": "recent 与 mid 召回都指向角色正在从防备转向有限信任，这更适合作为带有推断标记的状态记忆候选。",
+      "sourceWave": "fused",
+      "sourceEntryIds": [
+        "entry_1001",
+        "entry_1042"
+      ],
+      "preview": "新增一条关于角色当前心理状态变化的推断性记忆",
+      "payload": {
+        "entryType": "state",
+        "title": "角色对当前同伴产生了有限信任",
+        "summary": "基于近期互动与既有关系积累，角色开始表现出有限但明确的信任倾向。",
+        "detail": "这是一条梦境推断型软记忆，不代表绝对硬事实，需要结合后续对话继续验证。",
+        "tags": [
+          "dream",
+          "inference",
+          "dream_phase1"
+        ],
+        "actorBindings": [
+          "user"
+        ],
+        "detailPayload": {
+          "confidenceLabel": "medium_high",
+          "evidenceMode": "dream_inference"
+        }
+      }
+    },
+    {
+      "mutationId": "dream_mut_002",
+      "mutationType": "relationship_patch",
+      "confidence": 0.72,
+      "reason": "deep 与 recent 召回都表明该关系长期稳定且近期进一步缓和，可以提出一次小幅 trust 调整供人工审批。",
+      "sourceWave": "recent",
+      "sourceEntryIds": [
+        "entry_1042"
+      ],
+      "preview": "建议小幅上调当前关系的 trust 并补充状态描述",
+      "payload": {
+        "relationshipId": "relationship:demo",
+        "state": "双方已从试探进入可以短暂协作的稳定阶段。",
+        "summary": "关系信任度较此前略有提升，但仍保留观察空间。",
+        "trust": 68,
+        "affection": 41,
+        "tension": 22
+      }
+    }
+  ]
+}

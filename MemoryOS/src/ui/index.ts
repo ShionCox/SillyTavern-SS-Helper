@@ -27,6 +27,38 @@ const ENABLED_ID = 'stx-memoryos-enabled';
 const TOOLBAR_QUICK_ACTIONS_ID = 'stx-memoryos-toolbar-quick-actions-enabled';
 const COLD_START_ENABLED_ID = 'stx-memoryos-cold-start-enabled';
 const TAKEOVER_ENABLED_ID = 'stx-memoryos-takeover-enabled';
+const DREAM_ENABLED_ID = 'stx-memoryos-dream-enabled';
+const DREAM_AUTO_TRIGGER_ID = 'stx-memoryos-dream-auto-trigger-enabled';
+const DREAM_REQUIRE_APPROVAL_ID = 'stx-memoryos-dream-require-approval';
+const DREAM_CONTEXT_MAX_CHARS_ID = 'stx-memoryos-dream-context-max-chars';
+const DREAM_RECENT_TOPK_ID = 'stx-memoryos-dream-recent-topk';
+const DREAM_MID_TOPK_ID = 'stx-memoryos-dream-mid-topk';
+const DREAM_DEEP_TOPK_ID = 'stx-memoryos-dream-deep-topk';
+const DREAM_FUSED_MAX_ITEMS_ID = 'stx-memoryos-dream-fused-max-items';
+const DREAM_STYLE_PRESET_ID = 'stx-memoryos-dream-style-preset';
+const DREAM_WAVE_ENABLED_ID = 'stx-memoryos-dream-wave-enabled';
+const DREAM_WAVE_RECENT_TOPK_ID = 'stx-memoryos-dream-wave-recent-topk';
+const DREAM_WAVE_MID_TOPK_ID = 'stx-memoryos-dream-wave-mid-topk';
+const DREAM_WAVE_DEEP_TOPK_ID = 'stx-memoryos-dream-wave-deep-topk';
+const DREAM_WAVE_FUSION_TOPK_ID = 'stx-memoryos-dream-wave-fusion-topk';
+const DREAM_GRAPH_ENABLED_ID = 'stx-memoryos-dream-graph-enabled';
+const DREAM_GRAPH_EXPAND_DEPTH_ID = 'stx-memoryos-dream-graph-expand-depth';
+const DREAM_NOVELTY_ENABLED_ID = 'stx-memoryos-dream-novelty-enabled';
+const DREAM_NOVELTY_WEIGHT_ID = 'stx-memoryos-dream-novelty-weight';
+const DREAM_REPETITION_PENALTY_WEIGHT_ID = 'stx-memoryos-dream-repetition-penalty-weight';
+const DREAM_DIAGNOSTICS_ENABLED_ID = 'stx-memoryos-dream-diagnostics-enabled';
+const DREAM_SCHEDULER_ENABLED_ID = 'stx-memoryos-dream-scheduler-enabled';
+const DREAM_SCHEDULER_COOLDOWN_ID = 'stx-memoryos-dream-scheduler-cooldown';
+const DREAM_SCHEDULER_DAILY_MAX_ID = 'stx-memoryos-dream-scheduler-daily-max';
+const DREAM_SCHEDULER_IDLE_MINUTES_ID = 'stx-memoryos-dream-scheduler-idle-minutes';
+const DREAM_SCHEDULER_GENERATION_TRIGGER_ID = 'stx-memoryos-dream-scheduler-generation-trigger';
+const DREAM_SCHEDULER_IDLE_TRIGGER_ID = 'stx-memoryos-dream-scheduler-idle-trigger';
+const DREAM_MAINTENANCE_ENABLED_ID = 'stx-memoryos-dream-maintenance-enabled';
+const DREAM_MAINTENANCE_MAX_PROPOSALS_ID = 'stx-memoryos-dream-maintenance-max-proposals';
+const DREAM_QUALITY_GUARD_ENABLED_ID = 'stx-memoryos-dream-quality-guard-enabled';
+const DREAM_AUTO_APPLY_LOW_RISK_ID = 'stx-memoryos-dream-auto-apply-low-risk';
+const DREAM_WORKBENCH_ENABLED_ID = 'stx-memoryos-dream-workbench-enabled';
+const DREAM_ROLLBACK_ENABLED_ID = 'stx-memoryos-dream-rollback-enabled';
 const SUMMARY_AUTO_TRIGGER_ID = 'stx-memoryos-summary-auto-trigger';
 const SUMMARY_PROGRESS_OVERLAY_ID = 'stx-memoryos-summary-progress-overlay-enabled';
 const SUMMARY_INTERVAL_ID = 'stx-memoryos-summary-interval-floors';
@@ -206,6 +238,45 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用旧聊天接管</div><div class="stx-ui-item-desc">聊天楼层较多时自动提示创建接管任务，并在后台按批整理历史记忆。</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_ENABLED_ID, '启用旧聊天接管')}</div></div>
         </div>
         <div id="${PANEL_MEMORY_ID}" class="stx-ui-panel" hidden>
+            ${divider('梦境系统')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境系统</div><div class="stx-ui-item-desc">开启后可在工具栏手动触发一次梦境会话，生成待审批的梦境提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ENABLED_ID, '启用梦境系统')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保留自动触发开关</div><div class="stx-ui-item-desc">第一阶段默认关闭，仅保留配置位，暂不接入自动触发链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_TRIGGER_ID, '保留自动触发开关')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">第二阶段仍然通过审批弹窗落地，explain 与 diagnostics 也会在这里展示。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境召回参数</div><div class="stx-ui-item-desc">控制 dream recent / mid / deep 三段召回与送模上下文裁剪。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_CONTEXT_MAX_CHARS_ID}">梦境上下文最大字符数</label>${numberField(DREAM_CONTEXT_MAX_CHARS_ID,1000,30000,200)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_RECENT_TOPK_ID}">recent TopK</label>${numberField(DREAM_RECENT_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MID_TOPK_ID}">mid TopK</label>${numberField(DREAM_MID_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_DEEP_TOPK_ID}">deep TopK</label>${numberField(DREAM_DEEP_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_FUSED_MAX_ITEMS_ID}">融合结果上限</label>${numberField(DREAM_FUSED_MAX_ITEMS_ID,1,60,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_STYLE_PRESET_ID}">梦境风格预设</label><input id="${DREAM_STYLE_PRESET_ID}" class="stx-ui-input" type="text" placeholder="reflective"></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用第二阶段 Wave Recall</div><div class="stx-ui-item-desc">启用后使用 DreamWave 第二阶段的多波纹召回和融合排序。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WAVE_ENABLED_ID, '启用第二阶段 Wave Recall')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境图激活</div><div class="stx-ui-item-desc">构建 session 级神经图，为 recall 提供桥接节点与 activation 分。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_GRAPH_ENABLED_ID, '启用梦境图激活')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用新颖度加权</div><div class="stx-ui-item-desc">对深层老记忆做轻量提升，并配合重复惩罚抑制模板化召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_NOVELTY_ENABLED_ID, '启用新颖度加权')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保存 diagnostics / graph 快照</div><div class="stx-ui-item-desc">会把 wave 输出、融合诊断和图快照持久化，并显示在审批窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_DIAGNOSTICS_ENABLED_ID, '保存 diagnostics / graph 快照')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第二阶段参数</div><div class="stx-ui-item-desc">控制 wave、graph、novelty 与 repetition penalty 的强度。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_RECENT_TOPK_ID}">wave recent TopK</label>${numberField(DREAM_WAVE_RECENT_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_MID_TOPK_ID}">wave mid TopK</label>${numberField(DREAM_WAVE_MID_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_DEEP_TOPK_ID}">wave deep TopK</label>${numberField(DREAM_WAVE_DEEP_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_FUSION_TOPK_ID}">wave 融合上限</label>${numberField(DREAM_WAVE_FUSION_TOPK_ID,1,60,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_GRAPH_EXPAND_DEPTH_ID}">graph 扩展深度</label>${numberField(DREAM_GRAPH_EXPAND_DEPTH_ID,0,3,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_NOVELTY_WEIGHT_ID}">新颖度权重</label>${numberField(DREAM_NOVELTY_WEIGHT_ID,0,1,0.05)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_REPETITION_PENALTY_WEIGHT_ID}">重复惩罚权重</label>${numberField(DREAM_REPETITION_PENALTY_WEIGHT_ID,0,1,0.05)}</div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Dream Scheduler</div><div class="stx-ui-item-desc">允许在 generation_ended 和 idle 条件满足时自动排队做梦，默认关闭以便先半自动观察。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_ENABLED_ID, '启用 Dream Scheduler')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许 generation_ended 触发</div><div class="stx-ui-item-desc">回复完成后做轻量资格判断，满足条件时把 dream 放入后台队列，不阻塞当前对话。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, '允许 generation_ended 触发')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许 idle 触发</div><div class="stx-ui-item-desc">当前聊天长时间无操作时允许入梦，适合作为夜间维护链的低优先入口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_IDLE_TRIGGER_ID, '允许 idle 触发')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第三阶段调度与维护参数</div><div class="stx-ui-item-desc">控制 cooldown、每日次数、idle 判定，以及 maintenance / quality / rollback 的行为。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_COOLDOWN_ID}">scheduler cooldown 分钟</label>${numberField(DREAM_SCHEDULER_COOLDOWN_ID,1,1440,5)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_DAILY_MAX_ID}">每日最大自动 dream 次数</label>${numberField(DREAM_SCHEDULER_DAILY_MAX_ID,1,24,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_IDLE_MINUTES_ID}">idle 触发分钟数</label>${numberField(DREAM_SCHEDULER_IDLE_MINUTES_ID,1,720,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MAINTENANCE_MAX_PROPOSALS_ID}">每轮 maintenance proposal 上限</label>${numberField(DREAM_MAINTENANCE_MAX_PROPOSALS_ID,1,20,1)}</div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦后整理</div><div class="stx-ui-item-desc">dream 完成后生成压缩、关系强化、shadow 调整与 summary candidate 提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_MAINTENANCE_ENABLED_ID, '启用梦后整理')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用质量守卫</div><div class="stx-ui-item-desc">检查 explain 完整度、重复 mutation、硬事实风险与幻觉倾向。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_QUALITY_GUARD_ENABLED_ID, '启用质量守卫')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动应用低风险 maintenance</div><div class="stx-ui-item-desc">仅对高置信低风险 maintenance proposal 自动落地，dream mutation 本身仍保持审批边界。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_APPLY_LOW_RISK_ID, '自动应用低风险 maintenance')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Dream Workbench</div><div class="stx-ui-item-desc">在统一工作台提供 Dream 入口，查看历史 session、proposal、quality 和 rollback。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WORKBENCH_ENABLED_ID, '启用 Dream Workbench')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Dream Rollback</div><div class="stx-ui-item-desc">允许按 dreamId 回滚已应用的梦境影响，作为第三阶段自动化的安全阀。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ROLLBACK_ENABLED_ID, '启用 Dream Rollback')}</div></div>
             ${divider('AI 总结')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动总结触发</div><div class="stx-ui-item-desc">到达阈值后自动运行 AI 总结，关闭后只保留手动触发。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_AUTO_TRIGGER_ID, '启用自动总结触发')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用总结进度悬浮框</div><div class="stx-ui-item-desc">显示距离下次自动总结还差多少楼层，并在即将触发时给出提示。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_PROGRESS_OVERLAY_ID, '启用总结进度悬浮框')}</div></div>
@@ -354,6 +425,38 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [TOOLBAR_QUICK_ACTIONS_ID, settings.toolbarQuickActionsEnabled],
         [COLD_START_ENABLED_ID, settings.coldStartEnabled],
         [TAKEOVER_ENABLED_ID, settings.takeoverEnabled],
+        [DREAM_ENABLED_ID, settings.dreamEnabled],
+        [DREAM_AUTO_TRIGGER_ID, settings.dreamAutoTriggerEnabled],
+        [DREAM_REQUIRE_APPROVAL_ID, settings.dreamRequireApproval],
+        [DREAM_CONTEXT_MAX_CHARS_ID, String(settings.dreamContextMaxChars)],
+        [DREAM_RECENT_TOPK_ID, String(settings.dreamRecentTopK)],
+        [DREAM_MID_TOPK_ID, String(settings.dreamMidTopK)],
+        [DREAM_DEEP_TOPK_ID, String(settings.dreamDeepTopK)],
+        [DREAM_FUSED_MAX_ITEMS_ID, String(settings.dreamFusedMaxItems)],
+        [DREAM_STYLE_PRESET_ID, settings.dreamStylePreset],
+        [DREAM_WAVE_ENABLED_ID, settings.dreamWaveEnabled],
+        [DREAM_WAVE_RECENT_TOPK_ID, String(settings.dreamWaveRecentTopK)],
+        [DREAM_WAVE_MID_TOPK_ID, String(settings.dreamWaveMidTopK)],
+        [DREAM_WAVE_DEEP_TOPK_ID, String(settings.dreamWaveDeepTopK)],
+        [DREAM_WAVE_FUSION_TOPK_ID, String(settings.dreamWaveFusionTopK)],
+        [DREAM_GRAPH_ENABLED_ID, settings.dreamGraphEnabled],
+        [DREAM_GRAPH_EXPAND_DEPTH_ID, String(settings.dreamGraphExpandDepth)],
+        [DREAM_NOVELTY_ENABLED_ID, settings.dreamNoveltyEnabled],
+        [DREAM_NOVELTY_WEIGHT_ID, String(settings.dreamNoveltyWeight)],
+        [DREAM_REPETITION_PENALTY_WEIGHT_ID, String(settings.dreamRepetitionPenaltyWeight)],
+        [DREAM_DIAGNOSTICS_ENABLED_ID, settings.dreamDiagnosticsEnabled],
+        [DREAM_SCHEDULER_ENABLED_ID, settings.dreamSchedulerEnabled],
+        [DREAM_SCHEDULER_COOLDOWN_ID, String(settings.dreamSchedulerCooldownMinutes)],
+        [DREAM_SCHEDULER_DAILY_MAX_ID, String(settings.dreamSchedulerDailyMaxRuns)],
+        [DREAM_SCHEDULER_IDLE_MINUTES_ID, String(settings.dreamSchedulerIdleMinutes)],
+        [DREAM_SCHEDULER_GENERATION_TRIGGER_ID, settings.dreamSchedulerAllowGenerationEndedTrigger],
+        [DREAM_SCHEDULER_IDLE_TRIGGER_ID, settings.dreamSchedulerAllowIdleTrigger],
+        [DREAM_MAINTENANCE_ENABLED_ID, settings.dreamMaintenanceEnabled],
+        [DREAM_MAINTENANCE_MAX_PROPOSALS_ID, String(settings.dreamMaintenanceMaxProposalsPerRun)],
+        [DREAM_QUALITY_GUARD_ENABLED_ID, settings.dreamQualityGuardEnabled],
+        [DREAM_AUTO_APPLY_LOW_RISK_ID, settings.dreamAutoApplyLowRiskMaintenance],
+        [DREAM_WORKBENCH_ENABLED_ID, settings.dreamWorkbenchEnabled],
+        [DREAM_ROLLBACK_ENABLED_ID, settings.dreamRollbackEnabled],
         [SUMMARY_AUTO_TRIGGER_ID, settings.summaryAutoTriggerEnabled],
         [SUMMARY_PROGRESS_OVERLAY_ID, settings.summaryProgressOverlayEnabled],
         [SUMMARY_INTERVAL_ID, String(settings.summaryIntervalFloors)],
@@ -443,6 +546,38 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         enabled: checked(ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.enabled),
         coldStartEnabled: checked(COLD_START_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.coldStartEnabled),
         takeoverEnabled: checked(TAKEOVER_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverEnabled),
+        dreamEnabled: checked(DREAM_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamEnabled),
+        dreamAutoTriggerEnabled: checked(DREAM_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamAutoTriggerEnabled),
+        dreamRequireApproval: checked(DREAM_REQUIRE_APPROVAL_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRequireApproval),
+        dreamContextMaxChars: Number(text(DREAM_CONTEXT_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamContextMaxChars))),
+        dreamRecentTopK: Number(text(DREAM_RECENT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamRecentTopK))),
+        dreamMidTopK: Number(text(DREAM_MID_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamMidTopK))),
+        dreamDeepTopK: Number(text(DREAM_DEEP_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamDeepTopK))),
+        dreamFusedMaxItems: Number(text(DREAM_FUSED_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamFusedMaxItems))),
+        dreamStylePreset: text(DREAM_STYLE_PRESET_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset),
+        dreamWaveEnabled: checked(DREAM_WAVE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamWaveEnabled),
+        dreamWaveRecentTopK: Number(text(DREAM_WAVE_RECENT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveRecentTopK))),
+        dreamWaveMidTopK: Number(text(DREAM_WAVE_MID_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveMidTopK))),
+        dreamWaveDeepTopK: Number(text(DREAM_WAVE_DEEP_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveDeepTopK))),
+        dreamWaveFusionTopK: Number(text(DREAM_WAVE_FUSION_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveFusionTopK))),
+        dreamGraphEnabled: checked(DREAM_GRAPH_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamGraphEnabled),
+        dreamGraphExpandDepth: Number(text(DREAM_GRAPH_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamGraphExpandDepth))),
+        dreamNoveltyEnabled: checked(DREAM_NOVELTY_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamNoveltyEnabled),
+        dreamNoveltyWeight: Number(text(DREAM_NOVELTY_WEIGHT_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamNoveltyWeight))),
+        dreamRepetitionPenaltyWeight: Number(text(DREAM_REPETITION_PENALTY_WEIGHT_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamRepetitionPenaltyWeight))),
+        dreamDiagnosticsEnabled: checked(DREAM_DIAGNOSTICS_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamDiagnosticsEnabled),
+        dreamSchedulerEnabled: checked(DREAM_SCHEDULER_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerEnabled),
+        dreamSchedulerCooldownMinutes: Number(text(DREAM_SCHEDULER_COOLDOWN_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerCooldownMinutes))),
+        dreamSchedulerDailyMaxRuns: Number(text(DREAM_SCHEDULER_DAILY_MAX_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerDailyMaxRuns))),
+        dreamSchedulerIdleMinutes: Number(text(DREAM_SCHEDULER_IDLE_MINUTES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerIdleMinutes))),
+        dreamSchedulerAllowGenerationEndedTrigger: checked(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerAllowGenerationEndedTrigger),
+        dreamSchedulerAllowIdleTrigger: checked(DREAM_SCHEDULER_IDLE_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerAllowIdleTrigger),
+        dreamMaintenanceEnabled: checked(DREAM_MAINTENANCE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamMaintenanceEnabled),
+        dreamMaintenanceMaxProposalsPerRun: Number(text(DREAM_MAINTENANCE_MAX_PROPOSALS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamMaintenanceMaxProposalsPerRun))),
+        dreamQualityGuardEnabled: checked(DREAM_QUALITY_GUARD_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamQualityGuardEnabled),
+        dreamAutoApplyLowRiskMaintenance: checked(DREAM_AUTO_APPLY_LOW_RISK_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamAutoApplyLowRiskMaintenance),
+        dreamWorkbenchEnabled: checked(DREAM_WORKBENCH_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamWorkbenchEnabled),
+        dreamRollbackEnabled: checked(DREAM_ROLLBACK_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRollbackEnabled),
         toolbarQuickActionsEnabled: checked(TOOLBAR_QUICK_ACTIONS_ID, DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled),
         injectionPromptEnabled: checked(INJECTION_PROMPT_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled),
         injectionPreviewEnabled: checked(INJECTION_PREVIEW_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled),

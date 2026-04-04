@@ -7,6 +7,38 @@ export type MemoryOSSettings = {
     coldStartEnabled: boolean;
     takeoverEnabled: boolean;
     toolbarQuickActionsEnabled: boolean;
+    dreamEnabled: boolean;
+    dreamAutoTriggerEnabled: boolean;
+    dreamContextMaxChars: number;
+    dreamRecentTopK: number;
+    dreamMidTopK: number;
+    dreamDeepTopK: number;
+    dreamFusedMaxItems: number;
+    dreamRequireApproval: boolean;
+    dreamStylePreset: string;
+    dreamWaveEnabled: boolean;
+    dreamWaveRecentTopK: number;
+    dreamWaveMidTopK: number;
+    dreamWaveDeepTopK: number;
+    dreamWaveFusionTopK: number;
+    dreamGraphEnabled: boolean;
+    dreamGraphExpandDepth: number;
+    dreamNoveltyEnabled: boolean;
+    dreamNoveltyWeight: number;
+    dreamRepetitionPenaltyWeight: number;
+    dreamDiagnosticsEnabled: boolean;
+    dreamSchedulerEnabled: boolean;
+    dreamSchedulerCooldownMinutes: number;
+    dreamSchedulerDailyMaxRuns: number;
+    dreamSchedulerIdleMinutes: number;
+    dreamSchedulerAllowGenerationEndedTrigger: boolean;
+    dreamSchedulerAllowIdleTrigger: boolean;
+    dreamMaintenanceEnabled: boolean;
+    dreamMaintenanceMaxProposalsPerRun: number;
+    dreamQualityGuardEnabled: boolean;
+    dreamAutoApplyLowRiskMaintenance: boolean;
+    dreamWorkbenchEnabled: boolean;
+    dreamRollbackEnabled: boolean;
     contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
@@ -111,6 +143,38 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     coldStartEnabled: true,
     takeoverEnabled: true,
     toolbarQuickActionsEnabled: true,
+    dreamEnabled: true,
+    dreamAutoTriggerEnabled: false,
+    dreamContextMaxChars: 6000,
+    dreamRecentTopK: 10,
+    dreamMidTopK: 8,
+    dreamDeepTopK: 6,
+    dreamFusedMaxItems: 18,
+    dreamRequireApproval: true,
+    dreamStylePreset: 'reflective',
+    dreamWaveEnabled: true,
+    dreamWaveRecentTopK: 12,
+    dreamWaveMidTopK: 10,
+    dreamWaveDeepTopK: 8,
+    dreamWaveFusionTopK: 18,
+    dreamGraphEnabled: true,
+    dreamGraphExpandDepth: 1,
+    dreamNoveltyEnabled: true,
+    dreamNoveltyWeight: 0.2,
+    dreamRepetitionPenaltyWeight: 0.15,
+    dreamDiagnosticsEnabled: true,
+    dreamSchedulerEnabled: false,
+    dreamSchedulerCooldownMinutes: 60,
+    dreamSchedulerDailyMaxRuns: 3,
+    dreamSchedulerIdleMinutes: 20,
+    dreamSchedulerAllowGenerationEndedTrigger: true,
+    dreamSchedulerAllowIdleTrigger: true,
+    dreamMaintenanceEnabled: true,
+    dreamMaintenanceMaxProposalsPerRun: 6,
+    dreamQualityGuardEnabled: true,
+    dreamAutoApplyLowRiskMaintenance: false,
+    dreamWorkbenchEnabled: true,
+    dreamRollbackEnabled: true,
     contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
@@ -202,6 +266,70 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     const contextMaxTokens: number = Math.max(
         200,
         Math.min(10000, Number(candidate.contextMaxTokens) || DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
+    );
+    const dreamContextMaxChars: number = Math.max(
+        1000,
+        Math.min(30000, Math.trunc(Number(candidate.dreamContextMaxChars) || DEFAULT_MEMORY_OS_SETTINGS.dreamContextMaxChars)),
+    );
+    const dreamRecentTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamRecentTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamRecentTopK)),
+    );
+    const dreamMidTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamMidTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamMidTopK)),
+    );
+    const dreamDeepTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamDeepTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamDeepTopK)),
+    );
+    const dreamFusedMaxItems: number = Math.max(
+        1,
+        Math.min(60, Math.trunc(Number(candidate.dreamFusedMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.dreamFusedMaxItems)),
+    );
+    const dreamWaveRecentTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamWaveRecentTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamWaveRecentTopK)),
+    );
+    const dreamWaveMidTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamWaveMidTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamWaveMidTopK)),
+    );
+    const dreamWaveDeepTopK: number = Math.max(
+        1,
+        Math.min(30, Math.trunc(Number(candidate.dreamWaveDeepTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamWaveDeepTopK)),
+    );
+    const dreamWaveFusionTopK: number = Math.max(
+        1,
+        Math.min(60, Math.trunc(Number(candidate.dreamWaveFusionTopK) || DEFAULT_MEMORY_OS_SETTINGS.dreamWaveFusionTopK)),
+    );
+    const dreamGraphExpandDepth: number = Math.max(
+        0,
+        Math.min(3, Math.trunc(Number(candidate.dreamGraphExpandDepth) || DEFAULT_MEMORY_OS_SETTINGS.dreamGraphExpandDepth)),
+    );
+    const dreamNoveltyWeight: number = clampUnitInterval(
+        candidate.dreamNoveltyWeight,
+        DEFAULT_MEMORY_OS_SETTINGS.dreamNoveltyWeight,
+    );
+    const dreamRepetitionPenaltyWeight: number = clampUnitInterval(
+        candidate.dreamRepetitionPenaltyWeight,
+        DEFAULT_MEMORY_OS_SETTINGS.dreamRepetitionPenaltyWeight,
+    );
+    const dreamSchedulerCooldownMinutes: number = Math.max(
+        1,
+        Math.min(1440, Math.trunc(Number(candidate.dreamSchedulerCooldownMinutes) || DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerCooldownMinutes)),
+    );
+    const dreamSchedulerDailyMaxRuns: number = Math.max(
+        1,
+        Math.min(24, Math.trunc(Number(candidate.dreamSchedulerDailyMaxRuns) || DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerDailyMaxRuns)),
+    );
+    const dreamSchedulerIdleMinutes: number = Math.max(
+        1,
+        Math.min(720, Math.trunc(Number(candidate.dreamSchedulerIdleMinutes) || DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerIdleMinutes)),
+    );
+    const dreamMaintenanceMaxProposalsPerRun: number = Math.max(
+        1,
+        Math.min(20, Math.trunc(Number(candidate.dreamMaintenanceMaxProposalsPerRun) || DEFAULT_MEMORY_OS_SETTINGS.dreamMaintenanceMaxProposalsPerRun)),
     );
     const summaryIntervalFloors: number = Math.max(
         1,
@@ -371,6 +499,38 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         coldStartEnabled: candidate.coldStartEnabled !== false,
         takeoverEnabled: candidate.takeoverEnabled !== false,
         toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,
+        dreamEnabled: candidate.dreamEnabled !== false,
+        dreamAutoTriggerEnabled: candidate.dreamAutoTriggerEnabled === true,
+        dreamContextMaxChars,
+        dreamRecentTopK,
+        dreamMidTopK,
+        dreamDeepTopK,
+        dreamFusedMaxItems,
+        dreamRequireApproval: candidate.dreamRequireApproval !== false,
+        dreamStylePreset: String(candidate.dreamStylePreset ?? DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset,
+        dreamWaveEnabled: candidate.dreamWaveEnabled !== false,
+        dreamWaveRecentTopK,
+        dreamWaveMidTopK,
+        dreamWaveDeepTopK,
+        dreamWaveFusionTopK,
+        dreamGraphEnabled: candidate.dreamGraphEnabled !== false,
+        dreamGraphExpandDepth,
+        dreamNoveltyEnabled: candidate.dreamNoveltyEnabled !== false,
+        dreamNoveltyWeight,
+        dreamRepetitionPenaltyWeight,
+        dreamDiagnosticsEnabled: candidate.dreamDiagnosticsEnabled !== false,
+        dreamSchedulerEnabled: candidate.dreamSchedulerEnabled === true,
+        dreamSchedulerCooldownMinutes,
+        dreamSchedulerDailyMaxRuns,
+        dreamSchedulerIdleMinutes,
+        dreamSchedulerAllowGenerationEndedTrigger: candidate.dreamSchedulerAllowGenerationEndedTrigger !== false,
+        dreamSchedulerAllowIdleTrigger: candidate.dreamSchedulerAllowIdleTrigger !== false,
+        dreamMaintenanceEnabled: candidate.dreamMaintenanceEnabled !== false,
+        dreamMaintenanceMaxProposalsPerRun,
+        dreamQualityGuardEnabled: candidate.dreamQualityGuardEnabled !== false,
+        dreamAutoApplyLowRiskMaintenance: candidate.dreamAutoApplyLowRiskMaintenance === true,
+        dreamWorkbenchEnabled: candidate.dreamWorkbenchEnabled !== false,
+        dreamRollbackEnabled: candidate.dreamRollbackEnabled !== false,
         contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,

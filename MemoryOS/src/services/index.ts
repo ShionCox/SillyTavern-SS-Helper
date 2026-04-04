@@ -19,6 +19,27 @@ export {
 } from './query-context-builder';
 export { GraphService } from './graph-service';
 export { BindingResolutionService } from './binding-resolution-service';
+export { DreamingService } from './dreaming-service';
+export { DreamSessionRepository } from './dream-session-repository';
+export { DreamMutationApplier } from './dream-mutation-applier';
+export { DreamWaveRecallService } from './dream-wave-recall-service';
+export { DreamRecallDiagnosticsService } from './dream-recall-diagnostics-service';
+export type {
+    DreamSessionMetaRecord,
+    DreamSessionRecallRecord,
+    DreamSessionOutputRecord,
+    DreamSessionApprovalRecord,
+    DreamRollbackSnapshotRecord,
+    DreamMutationProposal,
+    DreamRecallHit,
+    DreamReviewDecision,
+    DreamSessionRecord,
+    DreamSessionDiagnosticsRecord,
+    DreamSessionGraphSnapshotRecord,
+    DreamMutationExplain,
+    DreamWaveOutput,
+    DreamFusionResult,
+} from './dream-types';
 
 // ─── 向量系统 ───
 export { EmbeddingService } from './embedding-service';

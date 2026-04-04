@@ -10,7 +10,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 6,
+        registrationVersion: 8,
         tasks: [
             {
                 taskKey: 'memory_embedding',
@@ -56,6 +56,22 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
                 requiredCapabilities: ['chat', 'json'],
                 maxTokens: 8192,
                 description: '增量总结变更输出',
+                backgroundEligible: false,
+            },
+            {
+                taskKey: 'memory_dream_phase1',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '梦境第一阶段结构化输出',
+                backgroundEligible: false,
+            },
+            {
+                taskKey: 'memory_dream_phase2',
+                taskKind: 'generation',
+                requiredCapabilities: ['chat', 'json'],
+                maxTokens: 8192,
+                description: '梦境第二阶段结构化输出',
                 backgroundEligible: false,
             },
             {

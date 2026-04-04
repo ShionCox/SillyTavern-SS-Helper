@@ -63,6 +63,15 @@ import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
+import { DreamingService } from '../services/dreaming-service';
+import { DreamRollbackService } from '../services/dream-rollback-service';
+import type {
+    DreamMaintenanceProposalRecord,
+    DreamQualityReport,
+    DreamSchedulerStateRecord,
+    DreamSessionRecord,
+    DreamTriggerReason,
+} from '../services/dream-types';
 import { getSharedEmbeddingService, getSharedRetrievalService, getSharedVectorStore, isVectorRuntimeReady } from '../runtime/vector-runtime';
 import { rebuildAllEmbeddings, rebuildAllVectorDocuments, onActorSaved, onEntrySaved, onRelationshipSaved, onSummarySaved } from '../services/vector-index-service';
 import {
@@ -98,6 +107,7 @@ import type { RetrievalResultItem } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetrievalOutputDiagnostics } from '../memory-retrieval/retrieval-output';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
+import { openDreamReviewDialog } from '../ui/dream-review-dialog';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
@@ -223,6 +233,17 @@ export interface MemoryTakeoverExecutionResult {
 }
 
 /**
+ * 功能：定义梦境执行结果。
+ */
+export interface MemoryDreamExecutionResult {
+    ok: boolean;
+    dreamId?: string;
+    status?: 'generated' | 'approved' | 'rejected' | 'deferred' | 'failed';
+    reasonCode?: string;
+    errorMessage?: string;
+}
+
+/**
  * 功能：定义向量运行时状态快照。
  */
 export interface MemoryVectorRuntimeStatus {
@@ -320,6 +341,8 @@ export class MemorySDKImpl {
         candidates: ColdStartCandidate[];
         sourceBundle: ColdStartSourceBundle;
     } | null;
+    private readonly dreamingService: DreamingService;
+    private readonly dreamRollbackService: DreamRollbackService;
 
     public readonly template: { destroy: () => void };
     public readonly events: {
@@ -368,12 +391,17 @@ export class MemorySDKImpl {
             options?: { targetChatKey?: string; skipClear?: boolean },
         ) => Promise<ImportMemoryPromptTestBundleResult>;
         rebuildLogicalChatView: () => Promise<void>;
+        startDreamSession: (reason: DreamTriggerReason) => Promise<MemoryDreamExecutionResult>;
         primeColdStartPrompt: (
             _reason?: string,
             selection?: MemoryColdStartWorldbookSelection,
         ) => Promise<MemoryColdStartExecutionResult>;
         confirmColdStartCandidates: (selectedCandidateIds: string[]) => Promise<MemoryColdStartExecutionResult>;
         markColdStartDismissed: () => Promise<void>;
+        rollbackDreamSession: (dreamId: string) => Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }>;
+        rollbackDreamMutation: (dreamId: string, mutationId: string) => Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }>;
+        applyDreamMaintenanceProposal: (proposalId: string) => Promise<{ ok: boolean; reasonCode?: string }>;
+        rejectDreamMaintenanceProposal: (proposalId: string) => Promise<{ ok: boolean; reasonCode?: string }>;
         flush: () => Promise<void>;
         destroy: () => Promise<void>;
         restoreArchivedMemoryChat: () => Promise<void>;
@@ -427,6 +455,11 @@ export class MemorySDKImpl {
              clearAllVectorData: () => Promise<void>;
              reindexVectorDocument: (vectorDocId: string) => Promise<void>;
              removeVectorDocument: (vectorDocId: string) => Promise<void>;
+             listDreamSessions: (limit?: number) => Promise<DreamSessionRecord[]>;
+             getDreamSessionById: (dreamId: string) => Promise<DreamSessionRecord>;
+             listDreamMaintenanceProposals: (limit?: number) => Promise<DreamMaintenanceProposalRecord[]>;
+             listDreamQualityReports: (limit?: number) => Promise<DreamQualityReport[]>;
+             getDreamSchedulerState: () => Promise<DreamSchedulerStateRecord | null>;
          };
         prompts: {
             preview: (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => ReturnType<PromptAssemblyService['buildPromptAssembly']>;
@@ -446,6 +479,18 @@ export class MemorySDKImpl {
         this.promptAssemblyService = new PromptAssemblyService(this.chatKey_, this.entryRepository, this.compareKeyService);
         this.summaryService = new SummaryService(this.chatKey_, this.entryRepository);
         this.takeoverService = new TakeoverService(this.chatKey_);
+        this.dreamingService = new DreamingService({
+            chatKey: this.chatKey_,
+            repository: this.entryRepository,
+            getLLM: () => readMemoryLLMApi(),
+            pluginId: MEMORY_OS_PLUGIN_ID,
+            readRecentMessages: async () => this.readSummaryMessagesForDream(),
+            openReviewDialog: openDreamReviewDialog,
+        });
+        this.dreamRollbackService = new DreamRollbackService({
+            chatKey: this.chatKey_,
+            repository: this.entryRepository,
+        });
         this.promptReadyCaptureSnapshot = null;
         this.promptReadyRunResultSnapshot = null;
         this.latestRecallExplanation = null;
@@ -802,6 +847,68 @@ export class MemorySDKImpl {
             rebuildLogicalChatView: async (): Promise<void> => {
                 return;
             },
+            startDreamSession: async (reason: DreamTriggerReason): Promise<MemoryDreamExecutionResult> => {
+                this.tryRegisterLLMTasks();
+                const result = await this.dreamingService.startDreamSession(reason);
+                if (result.ok && result.status === 'approved') {
+                    await this.refreshVectorIndexAfterPipeline('梦境审批写回');
+                }
+                return result;
+            },
+            rollbackDreamSession: async (dreamId: string): Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }> => {
+                const result = await this.dreamRollbackService.rollbackDreamSession(dreamId);
+                if (result.ok) {
+                    await this.refreshVectorIndexAfterPipeline('梦境回滚');
+                }
+                return result;
+            },
+            rollbackDreamMutation: async (dreamId: string, mutationId: string): Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }> => {
+                const result = await this.dreamRollbackService.rollbackDreamMutation(dreamId, mutationId);
+                if (result.ok) {
+                    await this.refreshVectorIndexAfterPipeline('梦境单条 mutation 回滚');
+                }
+                return result;
+            },
+            applyDreamMaintenanceProposal: async (proposalId: string): Promise<{ ok: boolean; reasonCode?: string }> => {
+                const { DreamSessionRepository } = await import('../services/dream-session-repository');
+                const repository = new DreamSessionRepository(this.chatKey_);
+                const proposals = await repository.listDreamMaintenanceProposals(100);
+                const target = proposals.find((p) => p.proposalId === proposalId);
+                if (!target) {
+                    return { ok: false, reasonCode: 'proposal_not_found' };
+                }
+                if (target.status !== 'pending') {
+                    return { ok: false, reasonCode: 'proposal_not_pending' };
+                }
+                const { DreamMaintenancePlanner } = await import('../services/dream-maintenance-planner');
+                const planner = new DreamMaintenancePlanner({
+                    chatKey: this.chatKey_,
+                    repository: this.entryRepository,
+                });
+                const result = await planner.applyDreamMaintenanceProposal(target);
+                if (result.status === 'applied') {
+                    await this.refreshVectorIndexAfterPipeline('维护提案应用');
+                }
+                return { ok: result.status === 'applied', reasonCode: result.status !== 'applied' ? 'apply_failed' : undefined };
+            },
+            rejectDreamMaintenanceProposal: async (proposalId: string): Promise<{ ok: boolean; reasonCode?: string }> => {
+                const { DreamSessionRepository } = await import('../services/dream-session-repository');
+                const repository = new DreamSessionRepository(this.chatKey_);
+                const proposals = await repository.listDreamMaintenanceProposals(100);
+                const target = proposals.find((p) => p.proposalId === proposalId);
+                if (!target) {
+                    return { ok: false, reasonCode: 'proposal_not_found' };
+                }
+                if (target.status !== 'pending') {
+                    return { ok: false, reasonCode: 'proposal_not_pending' };
+                }
+                await repository.saveDreamMaintenanceProposal({
+                    ...target,
+                    status: 'rejected',
+                    updatedAt: Date.now(),
+                });
+                return { ok: true };
+            },
             primeColdStartPrompt: async (
                 _reason?: string,
                 selection?: MemoryColdStartWorldbookSelection,
@@ -1026,6 +1133,27 @@ export class MemorySDKImpl {
                 },
                 removeVectorDocument: async (vectorDocId: string): Promise<void> => {
                     await this.removeVectorDocument(vectorDocId);
+                },
+                listDreamSessions: async (limit?: number): Promise<DreamSessionRecord[]> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    const metas = await repository.listDreamSessionMetas(limit ?? 20);
+                    return Promise.all(metas.map((meta) => repository.getDreamSessionById(meta.dreamId)));
+                },
+                getDreamSessionById: async (dreamId: string): Promise<DreamSessionRecord> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    return repository.getDreamSessionById(dreamId);
+                },
+                listDreamMaintenanceProposals: async (limit?: number): Promise<DreamMaintenanceProposalRecord[]> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    return repository.listDreamMaintenanceProposals(limit ?? 40);
+                },
+                listDreamQualityReports: async (limit?: number): Promise<DreamQualityReport[]> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    return repository.listDreamQualityReports(limit ?? 20);
+                },
+                getDreamSchedulerState: async (): Promise<DreamSchedulerStateRecord | null> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    return repository.getDreamSchedulerState();
                 },
             },
             prompts: {
@@ -3944,6 +4072,19 @@ export class MemorySDKImpl {
                 };
             })
             .filter((item: { content?: string }): boolean => Boolean(String(item.content ?? '').trim()));
+    }
+
+    /**
+     * 功能：读取 dream 阶段使用的最近消息窗口。
+     * @returns 最近消息列表。
+     */
+    private async readSummaryMessagesForDream(): Promise<Array<{ role?: string; content?: string; name?: string; turnIndex?: number }>> {
+        const hostMessages = this.readActiveHostChatMessages();
+        if (hostMessages.length > 0) {
+            return hostMessages.slice(-12);
+        }
+        const currentFloorCount = await this.readCurrentSummaryFloorCount();
+        return this.readSummaryMessagesFromEvents(currentFloorCount, 12);
     }
 
     /**

@@ -168,6 +168,16 @@ export type MemoryTakeoverRecordCollection =
     | 'comparekey_index';
 
 /**
+ * 功能：定义梦境记录集合名称。
+ */
+export type MemoryDreamRecordCollection =
+    | 'dream_session_meta'
+    | 'dream_session_recall'
+    | 'dream_session_output'
+    | 'dream_session_approval'
+    | 'dream_session_rollback';
+
+/**
  * 功能：定义 compareKey 索引记录。
  */
 export interface MemoryCompareKeyIndexRecord {
@@ -560,6 +570,47 @@ export async function loadMemoryTakeoverLogs(chatKey: string, limit: number = 12
         limit,
     });
     return rows.map((row: DBChatPluginRecord): MemoryTakeoverLogRecord => row.payload as unknown as MemoryTakeoverLogRecord);
+}
+
+/**
+ * 功能：写入单条梦境记录。
+ * @param chatKey 聊天键。
+ * @param collection 梦境集合名。
+ * @param recordId 记录标识。
+ * @param payload 记录载荷。
+ * @param ts 记录时间戳。
+ * @returns 异步完成。
+ */
+export async function saveMemoryDreamRecord(
+    chatKey: string,
+    collection: MemoryDreamRecordCollection,
+    recordId: string,
+    payload: Record<string, unknown>,
+    ts: number = Date.now(),
+): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), collection, {
+        recordId: normalizeText(recordId),
+        payload,
+        ts: Number(ts ?? Date.now()) || Date.now(),
+    });
+}
+
+/**
+ * 功能：读取梦境记录列表。
+ * @param chatKey 聊天键。
+ * @param collection 梦境集合名。
+ * @param limit 返回数量。
+ * @returns 记录列表。
+ */
+export async function loadMemoryDreamRecords(
+    chatKey: string,
+    collection: MemoryDreamRecordCollection,
+    limit: number = 200,
+): Promise<DBChatPluginRecord[]> {
+    return queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), collection, {
+        order: 'desc',
+        limit,
+    });
 }
 
 /**
