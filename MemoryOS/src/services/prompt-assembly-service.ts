@@ -2,9 +2,11 @@ import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../core/actor-key';
 import { buildRelationshipCompareKey } from '../core/compare-key';
 import { CompareKeyService } from '../core/compare-key-service';
+import { projectMemoryRetentionCore, type MemoryRetentionProjection } from '../core/memory-retention-core';
+import { buildMemorySemanticTag, projectMemorySemanticRecord } from '../core/memory-semantic';
 import { getMemoryTrace, recordMemoryDebug } from '../core/debug/memory-retrieval-logger';
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
-import { computeRetentionState } from '../memory-retention';
+import { renderRetentionNarrativePrefix } from '../memory-retention';
 import type { RetrievalCandidate } from '../memory-retrieval';
 import { detectWorldProfile, resolveWorldProfile } from '../memory-world-profile';
 import { EntryRepository } from '../repository/entry-repository';
@@ -161,6 +163,8 @@ export class PromptAssemblyService {
                 injectedCount: visibleContext.diagnostics.totalInjectedCount,
                 estimatedChars: visibleContext.diagnostics.estimatedChars,
                 retentionStageCounts: visibleContext.diagnostics.retentionStageCounts,
+                shadowInjectedCount: visibleContext.diagnostics.shadowInjectedCount,
+                shadowSectionVisible: visibleContext.diagnostics.shadowSectionVisible,
                 matchModeCounts: this.buildPromptMatchModeCounts(selectedEntries, compareKeyIndex),
                 compareKeySchemaVersion: 'v2',
                 timeInjectedCount: visibleContext.diagnostics.timeInjectedCount,
@@ -213,13 +217,22 @@ export class PromptAssemblyService {
             const payload = this.toRecord(entry.detailPayload);
             const bindings = this.normalizeStructuredBindings(payload.bindings);
             const bindingCount = this.countBindings(bindings);
-            const retention = computeRetentionState({
+            const semantic = projectMemorySemanticRecord({
+                entryType: entry.entryType,
+                ongoing: entry.ongoing,
+                detailPayload: entry.detailPayload,
+            });
+            const retention = projectMemoryRetentionCore({
+                forgotten: row.forgotten,
                 memoryPercent: row.memoryPercent,
+                title: entry.title,
+                summary: entry.summary || entry.detail,
                 importance: this.resolveEntryImportance(entry),
                 rehearsalCount: this.resolveRehearsalCount(row),
                 recencyHours: this.resolveRecencyHours(entry.updatedAt),
                 actorMemoryStat: actorMap.get(row.actorKey)?.memoryStat ?? row.memoryPercent,
                 relationSensitivity: this.resolveRelationSensitivity(entry),
+                semantic,
             });
             const promptTimeMeta = entry.timeContext
                 ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
@@ -230,13 +243,18 @@ export class PromptAssemblyService {
                 entryId: entry.entryId,
                 title: entry.title,
                 entryType: entry.entryType,
-                memoryPercent: row.memoryPercent,
-                forgotten: false,
-                renderedText: this.renderRoleEntryText(entry, retention.stage, retention.distortionTemplateId, currentMaxFloor),
+                semantic,
+                retention,
+                forgettingTier: retention.forgottenLevel,
+                shadowTriggered: retention.shadowTriggered || retention.forgottenLevel === 'shadow_forgotten',
+                shadowRecallPenalty: retention.shadowRecallPenalty,
+                memoryPercent: retention.effectiveMemoryPercent,
+                forgotten: row.forgotten,
+                renderedText: this.renderRoleEntryText(entry, retention, currentMaxFloor),
                 promptTimeMeta,
-                retentionStage: retention.stage,
-                retentionReasonCodes: retention.reasonCodes,
-                renderMode: retention.stage,
+                retentionStage: retention.promptRenderStage,
+                retentionReasonCodes: retention.explainReasonCodes,
+                renderMode: retention.promptRenderStage,
                 distortionTemplateId: retention.distortionTemplateId,
                 bindings,
                 bindingDiagnostics: {
@@ -311,16 +329,24 @@ export class PromptAssemblyService {
     ): RetrievalCandidate[] {
         const boundActorMap = new Map<string, string[]>();
         const memoryPercentMap = new Map<string, number>();
+        const retentionMap = new Map<string, MemoryRetentionProjection>();
+        const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
         roleRows.forEach((row: RoleEntryMemory): void => {
-            if (row.forgotten) {
-                return;
-            }
             const list = boundActorMap.get(row.entryId) ?? [];
             if (!list.includes(row.actorKey)) {
                 list.push(row.actorKey);
             }
             boundActorMap.set(row.entryId, list);
-            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, row.memoryPercent));
+            const rowEntry = entryMap.get(row.entryId);
+            const retention = projectMemoryRetentionCore({
+                forgotten: row.forgotten,
+                memoryPercent: row.memoryPercent,
+                title: rowEntry?.title,
+                summary: rowEntry?.summary || rowEntry?.detail,
+            });
+            const currentRetention = retentionMap.get(row.entryId);
+            retentionMap.set(row.entryId, this.resolveEntryLevelRetention(currentRetention, retention));
+            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, retention.effectiveMemoryPercent));
         });
         const actorDisplayNameMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.actorKey, profile.displayName]));
         const actorKeyByDisplayName = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.displayName, profile.actorKey]));
@@ -369,6 +395,25 @@ export class PromptAssemblyService {
                 ...(indexMap.get(entry.entryId)?.matchKeys ?? []),
             ])).filter(Boolean);
             const resolvedCompareKey = indexMap.get(entry.entryId)?.compareKey || this.compareKeyService.buildIndexRecord(entry).compareKey;
+            const semantic = projectMemorySemanticRecord({
+                entryType: entry.entryType,
+                ongoing: entry.ongoing,
+                detailPayload: payload,
+            });
+            const retention = retentionMap.get(entry.entryId) ?? projectMemoryRetentionCore({
+                forgotten: false,
+                memoryPercent: memoryPercentMap.get(entry.entryId) ?? 0,
+                title: entry.title,
+                summary: entry.summary || entry.detail,
+                compareKey: resolvedCompareKey,
+                aliasTexts,
+                actorKeys,
+                relationKeys,
+                participantActorKeys,
+                locationKey: locationKey || bindings.locations[0] || bindings.cities[0] || undefined,
+                worldKeys,
+                semantic,
+            });
             return {
                 candidateId: `prompt:${entry.entryId}`,
                 entryId: entry.entryId,
@@ -393,6 +438,11 @@ export class PromptAssemblyService {
                 injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
                 aliasTexts,
                 detailPayload: payload,
+                semantic,
+                retention,
+                forgettingTier: retention.forgottenLevel,
+                shadowTriggered: retention.shadowTriggered,
+                shadowRecallPenalty: retention.shadowRecallPenalty,
                 ongoing: entry.ongoing,
                 timeContext: entry.timeContext,
                 promptTimeMeta: entry.timeContext
@@ -474,6 +524,32 @@ export class PromptAssemblyService {
     }
 
     /**
+     * 功能：合并条目级遗忘层级，优先保留更“可被召回”的层级。
+     * @param current 当前层级。
+     * @param next 新层级。
+     * @returns 合并结果。
+     */
+    private resolveEntryLevelRetention(
+        current: MemoryRetentionProjection | undefined,
+        next: MemoryRetentionProjection,
+    ): MemoryRetentionProjection {
+        if (!current) {
+            return next;
+        }
+        const order: Record<string, number> = {
+            active: 3,
+            shadow_forgotten: 2,
+            hard_forgotten: 1,
+        };
+        if ((order[next.forgottenLevel] ?? 0) === (order[current.forgottenLevel] ?? 0)) {
+            return next.retentionScore >= current.retentionScore ? next : current;
+        }
+        return (order[next.forgottenLevel] ?? 0) > (order[current.forgottenLevel] ?? 0)
+            ? next
+            : current;
+    }
+
+    /**
      * 功能：按保留阶段渲染角色记忆文本。
      * @param entry 记忆条目
      * @param stage 保留阶段
@@ -482,22 +558,28 @@ export class PromptAssemblyService {
      */
     private renderRoleEntryText(
         entry: MemoryEntry,
-        stage: 'clear' | 'blur' | 'distorted',
-        distortionTemplateId?: string,
+        retention: MemoryRetentionProjection,
         currentMaxFloor: number = 0,
     ): string {
         const baseSummary = entry.summary || entry.detail || '暂无详情';
+        const semanticTag = buildMemorySemanticTag(projectMemorySemanticRecord({
+            entryType: entry.entryType,
+            ongoing: entry.ongoing,
+            detailPayload: entry.detailPayload,
+        }));
+        const semanticPrefix = semanticTag ? `${semanticTag} ` : '';
         const promptTimeMeta = entry.timeContext
             ? buildPromptTimeMeta(entry.timeContext, currentMaxFloor)
             : undefined;
+        const stage = retention.promptRenderStage;
         if (stage === 'clear') {
-            return this.prependPromptTimeHeader(`${entry.title}：${baseSummary}`, promptTimeMeta);
+            return this.prependPromptTimeHeader(`${semanticPrefix}${entry.title}：${baseSummary}`, promptTimeMeta);
         }
         if (stage === 'blur') {
             const shortened = baseSummary.length > 24 ? `${baseSummary.slice(0, 24)}……` : `${baseSummary}（细节已模糊）`;
-            return this.prependPromptTimeHeader(`${entry.title}：${shortened}`, promptTimeMeta);
+            return this.prependPromptTimeHeader(`${semanticPrefix}${entry.title}：${shortened}`, promptTimeMeta);
         }
-        return this.prependPromptTimeHeader(`${entry.title}：${this.renderDistortedSummary(entry, distortionTemplateId)}`, promptTimeMeta);
+        return this.prependPromptTimeHeader(`${semanticPrefix}${entry.title}：${this.renderDistortedSummary(entry, retention.distortionTemplateId)}`, promptTimeMeta);
     }
 
     /**

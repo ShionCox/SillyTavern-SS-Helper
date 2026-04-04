@@ -1,4 +1,5 @@
 import type { RetrievalResultItem } from '../memory-retrieval/types';
+import { resolveSemanticKindLabel, resolveVisibilityScopeLabel } from '../core/memory-semantic';
 import { buildTimeLabel, computeTemporalIntentBoost, resolveQueryTimeIntent } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 
@@ -104,6 +105,19 @@ function buildRerankDocText(item: RetrievalResultItem): string {
     }
     if ((candidate.tags?.length ?? 0) > 0) {
         parts.push(`标签：${candidate.tags?.join('、')}`);
+    }
+    if (candidate.semantic) {
+        parts.push(`公共语义：${resolveSemanticKindLabel(candidate.semantic.semanticKind)}`);
+        parts.push(`可见级别：${resolveVisibilityScopeLabel(candidate.semantic.visibilityScope)}`);
+        if (candidate.semantic.currentState) {
+            parts.push(`当前状态：${candidate.semantic.currentState}`);
+        }
+        if (candidate.semantic.finalOutcome) {
+            parts.push(`最终结果：${candidate.semantic.finalOutcome}`);
+        }
+        if (candidate.semantic.goalOrObjective) {
+            parts.push(`目标：${candidate.semantic.goalOrObjective}`);
+        }
     }
     if (candidate.timeContext) {
         parts.push(`时间：${buildTimeLabel(candidate.timeContext, candidate.timeContext.sequenceTime.lastFloor)}`);

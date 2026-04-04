@@ -3,6 +3,9 @@ import type { RetrievalContextRoute, RetrievalDiagnostics, RetrievalRulePackMode
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetentionStage } from '../memory-retention/retention-types';
 import type { MemoryTimeContext, PromptTimeMeta } from '../memory-time/time-types';
+import type { MemorySemanticProjection } from '../core/memory-semantic';
+import type { MemoryForgettingTier } from '../core/memory-forgetting';
+import type { MemoryRetentionProjection } from '../core/memory-retention-core';
 
 export type MemoryEntryCategory =
     | '世界基础'
@@ -401,6 +404,11 @@ export interface PromptAssemblyRoleEntry {
     entryId: string;
     title: string;
     entryType: string;
+    semantic?: MemorySemanticProjection;
+    retention?: MemoryRetentionProjection;
+    forgettingTier?: MemoryForgettingTier;
+    shadowTriggered?: boolean;
+    shadowRecallPenalty?: number;
     memoryPercent: number;
     forgotten: boolean;
     renderedText: string;
@@ -428,6 +436,8 @@ export interface PromptAssemblyDiagnostics {
     injectedCount: number;
     estimatedChars: number;
     retentionStageCounts: Record<RetentionStage, number>;
+    shadowInjectedCount?: number;
+    shadowSectionVisible?: boolean;
     matchModeCounts?: Record<string, number>;
     compareKeySchemaVersion?: string;
     bindingMatchModeCounts?: Record<string, number>;

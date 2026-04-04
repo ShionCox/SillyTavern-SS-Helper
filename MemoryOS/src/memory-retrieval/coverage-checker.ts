@@ -109,7 +109,7 @@ export function applyCoverageSecondPass(input: {
 
         const scored = facetCandidates.map((candidate: RetrievalCandidate): RetrievalResultItem => {
             const ngram = computeNGramSimilarity(subQuery, `${candidate.title} ${candidate.summary}`);
-            const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
+            const memoryWeight = candidate.retention?.retrievalWeight ?? computeMemoryWeight(candidate.memoryPercent);
             const recencyWeight = computeRecencyWeight(candidate.updatedAt);
             const timeBoost = candidate.timeContext
                 ? Math.max(0, computeTimeBoost(subQuery || query, candidate.timeContext, currentMaxFloor))

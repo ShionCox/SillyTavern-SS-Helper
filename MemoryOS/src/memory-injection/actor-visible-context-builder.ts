@@ -1,4 +1,5 @@
 import type { MemoryEntry, PromptAssemblyRoleEntry } from '../types';
+import { buildMemorySemanticTag, projectMemorySemanticRecord } from '../core/memory-semantic';
 import { type RetentionStage } from '../memory-retention';
 import { renderEventMemoryNarrative } from './narrative-renderer/event-renderer';
 import { renderRelationshipNarrative } from './narrative-renderer/relationship-renderer';
@@ -18,6 +19,8 @@ export interface ActorVisibleMemoryContext {
         totalInjectedCount: number;
         estimatedChars: number;
         retentionStageCounts: Record<RetentionStage, number>;
+        shadowInjectedCount: number;
+        shadowSectionVisible: boolean;
         timeInjectedCount: number;
         timeSourceCounts: Record<string, number>;
     };
@@ -27,6 +30,7 @@ export interface ActorVisibleMemoryContext {
         identityLines: string[];
         relationshipLines: string[];
         eventLines: string[];
+        shadowEventLines: string[];
         interpretationLines: string[];
     };
 }
@@ -60,14 +64,14 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         .filter((entry: MemoryEntry): boolean => isWorldBaseType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
         .map((entry: MemoryEntry): string => renderWorldStateNarrative(
-            prependPromptTimeHeader(`${entry.title}：${entry.summary || entry.detail || '暂无详情'}`, entry.timeContext, currentMaxFloor),
+            prependPromptTimeHeader(buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'), entry.timeContext, currentMaxFloor),
         ));
 
     const sceneSharedLines = input.entries
         .filter((entry: MemoryEntry): boolean => isSceneSharedType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
         .map((entry: MemoryEntry): string => prependPromptTimeHeader(
-            `${entry.title}：${entry.summary || entry.detail || '暂无详情'}`,
+            buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'),
             entry.timeContext,
             currentMaxFloor,
         ));
@@ -90,13 +94,21 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             resolveRetentionStageFromRoleEntry(entry),
         ));
 
-    const eventLines = targetRoleEntries
-        .filter((entry: PromptAssemblyRoleEntry): boolean => isVisibleEventType(entry.entryType))
+    const visibleEventEntries = targetRoleEntries
+        .filter((entry: PromptAssemblyRoleEntry): boolean => isVisibleEventType(entry.entryType) || isTaskProgressType(entry.entryType))
+        .slice(0, 30);
+
+    const eventLines = visibleEventEntries
+        .filter((entry: PromptAssemblyRoleEntry): boolean => !isShadowTriggeredRoleEntry(entry))
         .slice(0, 30)
         .map((entry: PromptAssemblyRoleEntry): string => renderEventMemoryNarrative(
             entry.renderedText,
             resolveRetentionStageFromRoleEntry(entry),
         ));
+
+    const shadowEventLines = visibleEventEntries
+        .filter((entry: PromptAssemblyRoleEntry): boolean => isShadowTriggeredRoleEntry(entry))
+        .map((entry: PromptAssemblyRoleEntry): string => renderShadowEventNarrative(entry));
 
     const interpretationLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isInterpretationType(entry.entryType))
@@ -118,6 +130,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         + identityLines.length
         + relationshipLines.length
         + eventLines.length
+        + shadowEventLines.length
         + interpretationLines.length;
     const estimatedChars = [
         ...worldBaseLines,
@@ -126,6 +139,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         ...identityLines,
         ...relationshipLines,
         ...eventLines,
+        ...shadowEventLines,
         ...interpretationLines,
     ].join('\n').length;
     const timeSourceCounts: Record<string, number> = {
@@ -148,6 +162,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
                 isIdentityType(entry.entryType)
                 || isRelationshipType(entry.entryType)
                 || isVisibleEventType(entry.entryType)
+                || isTaskProgressType(entry.entryType)
                 || isInterpretationType(entry.entryType)
             ))
             .map((entry: PromptAssemblyRoleEntry): PromptTimeMeta | undefined => entry.promptTimeMeta),
@@ -162,6 +177,8 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             totalInjectedCount,
             estimatedChars,
             retentionStageCounts,
+            shadowInjectedCount: shadowEventLines.length,
+            shadowSectionVisible: shadowEventLines.length > 0,
             timeInjectedCount,
             timeSourceCounts,
         },
@@ -171,6 +188,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             identityLines: identityLines.length > 0 ? identityLines : [`${actorLabel}视角下的可见记忆摘要`],
             relationshipLines,
             eventLines,
+            shadowEventLines,
             interpretationLines,
         },
     };
@@ -218,7 +236,11 @@ function isEntityType(entryType: string): boolean {
 function renderEntityLine(entry: MemoryEntry, currentMaxFloor: number): string {
     const typeLabel = resolveEntityTypeLabel(entry.entryType);
     const summary = entry.summary || entry.detail || '暂无详情';
-    const body = `[${typeLabel}] ${entry.title}：${summary}`;
+    const body = `${buildMemorySemanticTag(projectMemorySemanticRecord({
+        entryType: entry.entryType,
+        ongoing: entry.ongoing,
+        detailPayload: entry.detailPayload,
+    })) || `[${typeLabel}]`} ${entry.title}：${summary}`;
     return prependPromptTimeHeader(body, entry.timeContext, currentMaxFloor);
 }
 
@@ -265,6 +287,10 @@ function isVisibleEventType(entryType: string): boolean {
     return normalized === 'actor_visible_event' || normalized === 'event';
 }
 
+function isTaskProgressType(entryType: string): boolean {
+    return normalizeType(entryType) === 'task';
+}
+
 /**
  * 功能：判断是否为主观理解类型。
  * @param entryType 条目类型。
@@ -282,6 +308,20 @@ function isInterpretationType(entryType: string): boolean {
  */
 function resolveRetentionStageFromRoleEntry(entry: PromptAssemblyRoleEntry): RetentionStage {
     return entry.retentionStage;
+}
+
+function isShadowTriggeredRoleEntry(entry: PromptAssemblyRoleEntry): boolean {
+    return entry.forgettingTier === 'shadow_forgotten' && entry.shadowTriggered === true;
+}
+
+function renderShadowEventNarrative(entry: PromptAssemblyRoleEntry): string {
+    const stage = resolveRetentionStageFromRoleEntry(entry);
+    const penalty = Number(entry.shadowRecallPenalty ?? 0);
+    const confidenceLabel = penalty >= 0.35 ? '低' : '偏低';
+    const prefix = stage === 'distorted'
+        ? '这是被问题唤起的失真记忆线索'
+        : '这是被问题唤起的模糊记忆线索';
+    return `${prefix}（置信：${confidenceLabel}）：${renderEventMemoryNarrative(entry.renderedText, stage)}`;
 }
 
 /**
@@ -337,4 +377,13 @@ function countPromptTimeMetaSources(
         timeSourceCounts[value.sourceMode] = (timeSourceCounts[value.sourceMode] ?? 0) + 1;
     }
     return count;
+}
+
+function buildSemanticEntryLine(entry: MemoryEntry, summary: string): string {
+    const semanticTag = buildMemorySemanticTag(projectMemorySemanticRecord({
+        entryType: entry.entryType,
+        ongoing: entry.ongoing,
+        detailPayload: entry.detailPayload,
+    }));
+    return `${semanticTag ? `${semanticTag} ` : ''}${entry.title}：${summary}`;
 }

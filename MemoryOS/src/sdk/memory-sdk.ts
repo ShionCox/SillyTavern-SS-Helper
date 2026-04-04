@@ -26,8 +26,11 @@ import { CompareKeyService } from '../core/compare-key-service';
 import { resolveLedgerUpdateDecision } from '../core/ledger-update-rules';
 import { normalizeTaskTitle } from '../core/task-title-normalizer';
 import { normalizeTaskDescription } from '../core/task-description-normalizer';
+import { type MemoryForgettingTier } from '../core/memory-forgetting';
+import { projectMemoryRetentionCore, type MemoryRetentionProjection } from '../core/memory-retention-core';
 import { EntryRepository } from '../repository/entry-repository';
 import { normalizeRelationTag } from '../constants/relationTags';
+import { projectMemorySemanticRecord, type MemorySemanticKind } from '../core/memory-semantic';
 import { logger } from '../runtime/runtime-services';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
@@ -1069,6 +1072,26 @@ export class MemorySDKImpl {
      */
     private buildRecallExplanationFromSnapshot(snapshot: PromptAssemblySnapshot): Record<string, unknown> {
         const retrievalDiagnostics = (snapshot.diagnostics?.retrieval ?? null) as Record<string, unknown> | null;
+        const semanticCounts = snapshot.roleEntries.reduce((counts: Record<MemorySemanticKind, number>, entry): Record<MemorySemanticKind, number> => {
+            if (entry.semantic?.semanticKind) {
+                counts[entry.semantic.semanticKind] = (counts[entry.semantic.semanticKind] ?? 0) + 1;
+            }
+            return counts;
+        }, {
+            event: 0,
+            state: 0,
+            task_progress: 0,
+        });
+        const forgettingCounts = snapshot.roleEntries.reduce((counts: Record<string, number>, entry): Record<string, number> => {
+            const tier = String(entry.forgettingTier ?? (entry.forgotten ? 'shadow_forgotten' : 'active')).trim() || 'active';
+            counts[tier] = (counts[tier] ?? 0) + 1;
+            return counts;
+        }, {
+            active: 0,
+            shadow_forgotten: 0,
+            hard_forgotten: 0,
+        });
+        const shadowTriggeredCount = snapshot.roleEntries.filter((entry): boolean => entry.shadowTriggered === true).length;
         return {
             generatedAt: Date.now(),
             query: String(snapshot.query ?? ''),
@@ -1091,6 +1114,9 @@ export class MemorySDKImpl {
             matchedRules: snapshot.diagnostics?.contextRoute?.matchedRules ?? [],
             subQueries: snapshot.diagnostics?.contextRoute?.subQueries ?? [],
             routeReasons: snapshot.diagnostics?.contextRoute?.reasons ?? [],
+            semanticCounts,
+            forgettingCounts,
+            shadowTriggeredCount,
             traceRecords: snapshot.diagnostics?.traceRecords ?? [],
         };
     }
@@ -1468,6 +1494,9 @@ export class MemorySDKImpl {
         compareKey?: string;
         injectToSystem?: boolean;
         aliasTexts?: string[];
+        forgettingTier?: MemoryForgettingTier;
+        shadowTriggered?: boolean;
+        shadowRecallPenalty?: number;
     }>> {
         const [entries, roleRows, actorProfiles, compareKeyIndex] = await Promise.all([
             this.entryRepository.listEntries(),
@@ -1477,16 +1506,24 @@ export class MemorySDKImpl {
         ]);
         const boundActorMap = new Map<string, string[]>();
         const memoryPercentMap = new Map<string, number>();
+        const retentionMap = new Map<string, MemoryRetentionProjection>();
+        const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
         roleRows.forEach((row: RoleEntryMemory): void => {
-            if (row.forgotten) {
-                return;
-            }
             const list = boundActorMap.get(row.entryId) ?? [];
             if (!list.includes(row.actorKey)) {
                 list.push(row.actorKey);
             }
             boundActorMap.set(row.entryId, list);
-            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, row.memoryPercent));
+            const entry = entryMap.get(row.entryId);
+            const retention = projectMemoryRetentionCore({
+                forgotten: row.forgotten,
+                memoryPercent: row.memoryPercent,
+                title: entry?.title,
+                summary: entry?.summary || entry?.detail,
+            });
+            const current = retentionMap.get(row.entryId);
+            retentionMap.set(row.entryId, this.resolveEntryLevelRetention(current, retention));
+            memoryPercentMap.set(row.entryId, Math.max(memoryPercentMap.get(row.entryId) ?? 0, retention.effectiveMemoryPercent));
         });
         const actorDisplayNameMap = new Map(actorProfiles.map((profile: ActorMemoryProfile): [string, string] => [profile.actorKey, profile.displayName]));
         const compareKeyMap = new Map(compareKeyIndex.map((item): [string, { compareKey?: string; matchKeys?: string[] }] => [
@@ -1525,6 +1562,26 @@ export class MemorySDKImpl {
                 ...(compareKeyMap.get(entry.entryId)?.matchKeys ?? []),
             ]);
             const compareKey = compareKeyMap.get(entry.entryId)?.compareKey || this.compareKeyService.buildIndexRecord(entry).compareKey;
+            const semantic = projectMemorySemanticRecord({
+                entryType: entry.entryType,
+                ongoing: entry.ongoing,
+                detailPayload: payload,
+            });
+            const locationKey = String(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location ?? '').trim() || undefined;
+            const retention = retentionMap.get(entry.entryId) ?? projectMemoryRetentionCore({
+                forgotten: false,
+                memoryPercent: memoryPercentMap.get(entry.entryId) ?? 0,
+                title: entry.title,
+                summary: entry.summary || entry.detail,
+                compareKey,
+                aliasTexts,
+                actorKeys,
+                relationKeys,
+                participantActorKeys: boundActorKeys,
+                locationKey,
+                worldKeys,
+                semantic,
+            });
             return {
                 candidateId: `vector-lab:${entry.entryId}`,
                 entryId: entry.entryId,
@@ -1539,13 +1596,44 @@ export class MemorySDKImpl {
                 actorKeys,
                 relationKeys,
                 participantActorKeys: boundActorKeys,
-                locationKey: String(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location ?? '').trim() || undefined,
+                locationKey,
                 worldKeys,
                 compareKey,
                 injectToSystem: entry.entryType.startsWith('world_') || entry.entryType === 'scene_shared_state' || entry.entryType === 'location',
                 aliasTexts,
+                semantic,
+                retention,
+                forgettingTier: retention.forgottenLevel,
+                shadowTriggered: retention.shadowTriggered,
+                shadowRecallPenalty: retention.shadowRecallPenalty,
             };
         });
+    }
+
+    /**
+     * 功能：合并条目级遗忘层级，优先保留更可参与召回的层级。
+     * @param current 当前层级。
+     * @param next 新层级。
+     * @returns 合并后的层级。
+     */
+    private resolveEntryLevelRetention(
+        current: MemoryRetentionProjection | undefined,
+        next: MemoryRetentionProjection,
+    ): MemoryRetentionProjection {
+        if (!current) {
+            return next;
+        }
+        const order: Record<string, number> = {
+            active: 3,
+            shadow_forgotten: 2,
+            hard_forgotten: 1,
+        };
+        if ((order[next.forgottenLevel] ?? 0) === (order[current.forgottenLevel] ?? 0)) {
+            return next.retentionScore >= current.retentionScore ? next : current;
+        }
+        return (order[next.forgottenLevel] ?? 0) > (order[current.forgottenLevel] ?? 0)
+            ? next
+            : current;
     }
 
     /**

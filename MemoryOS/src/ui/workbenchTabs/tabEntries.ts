@@ -17,6 +17,8 @@ import {
 import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import { formatTimeMode, formatTimeSource, formatConfidence } from '../../memory-time/time-format';
 import { buildTimeLabel } from '../../memory-time/time-ranking';
+import { projectMemoryForgettingState } from '../../core/memory-forgetting';
+import { projectMemorySemanticRecord, resolveSemanticKindLabel, resolveVisibilityScopeLabel } from '../../core/memory-semantic';
 
 interface InspectorSection {
     title: string;
@@ -176,6 +178,12 @@ function buildEntryBindingRows(snapshot: WorkbenchSnapshot, selectedEntry: Memor
     const bindings = snapshot.roleMemories.filter((memory: RoleEntryMemory): boolean => memory.entryId === selectedEntry.entryId);
     return bindings.map((binding: RoleEntryMemory): string => {
         const actor = actorMap.get(binding.actorKey);
+        const forgetting = projectMemoryForgettingState({
+            forgotten: binding.forgotten,
+            memoryPercent: binding.memoryPercent,
+            title: selectedEntry.title,
+            summary: selectedEntry.summary || selectedEntry.detail,
+        });
         return `
             <article class="stx-memory-workbench__card">
                 <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(actor?.displayName || binding.actorKey, '未命名角色'))}</div>
@@ -183,8 +191,12 @@ function buildEntryBindingRows(snapshot: WorkbenchSnapshot, selectedEntry: Memor
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('actor_key'))}</span><strong>${escapeHtml(binding.actorKey)}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('memory_strength'))}</span><strong>${escapeHtml(String(binding.memoryPercent))}%</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('forgotten_state'))}</span><strong>${escapeHtml(binding.forgotten ? resolveEntriesWorkbenchText('forgotten') : resolveEntriesWorkbenchText('active'))}</strong></div>
+                    <div class="stx-memory-workbench__info-row"><span>遗忘层级</span><strong>${escapeHtml(resolveForgettingTierLabel(forgetting.forgettingTier))}</strong></div>
+                    <div class="stx-memory-workbench__info-row"><span>召回权重</span><strong>${escapeHtml(Number(forgetting.retention.retrievalWeight ?? 0).toFixed(2))}</strong></div>
+                    <div class="stx-memory-workbench__info-row"><span>渲染阶段</span><strong>${escapeHtml(String(forgetting.retention.promptRenderStage ?? forgetting.recommendedRetentionStage))}</strong></div>
                     <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveEntriesWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
                 </div>
+                <div class="stx-memory-workbench__detail-clamp" style="margin-top:10px;">${escapeHtml((forgetting.retention.explainReasonCodes ?? []).join('、') || '暂无解释原因')}</div>
             </article>
         `;
     }).join('');
@@ -202,6 +214,27 @@ function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot)
     const bindings = toRecord(payload.bindings);
     const sections: InspectorSection[] = [];
     const actorMap = new Map(snapshot.actors.map((actor: ActorMemoryProfile): [string, string] => [actor.actorKey, actor.displayName]));
+    const semantic = projectMemorySemanticRecord({
+        entryType: entry.entryType,
+        ongoing: entry.ongoing,
+        detailPayload: entry.detailPayload,
+    });
+
+    if (semantic) {
+        sections.push({
+            title: '公共语义',
+            rows: [
+                { label: '语义类型', value: resolveSemanticKindLabel(semantic.semanticKind) },
+                { label: '可见级别', value: resolveVisibilityScopeLabel(semantic.visibilityScope) },
+                { label: '角色可见', value: semantic.isCharacterVisible ? '是' : '否' },
+                { label: '进行中', value: semantic.isOngoing === undefined ? '' : (semantic.isOngoing ? '是' : '否') },
+                { label: '当前状态', value: semantic.currentState },
+                { label: '最终结果', value: semantic.finalOutcome },
+                { label: '目标', value: semantic.goalOrObjective },
+                { label: '来源类型', value: semantic.sourceEntryType },
+            ],
+        });
+    }
 
     if (entry.entryType === 'task') {
         sections.push({
@@ -209,8 +242,8 @@ function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot)
             rows: [
                 { label: resolveEntriesWorkbenchText('task_title'), value: entry.title },
                 { label: resolveEntriesWorkbenchText('task_summary'), value: entry.summary },
-                { label: resolveEntriesWorkbenchText('current_goal'), value: fields.objective ?? payload.objective },
-                { label: resolveEntriesWorkbenchText('current_status'), value: fields.status ?? payload.status },
+                { label: resolveEntriesWorkbenchText('current_goal'), value: semantic?.goalOrObjective ?? fields.objective ?? payload.objective },
+                { label: resolveEntriesWorkbenchText('current_status'), value: semantic?.currentState ?? fields.status ?? payload.status },
                 { label: resolveEntriesWorkbenchText('stage'), value: fields.stage ?? payload.stage },
                 { label: resolveEntriesWorkbenchText('blocker'), value: fields.blocker ?? payload.blocker },
                 { label: resolveEntriesWorkbenchText('completion_criteria'), value: fields.completionCriteria ?? payload.completionCriteria },
@@ -226,10 +259,10 @@ function buildInspectorSections(entry: MemoryEntry, snapshot: WorkbenchSnapshot)
             rows: [
                 { label: resolveEntriesWorkbenchText('task_title'), value: entry.title },
                 { label: resolveEntriesWorkbenchText('overview'), value: entry.summary },
-                { label: resolveEntriesWorkbenchText('lifecycle_state'), value: fields.lifecycle ?? fields.status ?? payload.status },
+                { label: resolveEntriesWorkbenchText('lifecycle_state'), value: semantic?.currentState ?? fields.lifecycle ?? fields.status ?? payload.status },
                 { label: resolveEntriesWorkbenchText('participants'), value: fields.participants ?? payload.participants },
                 { label: resolveEntriesWorkbenchText('location'), value: fields.location ?? payload.location },
-                { label: resolveEntriesWorkbenchText('result'), value: fields.result ?? fields.outcome ?? payload.result ?? payload.outcome },
+                { label: resolveEntriesWorkbenchText('result'), value: semantic?.finalOutcome ?? fields.result ?? fields.outcome ?? payload.result ?? payload.outcome },
                 { label: resolveEntriesWorkbenchText('impact'), value: fields.impact ?? payload.impact },
                 { label: resolveEntriesWorkbenchText('related_tasks'), value: bindings.tasks },
             ],
@@ -382,6 +415,17 @@ function renderInspectorSection(section: InspectorSection): string {
             <div class="stx-memory-workbench__info-list">${rows}</div>
         </div>
     `;
+}
+
+function resolveForgettingTierLabel(value: string): string {
+    switch (String(value ?? '').trim()) {
+        case 'shadow_forgotten':
+            return '影子遗忘';
+        case 'hard_forgotten':
+            return '硬遗忘';
+        default:
+            return '活跃';
+    }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { escapeHtml } from '../editorShared';
 import { resolveRetrievalProviderLabel, resolveVectorWorkbenchText } from '../workbenchLocale';
+import { resolveSemanticKindLabel, resolveVisibilityScopeLabel } from '../../core/memory-semantic';
 import {
     escapeAttr,
     formatDisplayValue,
@@ -227,8 +228,8 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                 ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveVectorWorkbenchText('select_document_empty'))}</div>`}
                             </div>
                         </div>
-                        <div class="stx-vector-lab__tabpanel"${state.vectorRightTab !== 'test' ? ' hidden' : ''}>
-                            <div class="stx-vector-lab__panel-body">
+                        <div class="stx-vector-lab__tabpanel stx-vector-lab__tabpanel--test"${state.vectorRightTab !== 'test' ? ' hidden' : ''}>
+                            <div class="stx-vector-lab__panel-body stx-vector-lab__panel-body--scroll stx-vector-lab__panel-body--testbench">
                             <div class="stx-vector-lab__testbench">
                                 <section class="stx-vector-lab__testbench-controls">
                                     <div class="stx-vector-lab__control-card stx-vector-lab__control-card--query">
@@ -364,7 +365,11 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                                                     <span>${escapeHtml(resolveResultSourceLabel(sourceLabel))}</span>
                                                                 </div>
                                                                 <div class="stx-vector-lab__result-meta">${escapeHtml(item.candidate.schemaId)} / ${escapeHtml(item.candidate.entryId)}</div>
+                                                                ${item.candidate.semantic ? `<div class="stx-vector-lab__result-meta">${escapeHtml(resolveSemanticKindLabel(item.candidate.semantic.semanticKind))} / ${escapeHtml(resolveVisibilityScopeLabel(item.candidate.semantic.visibilityScope))}${item.candidate.semantic.isOngoing !== undefined ? ` / ${escapeHtml(item.candidate.semantic.isOngoing ? '进行中' : '已收束')}` : ''}</div>` : ''}
+                                                                ${item.candidate.forgettingTier ? `<div class="stx-vector-lab__result-meta">${escapeHtml(resolveForgettingTierLabel(item.candidate.forgettingTier))}${item.candidate.shadowTriggered ? ` / ${escapeHtml('已影子唤起')}` : ''}${item.candidate.retention ? ` / ${escapeHtml(`权重 ${Number(item.candidate.retention.retrievalWeight ?? 0).toFixed(2)}`)}` : ''}</div>` : ''}
                                                                 <div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(item.candidate.summary || resolveVectorWorkbenchText('empty_value'), 180) || resolveVectorWorkbenchText('empty_value'))}</div>
+                                                                ${buildSemanticSummaryLine(item.candidate.semantic)}
+                                                                ${buildRetentionSummaryLine(item.candidate.retention)}
                                                                 <div class="stx-vector-lab__result-meta">${escapeHtml(resolveVectorWorkbenchText('score_prefix'))} ${escapeHtml(Number(item.score ?? 0).toFixed(4))}</div>
                                                             </article>
                                                         `;
@@ -696,6 +701,45 @@ function buildTemporalCompactLine(item: {
     return `<div class="stx-vector-lab__result-meta">${escapeHtml(parts.join(' / '))}</div>`;
 }
 
+function buildSemanticSummaryLine(semantic?: {
+    currentState?: string;
+    finalOutcome?: string;
+    goalOrObjective?: string;
+}): string {
+    if (!semantic) {
+        return '';
+    }
+    const parts = [
+        semantic.currentState ? `状态：${semantic.currentState}` : '',
+        semantic.finalOutcome ? `结果：${semantic.finalOutcome}` : '',
+        semantic.goalOrObjective ? `目标：${semantic.goalOrObjective}` : '',
+    ].filter(Boolean);
+    if (parts.length <= 0) {
+        return '';
+    }
+    return `<div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(parts.join(' / '), 140) || '')}</div>`;
+}
+
+function buildRetentionSummaryLine(retention?: {
+    promptRenderStage?: string;
+    explainReasonCodes?: string[];
+}): string {
+    if (!retention) {
+        return '';
+    }
+    const reasonCodes = Array.isArray(retention.explainReasonCodes)
+        ? retention.explainReasonCodes.filter(Boolean).slice(0, 4)
+        : [];
+    const parts = [
+        retention.promptRenderStage ? `阶段：${retention.promptRenderStage}` : '',
+        reasonCodes.length > 0 ? `原因：${reasonCodes.join('、')}` : '',
+    ].filter(Boolean);
+    if (parts.length <= 0) {
+        return '';
+    }
+    return `<div class="stx-vector-lab__result-summary">${escapeHtml(truncateText(parts.join(' / '), 160) || '')}</div>`;
+}
+
 /**
  * 功能：解析结果来源标签。
  * @param value 来源值。
@@ -709,4 +753,15 @@ function resolveResultSourceLabel(value: string): string {
         coverage_supplement: resolveVectorWorkbenchText('result_source_coverage_supplement'),
     };
     return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('source_unknown');
+}
+
+function resolveForgettingTierLabel(value?: string): string {
+    switch (String(value ?? '').trim()) {
+        case 'shadow_forgotten':
+            return '影子遗忘';
+        case 'hard_forgotten':
+            return '硬遗忘';
+        default:
+            return '活跃记忆';
+    }
 }

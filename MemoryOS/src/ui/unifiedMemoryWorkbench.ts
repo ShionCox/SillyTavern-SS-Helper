@@ -1946,6 +1946,31 @@ function normalizeRecallExplanation(value: Record<string, unknown> | null): Work
                 return '';
             }).filter(Boolean)
             : [],
+        semanticCounts: (() => {
+            const record = toRecord(value.semanticCounts);
+            const result: Record<string, number> = {};
+            Object.entries(record).forEach(([key, rawValue]: [string, unknown]): void => {
+                const numericValue = Number(rawValue);
+                if (!Number.isFinite(numericValue)) {
+                    return;
+                }
+                result[String(key ?? '').trim()] = Math.max(0, Math.trunc(numericValue));
+            });
+            return result;
+        })(),
+        forgettingCounts: (() => {
+            const record = toRecord(value.forgettingCounts);
+            const result: Record<string, number> = {};
+            Object.entries(record).forEach(([key, rawValue]: [string, unknown]): void => {
+                const numericValue = Number(rawValue);
+                if (!Number.isFinite(numericValue)) {
+                    return;
+                }
+                result[String(key ?? '').trim()] = Math.max(0, Math.trunc(numericValue));
+            });
+            return result;
+        })(),
+        shadowTriggeredCount: Number(value.shadowTriggeredCount ?? 0) || 0,
         traceRecords: Array.isArray(value.traceRecords)
             ? value.traceRecords
                 .filter((item: unknown): boolean => Boolean(item) && typeof item === 'object')

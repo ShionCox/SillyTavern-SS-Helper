@@ -1,6 +1,7 @@
-import type { MemoryEntry } from '../types';
+import type { MemoryEntry, RoleEntryMemory } from '../types';
 import type { RetrievalCandidate, RetrievalResultItem } from '../memory-retrieval';
-import { getSharedRetrievalService } from '../runtime/vector-runtime';import {
+import { getSharedRetrievalService } from '../runtime/vector-runtime';
+import {
     buildCityCompareKey,
     buildCompareKey as buildUnifiedCompareKey,
     buildLocationCompareKey,
@@ -8,6 +9,8 @@ import { getSharedRetrievalService } from '../runtime/vector-runtime';import {
     buildOrganizationCompareKey,
     buildRelationshipCompareKey,
 } from '../core/compare-key';
+import { projectMemoryRetentionCore, type MemoryRetentionProjection } from '../core/memory-retention-core';
+import { projectMemorySemanticRecord, resolveSemanticKindLabel } from '../core/memory-semantic';
 
 /**
  * 功能：总结候选旧记录对象。
@@ -38,6 +41,7 @@ export interface ResolveCandidateRecordsInput {
     candidateTypes: string[];
     entries: MemoryEntry[];
     memoryPercentByEntryId?: Map<string, number>;
+    roleMemories?: RoleEntryMemory[];
     maxCandidatesHardCap?: number;
     candidateTextBudgetChars?: number;
     rulePackMode?: 'native' | 'perocore' | 'hybrid';
@@ -55,7 +59,7 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
 }> {
     const maxCandidatesHardCap = Math.max(3, Number(input.maxCandidatesHardCap ?? 12) || 12);
     const candidateTextBudgetChars = Math.max(300, Number(input.candidateTextBudgetChars ?? 1800) || 1800);
-    const retrievalCandidates = mapToRetrievalCandidates(input.entries, input.memoryPercentByEntryId);
+    const retrievalCandidates = mapToRetrievalCandidates(input.entries, input.memoryPercentByEntryId, input.roleMemories);
     const retrieveResult = await getSharedRetrievalService().searchHybrid({
         query: input.query,
         candidates: retrievalCandidates,
@@ -116,9 +120,11 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
 function mapToRetrievalCandidates(
     entries: MemoryEntry[],
     memoryPercentByEntryId?: Map<string, number>,
+    roleMemories?: RoleEntryMemory[],
 ): RetrievalCandidate[] {
+    const retentionMap = buildEntryRetentionMap(entries, roleMemories);
     return entries.map((entry: MemoryEntry, index: number): RetrievalCandidate => ({
-        ...buildSummaryRetrievalCandidate(entry, index, memoryPercentByEntryId),
+        ...buildSummaryRetrievalCandidate(entry, index, memoryPercentByEntryId, retentionMap.get(entry.entryId)),
     }));
 }
 
@@ -165,6 +171,9 @@ function resolveCandidateStatus(candidate: RetrievalCandidate): SummaryCandidate
  * @returns 来源提示。
  */
 function buildSourceHint(candidate: RetrievalCandidate): string | undefined {
+    if (candidate.semantic) {
+        return resolveSemanticKindLabel(candidate.semantic.semanticKind);
+    }
     const sourceSummaryIds = Array.isArray(candidate.sourceSummaryIds) ? candidate.sourceSummaryIds.filter(Boolean) : [];
     if (sourceSummaryIds.length > 0) {
         return `来自 ${sourceSummaryIds[0]}`;
@@ -184,6 +193,7 @@ function buildSummaryRetrievalCandidate(
     entry: MemoryEntry,
     index: number,
     memoryPercentByEntryId?: Map<string, number>,
+    retention = projectMemoryRetentionCore({ forgotten: false, memoryPercent: memoryPercentByEntryId?.get(entry.entryId) ?? 60, title: entry.title, summary: entry.summary || entry.detail }),
 ): RetrievalCandidate {
     const payload = toRecord(entry.detailPayload);
     const fields = toRecord(payload.fields);
@@ -194,6 +204,11 @@ function buildSummaryRetrievalCandidate(
     const locationKey = normalizeText(payload.locationKey ?? fields.locationKey ?? payload.location ?? fields.location);
     const worldKeys = normalizeLooseStringArray(payload.worldKeys ?? fields.worldKeys);
     const aliases = normalizeLooseStringArray(payload.aliases ?? fields.aliases);
+    const semantic = projectMemorySemanticRecord({
+        entryType: entry.entryType,
+        ongoing: entry.ongoing,
+        detailPayload: payload,
+    });
     return {
         candidateId: `candidate_${index + 1}`,
         entryId: entry.entryId,
@@ -201,7 +216,7 @@ function buildSummaryRetrievalCandidate(
         title: entry.title,
         summary: entry.summary || entry.detail,
         updatedAt: entry.updatedAt,
-        memoryPercent: clampPercent(memoryPercentByEntryId?.get(entry.entryId) ?? 60),
+        memoryPercent: retention.effectiveMemoryPercent,
         category: String(entry.category ?? ''),
         tags: entry.tags,
         actorKeys: [sourceActorKey, targetActorKey].filter(Boolean),
@@ -215,9 +230,54 @@ function buildSummaryRetrievalCandidate(
         worldKeys: entry.entryType.startsWith('world_') ? Array.from(new Set([...worldKeys, entry.title])) : worldKeys,
         aliasTexts: aliases,
         detailPayload: payload,
+        semantic,
+        retention,
+        forgettingTier: retention.forgottenLevel,
+        shadowTriggered: retention.shadowTriggered,
+        shadowRecallPenalty: retention.shadowRecallPenalty,
         ongoing: entry.ongoing,
         timeContext: entry.timeContext,
     };
+}
+
+function buildEntryRetentionMap(
+    entries: MemoryEntry[],
+    roleMemories?: RoleEntryMemory[],
+): Map<string, MemoryRetentionProjection> {
+    const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
+    const result = new Map<string, MemoryRetentionProjection>();
+    for (const row of roleMemories ?? []) {
+        const entry = entryMap.get(row.entryId);
+        const projection = projectMemoryRetentionCore({
+            forgotten: row.forgotten,
+            memoryPercent: row.memoryPercent,
+            title: entry?.title,
+            summary: entry?.summary || entry?.detail,
+        });
+        const current = result.get(row.entryId);
+        result.set(row.entryId, resolveEntryLevelRetention(current, projection));
+    }
+    return result;
+}
+
+function resolveEntryLevelRetention(
+    current: MemoryRetentionProjection | undefined,
+    next: MemoryRetentionProjection,
+): MemoryRetentionProjection {
+    if (!current) {
+        return next;
+    }
+    const order: Record<string, number> = {
+        active: 3,
+        shadow_forgotten: 2,
+        hard_forgotten: 1,
+    };
+    if ((order[next.forgottenLevel] ?? 0) === (order[current.forgottenLevel] ?? 0)) {
+        return next.retentionScore >= current.retentionScore ? next : current;
+    }
+    return (order[next.forgottenLevel] ?? 0) > (order[current.forgottenLevel] ?? 0)
+        ? next
+        : current;
 }
 
 /**

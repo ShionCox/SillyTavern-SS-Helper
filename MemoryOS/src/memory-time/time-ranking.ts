@@ -3,6 +3,7 @@
  */
 
 import type { RetrievalCandidate } from '../memory-retrieval/types';
+import { projectMemorySemanticRecord } from '../core/memory-semantic';
 import type { MemoryTimeContext, MemoryTimeIndex, PromptTimeMeta } from './time-types';
 
 export type QueryTimeIntent =
@@ -126,15 +127,20 @@ export function computeStateLikeBoost(candidate?: RetrievalCandidate | null): nu
     const fields = toRecord(payload.fields);
     const lifecycle = toRecord(payload.lifecycle);
     const schemaId = normalizeText(candidate.schemaId);
+    const semantic = candidate.semantic ?? projectMemorySemanticRecord({
+        entryType: candidate.schemaId,
+        ongoing: candidate.ongoing,
+        detailPayload: candidate.detailPayload,
+    });
     let score = 0;
 
-    if (candidate.ongoing === true) {
+    if (semantic?.isOngoing === true) {
         score += 0.38;
     }
-    if (['relationship', 'world_global_state', 'task', 'summary', 'scene_shared_state', 'location'].includes(schemaId)) {
+    if (semantic?.semanticKind === 'state' || semantic?.semanticKind === 'task_progress' || ['relationship', 'summary', 'location'].includes(schemaId)) {
         score += 0.18;
     }
-    if (hasMeaningfulValue(fields.status) || hasMeaningfulValue(fields.stage) || hasMeaningfulValue(payload.state) || hasMeaningfulValue(payload.status)) {
+    if (hasMeaningfulValue(semantic?.currentState) || hasMeaningfulValue(fields.status) || hasMeaningfulValue(fields.stage) || hasMeaningfulValue(payload.state) || hasMeaningfulValue(payload.status)) {
         score += 0.26;
     }
     if (hasMeaningfulValue(lifecycle.status) || hasMeaningfulValue(lifecycle.stage)) {
@@ -159,12 +165,17 @@ export function computeOutcomeLikeBoost(candidate?: RetrievalCandidate | null): 
     const fields = toRecord(payload.fields);
     const lifecycle = toRecord(payload.lifecycle);
     const schemaId = normalizeText(candidate.schemaId);
+    const semantic = candidate.semantic ?? projectMemorySemanticRecord({
+        entryType: candidate.schemaId,
+        ongoing: candidate.ongoing,
+        detailPayload: candidate.detailPayload,
+    });
     let score = 0;
 
-    if (['event', 'task', 'relationship', 'summary'].includes(schemaId)) {
+    if (semantic?.semanticKind === 'event' || semantic?.semanticKind === 'task_progress' || ['relationship', 'summary'].includes(schemaId)) {
         score += 0.18;
     }
-    if (hasMeaningfulValue(fields.outcome) || hasMeaningfulValue(fields.result) || hasMeaningfulValue(fields.resolution)) {
+    if (hasMeaningfulValue(semantic?.finalOutcome) || hasMeaningfulValue(fields.outcome) || hasMeaningfulValue(fields.result) || hasMeaningfulValue(fields.resolution)) {
         score += 0.34;
     }
     if (hasMeaningfulValue(payload.outcome) || hasMeaningfulValue(payload.result) || hasMeaningfulValue(payload.resolution)) {

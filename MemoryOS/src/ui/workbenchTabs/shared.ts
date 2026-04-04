@@ -57,6 +57,9 @@ export interface WorkbenchRecallExplanation {
         matchedText: string[];
     }>;
     routeReasons?: string[];
+    semanticCounts?: Record<string, number>;
+    forgettingCounts?: Record<string, number>;
+    shadowTriggeredCount?: number;
     traceRecords?: Array<{
         ts: number;
         level: string;

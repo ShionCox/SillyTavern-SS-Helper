@@ -270,7 +270,7 @@ export class MemoryMaintenanceService {
         const lowValues: LowValueCandidate[] = [];
 
         for (const c of candidates) {
-            const memoryFactor = (c.memoryPercent ?? 0) / 100;
+            const memoryFactor = c.retention?.retrievalWeight ?? ((c.memoryPercent ?? 0) / 100);
             const recency = computeRecencyWeight(c.updatedAt);
             const valueScore = memoryFactor * 0.6 + recency * 0.4;
 

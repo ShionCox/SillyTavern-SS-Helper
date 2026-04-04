@@ -2,6 +2,9 @@ import type { MemoryDebugLogRecord } from '../core/debug/memory-retrieval-logger
 import type { RetrievalMode } from './retrieval-mode';
 import type { MemoryTimeContext, PromptTimeMeta } from '../memory-time/time-types';
 import type { QueryTimeIntent } from '../memory-time/time-ranking';
+import type { MemorySemanticProjection } from '../core/memory-semantic';
+import type { MemoryForgettingTier } from '../core/memory-forgetting';
+import type { MemoryRetentionProjection } from '../core/memory-retention-core';
 
 /**
  * 功能：定义可检索候选记录。
@@ -30,6 +33,16 @@ export interface RetrievalCandidate {
     aliasTexts?: string[];
     /** 结构化字段，仅用于高级排序与诊断 */
     detailPayload?: Record<string, unknown>;
+    /** 公共语义投影，供读侧统一消费 */
+    semantic?: MemorySemanticProjection;
+    /** 统一 retention 投影，供读侧共享消费 */
+    retention?: MemoryRetentionProjection;
+    /** 遗忘分层标记 */
+    forgettingTier?: MemoryForgettingTier;
+    /** 是否由影子召回触发 */
+    shadowTriggered?: boolean;
+    /** 影子召回惩罚 */
+    shadowRecallPenalty?: number;
     /** 是否仍处于进行中 */
     ongoing?: boolean;
     /** 时间上下文 */

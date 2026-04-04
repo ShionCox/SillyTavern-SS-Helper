@@ -134,6 +134,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         actorHints: window.actorHints,
         entries,
         memoryPercentByEntryId,
+        roleMemories,
         recentSummaries: recentSummaries.map((summary: SummarySnapshot) => ({
             title: summary.title,
             content: summary.content,

@@ -82,7 +82,7 @@ export class LexicalRetrievalProvider implements RetrievalProvider {
             const bm25 = clamp01(bm25RawScores[index] / maxBm25);
             const ngram = computeNGramSimilarity(normalizedQuery, candidateText);
             const editDistance = computeEditSimilarity(normalizedQuery, candidateText);
-            const memoryWeight = computeMemoryWeight(candidate.memoryPercent);
+            const memoryWeight = candidate.retention?.retrievalWeight ?? computeMemoryWeight(candidate.memoryPercent);
             const recencyWeight = computeRecencyWeight(candidate.updatedAt);
             const temporal = computeTemporalIntentBoost(normalizedQuery, candidate.timeContext, currentMaxFloor, candidate);
             const timeBoost = temporal.finalScore;

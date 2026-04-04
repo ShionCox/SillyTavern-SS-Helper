@@ -15,6 +15,8 @@ import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { buildDefaultRecallConfig, mergeRecallConfig } from '../memory-retrieval/recall-config';
 import { applyPayloadFilter } from '../memory-retrieval/payload-filter';
 import { RetrievalOrchestrator } from '../memory-retrieval/retrieval-orchestrator';
+import { projectMemoryRetentionCore } from '../core/memory-retention-core';
+import { resolveSemanticKindLabel } from '../core/memory-semantic';
 import { readMemoryOSSettings, resolveRetrievalEnableQueryContextBuilder } from '../settings/store';
 import { HybridRetrievalService } from './hybrid-retrieval-service';
 import { buildQueryContextBundle } from './query-context-builder';
@@ -69,7 +71,10 @@ export class MemoryRetrievalService {
             config.payloadFilter = config.payloadFilter ?? {};
         }
 
-        const filteredCandidates = applyPayloadFilter(input.candidates, config.payloadFilter);
+        const filteredCandidates = this.applyForgettingAwareRecallPolicy(
+            input.query,
+            applyPayloadFilter(input.candidates, config.payloadFilter),
+        );
 
         // 先通过 orchestrator 跑基础管线（种子 -> 图扩展 -> 补召回 -> 多样性裁剪）
         const lexicalMode: RetrievalMode = config.retrievalMode === 'lexical_only' ? 'lexical_only' : 'hybrid';
@@ -100,7 +105,6 @@ export class MemoryRetrievalService {
                 },
             },
         );
-
         // 如果是 vector_only 或 hybrid 且混合检索服务存在，走向量增强链路
         const needsVectorChain = (config.retrievalMode === 'vector_only' || config.retrievalMode === 'hybrid')
             && this.hybridService !== null;
@@ -148,6 +152,7 @@ export class MemoryRetrievalService {
             });
 
             finalItems = hybridResult.items;
+            finalItems = this.applyShadowFinalCap(finalItems, settings.retentionShadowMaxFinalItems);
             finalProviderId = hybridResult.finalProviderId;
             strategyDecision = hybridResult.strategyDecision;
             vectorHitCount = hybridResult.vectorHits.length;
@@ -191,6 +196,7 @@ export class MemoryRetrievalService {
             });
             timeBiasedCount = finalItems.filter((item) => (item.breakdown.timeBoost ?? 0) > 0).length;
         } else {
+            finalItems = this.applyShadowFinalCap(finalItems, settings.retentionShadowMaxFinalItems);
             resultSourceLabels = result.items.map((item) => ({
                 candidateId: item.candidate.candidateId,
                 source: (item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0
@@ -391,6 +397,68 @@ export class MemoryRetrievalService {
     }
 
     /**
+     * 功能：在统一检索入口应用遗忘分层策略。
+     * @param query 当前查询。
+     * @param candidates 候选列表。
+     * @returns 可参与当前检索的候选。
+     */
+    private applyForgettingAwareRecallPolicy(query: string, candidates: RetrievalCandidate[]): RetrievalCandidate[] {
+        return candidates.reduce((result: RetrievalCandidate[], candidate: RetrievalCandidate): RetrievalCandidate[] => {
+            const retention = projectMemoryRetentionCore({
+                forgotten: candidate.forgettingTier === 'active' ? false : candidate.forgettingTier === 'hard_forgotten' ? true : true,
+                memoryPercent: candidate.retention?.rawMemoryPercent ?? candidate.memoryPercent,
+                title: candidate.title,
+                summary: candidate.summary,
+                compareKey: candidate.compareKey,
+                aliasTexts: candidate.aliasTexts,
+                actorKeys: candidate.actorKeys,
+                relationKeys: candidate.relationKeys,
+                participantActorKeys: candidate.participantActorKeys,
+                locationKey: candidate.locationKey,
+                worldKeys: candidate.worldKeys,
+                semantic: candidate.semantic,
+                query,
+            });
+            if (retention.forgottenLevel === 'hard_forgotten') {
+                return result;
+            }
+            if (!retention.canRecall) {
+                return result;
+            }
+            result.push({
+                ...candidate,
+                retention,
+                memoryPercent: retention.effectiveMemoryPercent,
+                forgettingTier: retention.forgottenLevel,
+                shadowTriggered: retention.shadowTriggered,
+                shadowRecallPenalty: retention.shadowRecallPenalty,
+            });
+            return result;
+        }, []);
+    }
+
+    /**
+     * 功能：限制最终结果中影子遗忘条目的数量，避免挤占过多窗口。
+     * @param items 最终候选列表。
+     * @param maxShadowItems 允许保留的影子条目上限。
+     * @returns 限流后的结果。
+     */
+    private applyShadowFinalCap(
+        items: import('../memory-retrieval/types').RetrievalResultItem[],
+        maxShadowItems: number,
+    ): import('../memory-retrieval/types').RetrievalResultItem[] {
+        const safeLimit = Math.max(0, Math.trunc(Number(maxShadowItems) || 0));
+        let shadowCount = 0;
+        return items.filter((item): boolean => {
+            if (item.candidate.forgettingTier !== 'shadow_forgotten' || item.candidate.shadowTriggered !== true) {
+                return true;
+            }
+            shadowCount += 1;
+            return shadowCount <= safeLimit;
+        });
+    }
+
+    /**
      * 功能：构建按候选 ID 索引的排序查找表。
      * @param items 检索结果项。
      * @returns 查找表。
@@ -452,34 +520,64 @@ export class MemoryRetrievalService {
         finalRank?: number;
     }): string {
         const timeBoost = Number(input.finalItem.breakdown.timeBoost) || 0;
+        const semanticLabel = input.finalItem.candidate.semantic
+            ? `${resolveSemanticKindLabel(input.finalItem.candidate.semantic.semanticKind)}候选`
+            : '候选';
+        const shadowHint = input.finalItem.candidate.forgettingTier === 'shadow_forgotten'
+            ? `${input.finalItem.candidate.shadowTriggered ? '影子遗忘被强相关唤起，' : '影子遗忘参与排序，'}`
+            : '';
         const timeHint = timeBoost > 0.01 ? '时间方向加权参与了最终排序。' : '';
+        const retentionHint = this.resolveRankingRetentionHint(input.finalItem.candidate.retention?.explainReasonCodes);
         if (input.lexicalRank === undefined && input.mergedRank !== undefined) {
             if (input.source === 'vector') {
-                return `由向量命中补入候选。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}由向量命中补入候选。${retentionHint}${timeHint}`.trim();
             }
             if (input.source === 'graph_expansion') {
-                return `由图扩展补入候选。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}由图扩展补入候选。${retentionHint}${timeHint}`.trim();
             }
-            return `在融合阶段进入最终候选窗口。${timeHint}`.trim();
+            return `${shadowHint}${semanticLabel}在融合阶段进入最终候选窗口。${retentionHint}${timeHint}`.trim();
         }
         if (input.mergedRank !== undefined && input.rerankedRank !== undefined) {
             const diff = input.mergedRank - input.rerankedRank;
             if (diff > 0) {
-                return `重排后提升 ${diff} 位。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}重排后提升 ${diff} 位。${retentionHint}${timeHint}`.trim();
             }
             if (diff < 0) {
-                return `重排后下降 ${Math.abs(diff)} 位。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}重排后下降 ${Math.abs(diff)} 位。${retentionHint}${timeHint}`.trim();
             }
         }
         if (input.lexicalRank !== undefined && input.finalRank !== undefined) {
             const diff = input.lexicalRank - input.finalRank;
             if (diff > 0) {
-                return `相较初始词法排序提升 ${diff} 位。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}相较初始词法排序提升 ${diff} 位。${retentionHint}${timeHint}`.trim();
             }
             if (diff < 0) {
-                return `相较初始词法排序下降 ${Math.abs(diff)} 位。${timeHint}`.trim();
+                return `${shadowHint}${semanticLabel}相较初始词法排序下降 ${Math.abs(diff)} 位。${retentionHint}${timeHint}`.trim();
             }
         }
-        return (`排序位置基本保持不变。${timeHint}`).trim();
+        return (`${shadowHint}${semanticLabel}排序位置基本保持不变。${retentionHint}${timeHint}`).trim();
+    }
+
+    private resolveRankingRetentionHint(reasonCodes?: string[]): string {
+        if (!Array.isArray(reasonCodes) || reasonCodes.length <= 0) {
+            return '';
+        }
+        const mapping: Record<string, string> = {
+            retention_stage_clear: '记忆阶段清晰',
+            retention_stage_blur: '记忆阶段模糊',
+            retention_stage_distorted: '记忆阶段失真',
+            shadow_recall_penalized: '统一 retention 已降权',
+            recency_weakened: '时效衰减',
+            importance_high: '重要度较高',
+            memory_percent_critical_low: '原始记忆度极低',
+            memory_percent_low: '原始记忆度偏低',
+        };
+        const labels = Array.from(new Set(
+            reasonCodes
+                .map((code: string): string => mapping[String(code ?? '').trim()] || '')
+                .filter(Boolean)
+                .slice(0, 2),
+        ));
+        return labels.length > 0 ? `${labels.join('、')}。` : '';
     }
 }

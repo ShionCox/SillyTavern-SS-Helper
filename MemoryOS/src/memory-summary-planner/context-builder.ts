@@ -1,4 +1,4 @@
-import type { MemoryEntry, SummaryEntryUpsert, WorldProfileBinding } from '../types';
+import type { MemoryEntry, RoleEntryMemory, SummaryEntryUpsert, WorldProfileBinding } from '../types';
 import { detectWorldProfile, resolveWorldProfile, type WorldProfileDetectionResult } from '../memory-world-profile';
 import { detectSummarySignals } from './signal-detector';
 import { resolveCandidateTypes } from './candidate-type-resolver';
@@ -16,6 +16,7 @@ import type { SummaryPlannerOutput } from '../memory-summary/mutation-types';
 import type { PlannerFact, PlannerSignal, FragmentRepairMetadata, FragmentRepairDebugRow } from './fragment-types';
 import { runFragmentRepairPipeline } from './planner-input-assembler';
 import { buildFragmentRepairAuditRecord, formatAuditLog } from './memory-audit-logger';
+import { projectMemorySemanticRecord, resolveSemanticKindLabel } from '../core/memory-semantic';
 
 /**
  * 功能：总结窗口信息。
@@ -48,6 +49,7 @@ export interface BuildSummaryContextInput {
     actorHints: string[];
     entries: MemoryEntry[];
     memoryPercentByEntryId?: Map<string, number>;
+    roleMemories?: RoleEntryMemory[];
     worldProfileTexts: string[];
     worldProfileBinding?: WorldProfileBinding | null;
     recentSummaries?: Array<{
@@ -136,6 +138,7 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
         candidateTypes,
         entries: input.entries,
         memoryPercentByEntryId: input.memoryPercentByEntryId,
+        roleMemories: input.roleMemories,
         rulePackMode: input.rulePackMode,
         maxCandidatesHardCap: 12,
         candidateTextBudgetChars: 1800,
@@ -408,14 +411,16 @@ export function normalizeSummarySnapshot(input: {
     const sourceSentences = splitChineseSentences([input.title, input.content].filter(Boolean).join('。'));
     const entrySentences = (input.entryUpserts ?? []).flatMap((item) => {
         const payload = normalizeRecord(item.detailPayload);
-        const fields = normalizeRecord(payload.fields);
+        const semantic = projectMemorySemanticRecord({
+            entryType: item.entryType,
+            ongoing: item.ongoing,
+            detailPayload: payload,
+        });
         return [
             item.summary,
-            String(fields.state ?? ''),
-            String(fields.status ?? ''),
-            String(fields.objective ?? ''),
-            String(fields.result ?? ''),
-            String(payload.state ?? ''),
+            semantic?.currentState ?? '',
+            semantic?.goalOrObjective ?? '',
+            semantic?.finalOutcome ?? '',
         ];
     }).map((item) => normalizeChineseText(item)).filter(Boolean);
     const sentences = dedupeStrings([...sourceSentences, ...entrySentences]);
@@ -831,22 +836,23 @@ function sanitizeNormalizedSummary(summary: NormalizedSummaryDigest): Normalized
  */
 function renderCandidateBrief(type: string, title: string, summary: string, entities: string[], actors: string[]): string {
     const shortSummary = truncateChineseText(normalizeChineseText(summary || title), 40);
-    if (type === 'task') {
-        return `任务：${normalizeChineseText(title) || shortSummary}；状态：${shortSummary}`;
+    const semantic = projectMemorySemanticRecord({ entryType: type });
+    if (semantic?.semanticKind === 'task_progress') {
+        return `任务推进：${normalizeChineseText(title) || shortSummary}；状态：${shortSummary}`;
     }
     if (type === 'relationship') {
         const source = entities[0] || actors[0] || normalizeChineseText(title) || '相关角色';
         const target = entities[1] || actors[1] || '对方';
         return `${source}对${target}：${shortSummary}`;
     }
-    if (type === 'event' || type === 'actor_visible_event') {
-        return `事件：${normalizeChineseText(title) || shortSummary}；结果：${shortSummary}`;
+    if (semantic?.semanticKind === 'event') {
+        return `${resolveSemanticKindLabel(semantic.semanticKind)}：${normalizeChineseText(title) || shortSummary}；结果：${shortSummary}`;
     }
-    if (type === 'location' || type === 'scene_shared_state') {
+    if (semantic?.semanticKind === 'state') {
+        return `状态：${normalizeChineseText(title) || shortSummary}；现状：${shortSummary}`;
+    }
+    if (type === 'location') {
         return `地点：${normalizeChineseText(title) || shortSummary}；作用：${shortSummary}`;
-    }
-    if (type === 'world_global_state') {
-        return `世界状态：${shortSummary}`;
     }
     return `${normalizeChineseText(title) || type}：${shortSummary}`;
 }

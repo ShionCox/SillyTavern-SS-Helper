@@ -58,6 +58,20 @@ export type MemoryOSSettings = {
     retrievalEnableGraphExpansion: boolean;
     /** 是否启用图扩展热点降权 */
     retrievalEnableGraphPenalty: boolean;
+    /** blur 阈值 */
+    retentionBlurThreshold: number;
+    /** distorted 阈值 */
+    retentionDistortedThreshold: number;
+    /** 影子记忆轻度召回惩罚 */
+    retentionShadowRetrievalPenaltyMild: number;
+    /** 影子记忆重度召回惩罚 */
+    retentionShadowRetrievalPenaltyHeavy: number;
+    /** 影子记忆轻度置信惩罚 */
+    retentionShadowConfidencePenaltyMild: number;
+    /** 影子记忆重度置信惩罚 */
+    retentionShadowConfidencePenaltyHeavy: number;
+    /** 最终结果允许保留的影子记忆条目上限 */
+    retentionShadowMaxFinalItems: number;
     /** 向量检索 topK */
     vectorTopK: number;
     /** 向量深路径候选窗口 */
@@ -142,6 +156,13 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalEnablePayloadFilter: true,
     retrievalEnableGraphExpansion: true,
     retrievalEnableGraphPenalty: true,
+    retentionBlurThreshold: 72,
+    retentionDistortedThreshold: 35,
+    retentionShadowRetrievalPenaltyMild: 0.28,
+    retentionShadowRetrievalPenaltyHeavy: 0.42,
+    retentionShadowConfidencePenaltyMild: 0.22,
+    retentionShadowConfidencePenaltyHeavy: 0.38,
+    retentionShadowMaxFinalItems: 1,
     vectorTopK: 5,
     vectorDeepWindow: 25,
     vectorFinalTopK: 5,
@@ -285,6 +306,41 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         0,
         Math.min(3, Math.trunc(Number(candidate.retrievalDefaultExpandDepth) || DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth)),
     );
+    const legacyCandidate = candidate as Partial<MemoryOSSettings> & Record<string, unknown>;
+    const retentionBlurThreshold: number = Math.max(
+        1,
+        Math.min(99, Math.trunc(Number(candidate.retentionBlurThreshold) || DEFAULT_MEMORY_OS_SETTINGS.retentionBlurThreshold)),
+    );
+    const retentionDistortedThreshold: number = Math.max(
+        1,
+        Math.min(
+            retentionBlurThreshold - 1,
+            Math.trunc(Number(candidate.retentionDistortedThreshold) || DEFAULT_MEMORY_OS_SETTINGS.retentionDistortedThreshold),
+        ),
+    );
+    const retentionShadowRetrievalPenaltyMild: number = clampUnitInterval(
+        candidate.retentionShadowRetrievalPenaltyMild ?? legacyCandidate.forgettingShadowRecallPenaltyMild,
+        DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyMild,
+    );
+    const retentionShadowRetrievalPenaltyHeavy: number = clampUnitInterval(
+        candidate.retentionShadowRetrievalPenaltyHeavy ?? legacyCandidate.forgettingShadowRecallPenaltyHeavy,
+        DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyHeavy,
+    );
+    const retentionShadowConfidencePenaltyMild: number = clampUnitInterval(
+        candidate.retentionShadowConfidencePenaltyMild ?? legacyCandidate.forgettingShadowConfidencePenaltyMild,
+        DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyMild,
+    );
+    const retentionShadowConfidencePenaltyHeavy: number = clampUnitInterval(
+        candidate.retentionShadowConfidencePenaltyHeavy ?? legacyCandidate.forgettingShadowConfidencePenaltyHeavy,
+        DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyHeavy,
+    );
+    const retentionShadowMaxFinalItems: number = Math.max(
+        0,
+        Math.min(
+            10,
+            Math.trunc(Number(candidate.retentionShadowMaxFinalItems ?? legacyCandidate.forgettingShadowMaxFinalItems) || DEFAULT_MEMORY_OS_SETTINGS.retentionShadowMaxFinalItems),
+        ),
+    );
     const vectorTopK: number = Math.max(
         1,
         Math.min(100, Math.trunc(Number(candidate.vectorTopK) || DEFAULT_MEMORY_OS_SETTINGS.vectorTopK)),
@@ -360,6 +416,13 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         retrievalEnablePayloadFilter: candidate.retrievalEnablePayloadFilter !== false,
         retrievalEnableGraphExpansion: candidate.retrievalEnableGraphExpansion !== false,
         retrievalEnableGraphPenalty: candidate.retrievalEnableGraphPenalty !== false,
+        retentionBlurThreshold,
+        retentionDistortedThreshold,
+        retentionShadowRetrievalPenaltyMild,
+        retentionShadowRetrievalPenaltyHeavy,
+        retentionShadowConfidencePenaltyMild,
+        retentionShadowConfidencePenaltyHeavy,
+        retentionShadowMaxFinalItems,
         vectorTopK,
         vectorDeepWindow,
         vectorFinalTopK,
@@ -376,6 +439,14 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         vectorLLMHubRerankMaxCandidates,
         vectorLLMHubRerankFallbackToRule: candidate.vectorLLMHubRerankFallbackToRule !== false,
     };
+}
+
+function clampUnitInterval(value: unknown, fallback: number): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return fallback;
+    }
+    return Math.max(0, Math.min(1, Number(numeric.toFixed(3))));
 }
 
 const memoryOSSettingsStore = createSdkPluginSettingsStore<MemoryOSSettings>({

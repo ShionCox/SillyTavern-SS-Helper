@@ -1,5 +1,6 @@
 import type { RetrievalResultItem, RetrievalScoreBreakdown } from './types';
 import type { RetrievalMode } from './retrieval-mode';
+import { resolveSemanticKindLabel, resolveVisibilityScopeLabel } from '../core/memory-semantic';
 
 /**
  * 功能：单条检索结果的人类可读解释。
@@ -45,7 +46,7 @@ export function buildRetrievalExplanation(item: RetrievalResultItem): RetrievalE
     const breakdown = item.breakdown;
     const source = inferSource(breakdown);
     const scoreBreakdown = formatScoreBreakdown(breakdown);
-    const reasonSummary = buildReasonSummary(breakdown, source);
+    const reasonSummary = buildReasonSummary(item, source);
 
     return {
         candidateId: item.candidate.candidateId,
@@ -126,12 +127,36 @@ function formatScoreBreakdown(breakdown: RetrievalScoreBreakdown): string {
  * 功能：生成命中原因摘要。
  */
 function buildReasonSummary(
-    breakdown: RetrievalScoreBreakdown,
+    item: RetrievalResultItem,
     source: RetrievalExplanation['source'],
 ): string {
+    const breakdown = item.breakdown;
+    const semantic = item.candidate.semantic;
+    const semanticReasons: string[] = [];
+    if (item.candidate.forgettingTier === 'shadow_forgotten') {
+        semanticReasons.push(item.candidate.shadowTriggered ? '影子遗忘被强相关问题唤起' : '影子遗忘候选');
+        if ((item.candidate.shadowRecallPenalty ?? 0) > 0) {
+            semanticReasons.push('已施加影子降权');
+        }
+    }
+    const retentionReasons = resolveRetentionReasonLabels(item.candidate.retention?.explainReasonCodes);
+    semanticReasons.push(...retentionReasons);
+    if (semantic) {
+        semanticReasons.push(`${resolveSemanticKindLabel(semantic.semanticKind)}语义`);
+        semanticReasons.push(resolveVisibilityScopeLabel(semantic.visibilityScope));
+        if (semantic.currentState && (breakdown.stateBoost ?? 0) > 0.2) {
+            semanticReasons.push('当前状态匹配');
+        }
+        if (semantic.finalOutcome && (breakdown.outcomeBoost ?? 0) > 0.2) {
+            semanticReasons.push('结果语义匹配');
+        }
+        if (semantic.goalOrObjective && item.candidate.schemaId === 'task') {
+            semanticReasons.push('目标推进相关');
+        }
+    }
     switch (source) {
         case 'lexical': {
-            const reasons: string[] = [];
+            const reasons: string[] = [...semanticReasons];
             if (breakdown.bm25 > 0.3) reasons.push('关键词高度匹配');
             else if (breakdown.bm25 > 0) reasons.push('关键词部分匹配');
             if (breakdown.ngram > 0.4) reasons.push('短语结构相似');
@@ -139,15 +164,44 @@ function buildReasonSummary(
             if (breakdown.memoryWeight > 0.5) reasons.push('记忆度较高');
             if ((breakdown.recencyWeight ?? 0) > 0.5) reasons.push('近期更新');
             if ((breakdown.timeBoost ?? 0) > 0.2) reasons.push('时间方向匹配');
-            if ((breakdown.stateBoost ?? 0) > 0.2) reasons.push('状态特征匹配');
-            if ((breakdown.outcomeBoost ?? 0) > 0.2) reasons.push('结果特征匹配');
+            if ((breakdown.stateBoost ?? 0) > 0.2 && !semantic?.currentState) reasons.push('状态特征匹配');
+            if ((breakdown.outcomeBoost ?? 0) > 0.2 && !semantic?.finalOutcome) reasons.push('结果特征匹配');
             return reasons.join('、') || '词法检索命中';
         }
         case 'vector':
-            return '语义向量相似度命中';
+            return [...semanticReasons, '语义向量相似度命中'].join('、');
         case 'graph_expansion':
-            return '通过图扩展从相关条目扩散命中';
+            return [...semanticReasons, '通过图扩展从相关条目扩散命中'].join('、');
         case 'coverage_supplement':
-            return '补召回阶段补充命中';
+            return [...semanticReasons, '补召回阶段补充命中'].join('、');
     }
+}
+
+function resolveRetentionReasonLabels(reasonCodes?: string[]): string[] {
+    if (!Array.isArray(reasonCodes) || reasonCodes.length <= 0) {
+        return [];
+    }
+    const mapping: Record<string, string> = {
+        retention_stage_clear: '记忆阶段清晰',
+        retention_stage_blur: '记忆阶段模糊',
+        retention_stage_distorted: '记忆阶段失真',
+        forgotten_level_active: '活跃记忆',
+        forgotten_level_shadow_forgotten: '影子遗忘',
+        forgotten_level_hard_forgotten: '硬遗忘',
+        shadow_recall_triggered: '影子召回已触发',
+        shadow_recall_penalized: '统一 retention 已降权',
+        rehearsal_boosted: '复述增强',
+        recency_weakened: '时效衰减',
+        importance_high: '重要度较高',
+        actor_memory_low: '角色记忆能力偏低',
+        relation_sensitive: '关系敏感度较高',
+        memory_percent_critical_low: '原始记忆度极低',
+        memory_percent_low: '原始记忆度偏低',
+    };
+    return Array.from(new Set(
+        reasonCodes
+            .map((code: string): string => mapping[String(code ?? '').trim()] || '')
+            .filter(Boolean)
+            .slice(0, 4),
+    ));
 }

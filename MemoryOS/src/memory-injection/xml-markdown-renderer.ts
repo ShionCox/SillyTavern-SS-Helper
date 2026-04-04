@@ -40,6 +40,7 @@ export function renderMemoryContextXmlMarkdown(
         ...context.actorView.identityLines,
         ...context.actorView.relationshipLines,
         ...context.actorView.eventLines,
+        ...context.actorView.shadowEventLines,
         ...context.actorView.interpretationLines,
     ], budget.actorViewChars);
 
@@ -49,6 +50,10 @@ export function renderMemoryContextXmlMarkdown(
         Math.floor(budget.actorViewChars * 0.28),
     );
     const eventLines = trimLinesByBudget(context.actorView.eventLines, Math.floor(budget.actorViewChars * 0.32));
+    const shadowEventLines = trimLinesByBudget(
+        context.actorView.shadowEventLines ?? [],
+        Math.floor(budget.actorViewChars * 0.24),
+    );
     const interpretationLines = trimLinesByBudget(
         context.actorView.interpretationLines,
         Math.floor(budget.actorViewChars * 0.28),
@@ -83,6 +88,11 @@ export function renderMemoryContextXmlMarkdown(
         `### ${style.eventTitle}`,
         renderBulletLines(eventLines),
         '',
+        ...(shadowEventLines.length > 0 ? [
+            '### 被问题唤起的影子记忆',
+            renderBulletLines(shadowEventLines),
+            '',
+        ] : []),
         `### ${style.interpretationTitle}`,
         renderBulletLines(interpretationLines),
         '  </actor_view>',

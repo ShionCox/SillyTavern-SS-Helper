@@ -51,6 +51,13 @@ const RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID = 'stx-memoryos-retrieval-default-expand
 const RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID = 'stx-memoryos-retrieval-enable-payload-filter';
 const RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID = 'stx-memoryos-retrieval-enable-graph-expansion';
 const RETRIEVAL_ENABLE_GRAPH_PENALTY_ID = 'stx-memoryos-retrieval-enable-graph-penalty';
+const FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID = 'stx-memoryos-forgetting-shadow-recall-penalty-mild';
+const FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID = 'stx-memoryos-forgetting-shadow-recall-penalty-heavy';
+const FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID = 'stx-memoryos-forgetting-shadow-confidence-penalty-mild';
+const FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID = 'stx-memoryos-forgetting-shadow-confidence-penalty-heavy';
+const FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID = 'stx-memoryos-forgetting-shadow-max-final-items';
+const RETENTION_BLUR_THRESHOLD_ID = 'stx-memoryos-retention-blur-threshold';
+const RETENTION_DISTORTED_THRESHOLD_ID = 'stx-memoryos-retention-distorted-threshold';
 const RETRIEVAL_LOG_ENABLED_ID = 'stx-memoryos-retrieval-log-enabled';
 const RETRIEVAL_TRACE_PANEL_ID = 'stx-memoryos-retrieval-trace-panel-enabled';
 const RETRIEVAL_LOG_LEVEL_ID = 'stx-memoryos-retrieval-log-level';
@@ -233,6 +240,15 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_TOPK_ID}">默认 TopK</label>${numberField(RETRIEVAL_DEFAULT_TOPK_ID,1,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID}">图扩展深度</label>${numberField(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID,0,3,1)}<span class="stx-ui-field-hint">0 = 不扩展。</span></div>
             </div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Retention Core</div><div class="stx-ui-item-desc">统一控制记忆强度模型的阶段阈值，以及影子记忆被唤起后的召回/置信惩罚。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_BLUR_THRESHOLD_ID}">Blur 阈值</label>${numberField(RETENTION_BLUR_THRESHOLD_ID,1,99,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 blur。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_DISTORTED_THRESHOLD_ID}">Distorted 阈值</label>${numberField(RETENTION_DISTORTED_THRESHOLD_ID,1,98,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 distorted，且必须小于 blur 阈值。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID}">轻度影子召回惩罚</label>${numberField(FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID}">重度影子召回惩罚</label>${numberField(FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID}">轻度影子置信惩罚</label>${numberField(FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID}">重度影子置信惩罚</label>${numberField(FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID}">最终影子条目上限</label>${numberField(FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID,0,10,1)}<span class="stx-ui-field-hint">0 表示彻底不让影子记忆进入最终结果。</span></div>
+            </div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展</div><div class="stx-ui-item-desc">控制是否沿关系图扩散种子节点，把相关上下文一起召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, '启用图扩展')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
@@ -359,6 +375,13 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [RETRIEVAL_MODE_ID, settings.retrievalMode],
         [RETRIEVAL_DEFAULT_TOPK_ID, String(settings.retrievalDefaultTopK)],
         [RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(settings.retrievalDefaultExpandDepth)],
+        [RETENTION_BLUR_THRESHOLD_ID, String(settings.retentionBlurThreshold)],
+        [RETENTION_DISTORTED_THRESHOLD_ID, String(settings.retentionDistortedThreshold)],
+        [FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID, String(settings.retentionShadowRetrievalPenaltyMild)],
+        [FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID, String(settings.retentionShadowRetrievalPenaltyHeavy)],
+        [FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID, String(settings.retentionShadowConfidencePenaltyMild)],
+        [FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID, String(settings.retentionShadowConfidencePenaltyHeavy)],
+        [FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID, String(settings.retentionShadowMaxFinalItems)],
         [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, settings.retrievalEnablePayloadFilter],
         [RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, settings.retrievalEnableGraphExpansion],
         [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, settings.retrievalEnableGraphPenalty],
@@ -430,6 +453,13 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         })(),
         retrievalDefaultTopK: Number(text(RETRIEVAL_DEFAULT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultTopK))),
         retrievalDefaultExpandDepth: Number(text(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth))),
+        retentionBlurThreshold: Number(text(RETENTION_BLUR_THRESHOLD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionBlurThreshold))),
+        retentionDistortedThreshold: Number(text(RETENTION_DISTORTED_THRESHOLD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionDistortedThreshold))),
+        retentionShadowRetrievalPenaltyMild: Number(text(FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyMild))),
+        retentionShadowRetrievalPenaltyHeavy: Number(text(FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyHeavy))),
+        retentionShadowConfidencePenaltyMild: Number(text(FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyMild))),
+        retentionShadowConfidencePenaltyHeavy: Number(text(FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyHeavy))),
+        retentionShadowMaxFinalItems: Number(text(FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowMaxFinalItems))),
         retrievalEnablePayloadFilter: checked(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnablePayloadFilter),
         retrievalEnableGraphExpansion: checked(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphExpansion),
         retrievalEnableGraphPenalty: checked(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphPenalty),

@@ -119,7 +119,7 @@ export class EmbeddingRetrievalProvider implements RetrievalProvider {
                     bm25: 0,
                     ngram: 0,
                     editDistance: 0,
-                    memoryWeight: candidate.memoryPercent / 100,
+                    memoryWeight: candidate.retention?.retrievalWeight ?? (candidate.memoryPercent / 100),
                     recencyWeight: 0,
                     graphBoost: 0,
                 },

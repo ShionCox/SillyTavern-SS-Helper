@@ -119,7 +119,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 </div>
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
-                    <div class="stx-memory-workbench__info-list">
+                    <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple">
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('query_text'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.preview?.query, resolvePreviewWorkbenchText('not_provided')))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('generated_at'))}</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_actor_count'))}</span><strong>${escapeHtml(String(snapshot.preview?.matchedActorKeys.length ?? 0))}</strong></div>
@@ -130,9 +130,18 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('clear_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.clear ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('blur_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.blur ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('distorted_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.distorted ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子注入条目</span><strong>${escapeHtml(String(previewDiagnostics?.shadowInjectedCount ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子记忆小节</span><strong>${escapeHtml(previewDiagnostics?.shadowSectionVisible ? '已显示' : '未显示')}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(String(previewDiagnostics?.compareKeySchemaVersion ?? 'v2'))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.indexed_match ?? 0))}</strong></div>
                         <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.fallback_match ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>事件语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.event ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>状态语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.state ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>任务推进语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.task_progress ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>活跃记忆</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.active ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.shadow_forgotten ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>硬遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.hard_forgotten ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子唤起次数</span><strong>${escapeHtml(String(snapshot.recallExplanation?.shadowTriggeredCount ?? 0))}</strong></div>
                     </div>
                     <div class="stx-memory-workbench__stack" style="margin-top:12px;">
                         <div class="stx-memory-workbench__card">
@@ -190,6 +199,10 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_entries'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.indexed_match ?? 0))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.fallback_match ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>活跃记忆</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.active ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>影子遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.shadow_forgotten ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>硬遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.hard_forgotten ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>影子唤起次数</span><strong>${escapeHtml(String(snapshot.recallExplanation.shadowTriggeredCount ?? 0))}</strong></div>
                             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_codes'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
                         </div>
                     ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_latest_injection_reason'))}</div>`}
