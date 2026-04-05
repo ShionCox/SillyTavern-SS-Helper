@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
     stateStore,
+    actorDisplayNameStore,
     saveEntryMock,
+    applyLedgerMutationBatchMock,
+    replaceRelationshipsForTakeoverMock,
+    saveRelationshipMock,
     getWorldProfileBindingMock,
     putWorldProfileBindingMock,
     appendMutationHistoryMock,
@@ -14,9 +18,72 @@ const {
 } = vi.hoisted(() => {
     return {
         stateStore: new Map<string, Record<string, unknown>>(),
+        actorDisplayNameStore: new Map<string, string>([['user', '你']]),
         saveEntryMock: vi.fn(async (input?: Record<string, unknown>) => ({
             entryId: String(input?.entryId ?? 'entry-1'),
         })),
+        applyLedgerMutationBatchMock: vi.fn(async (mutations?: Array<Record<string, unknown>>) => {
+            for (const mutation of mutations ?? []) {
+                if (mutation?.action === 'UPDATE' || mutation?.action === 'UPSERT' || mutation?.action === 'ADD') {
+                    const savedEntry = await saveEntryMock({
+                        entryId: mutation.entryId,
+                        entryType: mutation.targetKind,
+                        title: mutation.title,
+                        tags: mutation.tags,
+                        summary: mutation.summary,
+                        detail: mutation.detail,
+                        detailPayload: mutation.detailPayload,
+                    }, {});
+                    for (const actorKey of Array.isArray(mutation?.actorBindings) ? mutation.actorBindings : []) {
+                        await bindRoleToEntryMock(actorKey, String(savedEntry?.entryId ?? mutation.entryId ?? 'entry-1'));
+                    }
+                }
+            }
+            return {
+                created: 0,
+                updated: 0,
+                invalidated: 0,
+                skipped: 0,
+                warnings: [],
+            };
+        }),
+        replaceRelationshipsForTakeoverMock: vi.fn(async () => undefined),
+        saveRelationshipMock: vi.fn(async (input?: Record<string, unknown>) => {
+            const sourceActorKey = String(input?.sourceActorKey ?? '').trim();
+            const targetActorKey = String(input?.targetActorKey ?? '').trim();
+            const sourceDisplayName = actorDisplayNameStore.get(sourceActorKey)
+                ?? (sourceActorKey === 'user' ? '你' : sourceActorKey.replace(/^actor_?/, ''));
+            const targetDisplayName = actorDisplayNameStore.get(targetActorKey)
+                ?? targetActorKey.replace(/^actor_?/, '');
+            await saveEntryMock({
+                entryType: 'relationship',
+                title: `${sourceDisplayName}与${targetDisplayName}的关系`,
+                summary: input?.summary,
+                detail: input?.state,
+                detailPayload: {
+                    sourceActorKey,
+                    targetActorKey,
+                    sourceDisplayName,
+                    targetDisplayName,
+                    fields: {
+                        relationTag: input?.relationTag,
+                        participants: input?.participants,
+                    },
+                },
+            }, {});
+            return {
+                relationshipId: 'rel-1',
+                sourceActorKey,
+                targetActorKey,
+                relationTag: input?.relationTag,
+                state: input?.state,
+                summary: input?.summary,
+                trust: input?.trust,
+                affection: input?.affection,
+                tension: input?.tension,
+                participants: Array.isArray(input?.participants) ? input?.participants : [],
+            };
+        }),
         getWorldProfileBindingMock: vi.fn(async () => null),
         putWorldProfileBindingMock: vi.fn(async () => ({
             primaryProfile: 'fantasy_magic',
@@ -129,11 +196,34 @@ vi.mock('../src/repository/entry-repository', () => {
             return saveEntryMock(input, meta);
         }
 
+        public async applyLedgerMutationBatch(
+            mutations?: Array<Record<string, unknown>>,
+            context?: Record<string, unknown>,
+        ): Promise<Record<string, unknown>> {
+            return applyLedgerMutationBatchMock(mutations, context);
+        }
+
+        public async replaceRelationshipsForTakeover(records?: Array<Record<string, unknown>>): Promise<void> {
+            return replaceRelationshipsForTakeoverMock(records);
+        }
+
+        public async saveRelationship(
+            input?: Record<string, unknown>,
+            meta?: Record<string, unknown>,
+        ): Promise<Record<string, unknown>> {
+            return saveRelationshipMock(input, meta);
+        }
+
         /**
          * 功能：确保角色档案存在。
          * @returns 异步完成。
          */
         public async ensureActorProfile(input?: Record<string, unknown>): Promise<void> {
+            const actorKey = String(input?.actorKey ?? '').trim();
+            const displayName = String(input?.displayName ?? '').trim();
+            if (actorKey && displayName) {
+                actorDisplayNameStore.set(actorKey, displayName);
+            }
             return ensureActorProfileMock(input);
         }
 
@@ -253,7 +343,12 @@ import type { MemoryTakeoverConsolidationResult } from '../src/types';
 describe('memory sdk takeover cold start sync', () => {
     beforeEach(() => {
         stateStore.clear();
+        actorDisplayNameStore.clear();
+        actorDisplayNameStore.set('user', '你');
         saveEntryMock.mockClear();
+        applyLedgerMutationBatchMock.mockClear();
+        replaceRelationshipsForTakeoverMock.mockClear();
+        saveRelationshipMock.mockClear();
         getWorldProfileBindingMock.mockClear();
         getWorldProfileBindingMock.mockResolvedValue(null);
         putWorldProfileBindingMock.mockClear();
@@ -270,6 +365,7 @@ describe('memory sdk takeover cold start sync', () => {
 
     it('marks cold start as completed and binds world profile after takeover consolidation is applied', async () => {
         const sdk = new MemorySDKImpl('chat-1');
+        (sdk as unknown as { eventsManager: { countByTypes: ReturnType<typeof vi.fn> } }).eventsManager.countByTypes.mockResolvedValue(24);
         const result: MemoryTakeoverConsolidationResult = {
             takeoverId: 'takeover-1',
             chapterDigestIndex: [{
@@ -328,9 +424,15 @@ describe('memory sdk takeover cold start sync', () => {
             .applyTakeoverConsolidation(result);
 
         const status = await sdk.chatState.getColdStartStatus();
+        const summaryProgress = await sdk.chatState.getSummaryProgress();
         expect(status.completed).toBe(true);
         expect(status.completedAt).toBeTypeOf('number');
         expect(stateStore.get('chat-1')?.coldStartLastReasonCode).toBe('old_chat_takeover_completed');
+        expect(summaryProgress.lastSummarizedIndex).toBe(24);
+        expect(summaryProgress.pendingStartIndex).toBe(25);
+        expect(summaryProgress.pendingEndIndex).toBe(24);
+        expect(summaryProgress.lastSummarizedMessageId).toBeUndefined();
+        expect(summaryProgress.lastSummarizedAt).toBeTypeOf('number');
         expect(putWorldProfileBindingMock).toHaveBeenCalledTimes(1);
         expect(putWorldProfileBindingMock).toHaveBeenCalledWith(expect.objectContaining({
             primaryProfile: expect.any(String),
@@ -341,6 +443,90 @@ describe('memory sdk takeover cold start sync', () => {
         expect(appendMutationHistoryMock).toHaveBeenCalledWith(expect.objectContaining({
             action: 'world_profile_bound',
         }));
+    });
+
+    it('skips summary progress alignment for custom rebuild style takeover consolidation', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+        stateStore.set('chat-1', {
+            summaryLastSummarizedIndex: 8,
+            summaryLastSummarizedMessageId: 'msg-8',
+            summaryPendingStartIndex: 9,
+            summaryPendingEndIndex: 8,
+        });
+        (sdk as unknown as { eventsManager: { countByTypes: ReturnType<typeof vi.fn> } }).eventsManager.countByTypes.mockResolvedValue(24);
+        const result: MemoryTakeoverConsolidationResult = {
+            takeoverId: 'takeover-rebuild',
+            chapterDigestIndex: [],
+            actorCards: [],
+            relationships: [],
+            entityCards: [],
+            entityTransitions: [],
+            longTermFacts: [],
+            relationState: [],
+            taskState: [],
+            worldState: {},
+            activeSnapshot: null,
+            dedupeStats: {
+                totalFacts: 0,
+                dedupedFacts: 0,
+                relationUpdates: 0,
+                taskUpdates: 0,
+                worldUpdates: 0,
+            },
+            conflictStats: {
+                unresolvedFacts: 0,
+                unresolvedRelations: 0,
+                unresolvedTasks: 0,
+                unresolvedWorldStates: 0,
+                unresolvedEntities: 0,
+            },
+            generatedAt: Date.now(),
+        };
+
+        await (sdk as unknown as {
+            applyTakeoverConsolidation: (
+                value: MemoryTakeoverConsolidationResult,
+                options?: { alignSummaryProgress?: boolean },
+            ) => Promise<void>;
+        }).applyTakeoverConsolidation(result, { alignSummaryProgress: false });
+
+        const summaryProgress = await sdk.chatState.getSummaryProgress();
+        expect(summaryProgress.lastSummarizedIndex).toBe(8);
+        expect(summaryProgress.pendingStartIndex).toBe(9);
+        expect(summaryProgress.pendingEndIndex).toBe(8);
+        expect(summaryProgress.lastSummarizedMessageId).toBe('msg-8');
+    });
+
+    it('aligns summary progress after manual summary capture succeeds', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+        stateStore.set('chat-1', {
+            summaryLastSummarizedIndex: 3,
+            summaryLastSummarizedMessageId: 'msg-3',
+            summaryPendingStartIndex: 4,
+            summaryPendingEndIndex: 6,
+        });
+        (sdk as unknown as { eventsManager: { countByTypes: ReturnType<typeof vi.fn> } }).eventsManager.countByTypes.mockResolvedValue(12);
+        (sdk as unknown as {
+            summaryService: { captureSummaryFromChat: ReturnType<typeof vi.fn> };
+        }).summaryService = {
+            captureSummaryFromChat: vi.fn(async () => ({
+                summaryId: 'summary-1',
+                title: '手动总结',
+                content: '这是一次手动总结。',
+            })),
+        };
+
+        const snapshot = await sdk.unifiedMemory.summaries.capture({
+            messages: [{ role: 'user', content: '你好', turnIndex: 1 }],
+        });
+
+        const summaryProgress = await sdk.chatState.getSummaryProgress();
+        expect(snapshot).toBeTruthy();
+        expect(summaryProgress.lastSummarizedIndex).toBe(12);
+        expect(summaryProgress.pendingStartIndex).toBe(13);
+        expect(summaryProgress.pendingEndIndex).toBe(12);
+        expect(summaryProgress.lastSummarizedMessageId).toBeUndefined();
+        expect(summaryProgress.lastSummarizedAt).toBeTypeOf('number');
     });
 
     it('creates different actor keys for multiple Chinese actor cards during takeover consolidation', async () => {

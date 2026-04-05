@@ -61,6 +61,13 @@ export function renderMemoryContextXmlMarkdown(
 
     const assembled = [
         '<memory_context version="1.0">',
+        ...(context.timelineLines.length > 0 ? [
+            '  <timeline_overview>',
+            '## 当前事件时间线',
+            renderBulletLines(context.timelineLines),
+            '  </timeline_overview>',
+            '',
+        ] : []),
         '  <world_base>',
         `## ${style.worldBaseTitle}`,
         renderBulletLines(worldBaseLines),

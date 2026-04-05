@@ -1,5 +1,11 @@
 import { openSharedDialog, type SharedDialogInstance } from '../../../_Components/sharedDialog';
 import { renderDreamReviewExplainPanel } from './dream-review-explain-panel';
+import {
+    localizeDreamDisplayText,
+    resolveDreamMutationTypeLabel,
+    resolveDreamReviewSourceLabel,
+    resolveDreamReviewWaveLabel,
+} from './workbenchLocale';
 import type {
     DreamMutationProposal,
     DreamReviewDecision,
@@ -38,6 +44,63 @@ function createLabelWithTooltip(label: string, maxLength: number = 14): string {
     return truncated === label
         ? truncated
         : `<span title="${escapeAttr(label)}" style="cursor:help;border-bottom:1px dotted var(--dr-muted);">${truncated}</span>`;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+function toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .map((item: unknown): string => String(item ?? '').trim())
+        .filter(Boolean);
+}
+
+function buildRecallTitleMap(recall: DreamSessionRecallRecord): Map<string, string> {
+    const titleMap = new Map<string, string>();
+    [recall.recentHits, recall.midHits, recall.deepHits, recall.fusedHits].forEach((hits) => {
+        hits.forEach((hit) => {
+            const entryId = String(hit.entryId ?? '').trim();
+            const title = String(hit.title ?? '').trim();
+            if (!entryId || !title) {
+                return;
+            }
+            titleMap.set(entryId, title);
+        });
+    });
+    return titleMap;
+}
+
+function resolveDreamMutationActionHint(mutation: DreamMutationProposal): string {
+    if (mutation.mutationType === 'entry_create') {
+        return '应用后会新增一条记忆，让这次梦境里的关键信息真正写进记忆库。';
+    }
+    if (mutation.mutationType === 'entry_patch') {
+        return '应用后会补写或修正一条现有记忆，让它更完整、更贴近当前上下文。';
+    }
+    if (mutation.mutationType === 'relationship_patch') {
+        return '应用后会调整一段关系记录，让人物之间的联系更清楚。';
+    }
+    return '应用后会按这条提案更新相关记忆内容。';
+}
+
+function renderDreamMutationSourceRefs(sourceEntryIds: string[], titleMap: Map<string, string>): string {
+    const normalized = sourceEntryIds
+        .map((entryId: string): string => String(entryId ?? '').trim())
+        .filter(Boolean);
+    if (normalized.length <= 0) {
+        return '未标注';
+    }
+    return normalized
+        .slice(0, 3)
+        .map((entryId: string): string => titleMap.get(entryId) || entryId)
+        .join('、');
 }
 
 function ensureDreamReviewStyle(): void {
@@ -470,6 +533,64 @@ function ensureDreamReviewStyle(): void {
             gap:4px;
             margin:2px 0 0;
         }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__secondary {
+            font-size:10px;
+            line-height:1.5;
+            color:var(--dr-muted);
+            min-width:0;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__secondary--truncate,
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field-value--truncate {
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            word-break:normal;
+            overflow-wrap:normal;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field-grid {
+            display:grid;
+            grid-template-columns:repeat(2, minmax(0, 1fr));
+            gap:6px;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field {
+            border:1px solid var(--dr-line);
+            border-radius:9px;
+            padding:7px 8px;
+            background:color-mix(in srgb, var(--dr-panel) 82%, transparent);
+            min-width:0;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field-label {
+            font-size:10px;
+            line-height:1.35;
+            color:var(--dr-muted);
+            margin-bottom:2px;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field-value {
+            font-size:11px;
+            line-height:1.55;
+            color:var(--dr-text);
+            min-width:0;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__field-value--title {
+            font-weight:700;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__chip-row {
+            display:flex;
+            flex-wrap:wrap;
+            gap:6px;
+        }
         
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__pill {
             display:inline-flex;
@@ -637,19 +758,18 @@ function ensureDreamReviewStyle(): void {
 
 function renderSourceCards(title: string, hits: DreamSessionRecallRecord['recentHits']): string {
     if (hits.length <= 0) {
-        return `<div class="stx-memory-dream-review__source-card"><div class="stx-memory-dream-review__meta">${escapeHtml(title)} 暂无命中。</div></div>`;
+        return `<div class="stx-memory-dream-review__source-card"><div class="stx-memory-dream-review__meta">${escapeHtml(resolveDreamReviewSourceLabel(title))} 暂无命中。</div></div>`;
     }
     return hits
         .map((hit) => {
-            const entryIdDisplay = truncateText(hit.entryId, 20);
-            const entryIdTooltip = entryIdDisplay === hit.entryId ? '' : ` title="${escapeAttr(hit.entryId)}"`;
+            const entryIdDisplay = truncateText(hit.entryId, 36);
             return `
         <article class="stx-memory-dream-review__source-card">
             <div class="stx-memory-dream-review__mutation-title">${escapeHtml(hit.title || '未命名条目')}</div>
-            <div class="stx-memory-dream-review__meta"><span title="entryId" style="cursor:help;">ID</span>：<span${entryIdTooltip}>${escapeHtml(entryIdDisplay)}</span> / 分：${Number(hit.score ?? 0).toFixed(2)}</div>
+            <div class="stx-memory-dream-review__meta">分：${Number(hit.score ?? 0).toFixed(2)} / 来源：${escapeHtml(resolveDreamReviewSourceLabel(title))}</div>
             <div class="stx-memory-dream-review__hint">${escapeHtml(hit.summary || '无摘要')}</div>
+            <div class="stx-memory-dream-review__secondary stx-memory-dream-review__secondary--truncate" title="${escapeAttr(hit.entryId)}">标识：${escapeHtml(entryIdDisplay)}</div>
             <div class="stx-memory-dream-review__badges">
-                <span class="stx-memory-dream-review__badge">${escapeHtml(title)}</span>
                 ${hit.tags
                     .slice(0, 6)
                     .map((tag: string): string => `<span class="stx-memory-dream-review__badge" title="${escapeAttr(tag)}">${escapeHtml(truncateText(tag, 12))}</span>`)
@@ -665,7 +785,7 @@ function renderSourceGroup(title: string, hits: DreamSessionRecallRecord['recent
     return `
         <details class="stx-memory-dream-review__source-group" ${open ? 'open' : ''}>
             <summary class="stx-memory-dream-review__source-summary">
-                <strong>${escapeHtml(title)}</strong>
+                <strong>${escapeHtml(resolveDreamReviewSourceLabel(title))}</strong>
                 <span class="stx-memory-dream-review__source-count">${String(hits.length)}</span>
             </summary>
             <div class="stx-memory-dream-review__source-body">
@@ -677,7 +797,7 @@ function renderSourceGroup(title: string, hits: DreamSessionRecallRecord['recent
 
 function renderDiagnosticsCard(diagnostics?: DreamSessionDiagnosticsRecord | null, graphSnapshot?: DreamSessionGraphSnapshotRecord | null): string {
     if (!diagnostics) {
-        return `<div class="stx-memory-dream-review__diag-card"><div class="stx-memory-dream-review__hint">当前会话未保存 diagnostics。</div></div>`;
+        return `<div class="stx-memory-dream-review__diag-card"><div class="stx-memory-dream-review__hint">当前会话未保存诊断信息。</div></div>`;
     }
     return `
         <div class="stx-memory-dream-review__diag-card">
@@ -689,17 +809,87 @@ function renderDiagnosticsCard(diagnostics?: DreamSessionDiagnosticsRecord | nul
                 .map(
                     (wave) => `
                 <div class="stx-memory-dream-review__explain">
-                    <div class="stx-memory-dream-review__meta">${escapeHtml(wave.waveType)}</div>
-                    <div class="stx-memory-dream-review__hint">seed：${escapeHtml(wave.seedEntryIds.slice(0, 4).join('、') || '无')}</div>
-                    <div class="stx-memory-dream-review__hint">act：${escapeHtml(wave.activatedNodeKeys.slice(0, 6).join('、') || '无')}</div>
+                    <div class="stx-memory-dream-review__meta">${escapeHtml(resolveDreamReviewWaveLabel(wave.waveType))}</div>
+                    <div class="stx-memory-dream-review__hint">种子：${escapeHtml(wave.seedEntryIds.slice(0, 4).join('、') || '无')}</div>
+                    <div class="stx-memory-dream-review__hint">激活：${escapeHtml(wave.activatedNodeKeys.slice(0, 6).join('、') || '无')}</div>
                 </div>
             `,
                 )
                 .join('')}
             <div class="stx-memory-dream-review__explain">
-                <div class="stx-memory-dream-review__meta">图QS</div>
+                <div class="stx-memory-dream-review__meta">图快照</div>
                 <div class="stx-memory-dream-review__hint">节 ${String(graphSnapshot?.activatedNodes.length ?? 0)} / 边 ${String(graphSnapshot?.activatedEdges.length ?? 0)}</div>
             </div>
+        </div>
+    `;
+}
+
+function renderField(label: string, value: string, emphasize = false): string {
+    return renderFieldWithOptions(label, value, { emphasize });
+}
+
+function renderFieldWithOptions(label: string, value: string, options?: { emphasize?: boolean; truncate?: boolean }): string {
+    const text = String(value ?? '').trim();
+    if (!text) {
+        return '';
+    }
+    const emphasize = Boolean(options?.emphasize);
+    const truncate = Boolean(options?.truncate);
+    return `
+        <div class="stx-memory-dream-review__field">
+            <div class="stx-memory-dream-review__field-label">${escapeHtml(label)}</div>
+            <div class="stx-memory-dream-review__field-value${emphasize ? ' stx-memory-dream-review__field-value--title' : ''}${truncate ? ' stx-memory-dream-review__field-value--truncate' : ''}"${truncate ? ` title="${escapeAttr(text)}"` : ''}>${escapeHtml(text)}</div>
+        </div>
+    `;
+}
+
+function renderFieldChips(label: string, values: string[]): string {
+    const normalized = values.map((item: string): string => String(item ?? '').trim()).filter(Boolean);
+    if (normalized.length <= 0) {
+        return '';
+    }
+    return `
+        <div class="stx-memory-dream-review__field">
+            <div class="stx-memory-dream-review__field-label">${escapeHtml(label)}</div>
+            <div class="stx-memory-dream-review__chip-row">
+                ${normalized.map((item: string): string => `<span class="stx-memory-dream-review__badge" title="${escapeAttr(item)}">${escapeHtml(truncateText(item, 18))}</span>`).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderMutationPayloadVisual(mutation: DreamMutationProposal): string {
+    const payload = toRecord(mutation.payload);
+    if (mutation.mutationType === 'relationship_patch') {
+        return `
+            <div class="stx-memory-dream-review__field-grid">
+                ${renderField('关系标签', String(payload.relationTag ?? mutation.preview ?? '').trim(), true)}
+                ${renderField('关系摘要', String(payload.summary ?? mutation.reason ?? '').trim())}
+                ${renderFieldWithOptions('源角色', String(payload.sourceActorKey ?? '').trim(), { truncate: true })}
+                ${renderFieldWithOptions('目标角色', String(payload.targetActorKey ?? '').trim(), { truncate: true })}
+                ${renderField('状态', String(payload.state ?? '').trim())}
+                ${renderFieldWithOptions('关系标识', String(payload.relationshipId ?? '').trim(), { truncate: true })}
+                ${renderField('信任', String(payload.trust ?? '').trim())}
+                ${renderField('好感', String(payload.affection ?? '').trim())}
+                ${renderField('张力', String(payload.tension ?? '').trim())}
+                ${renderFieldChips('参与者', toStringArray(payload.participants))}
+            </div>
+        `;
+    }
+    const detailPayload = toRecord(payload.detailPayload);
+    return `
+        <div class="stx-memory-dream-review__field-grid">
+            ${renderField('标题', String(payload.title ?? mutation.preview ?? '').trim(), true)}
+            ${renderField('类型', String(payload.entryType ?? '').trim())}
+            ${renderField('摘要', String(payload.summary ?? mutation.reason ?? '').trim())}
+            ${renderField('详情', String(payload.detail ?? '').trim())}
+            ${renderFieldWithOptions('比较键', String(payload.compareKey ?? '').trim(), { truncate: true })}
+            ${renderFieldWithOptions('实体键', String(payload.entityKey ?? '').trim(), { truncate: true })}
+            ${renderFieldWithOptions('条目标识', String(payload.entryId ?? '').trim(), { truncate: true })}
+            ${renderFieldChips('标签', toStringArray(payload.tags))}
+            ${renderFieldChips('角色绑定', toStringArray(payload.actorBindings))}
+            ${renderFieldChips('匹配键', toStringArray(payload.matchKeys))}
+            ${renderFieldChips('详情字段', Object.keys(detailPayload))}
         </div>
     `;
 }
@@ -708,24 +898,30 @@ function renderDiagnosticsCard(diagnostics?: DreamSessionDiagnosticsRecord | nul
  * Render a mutation card with type-based styling.
  * Adds data-mutation-type attribute for CSS-based color coding.
  */
-function renderMutationCard(mutation: DreamMutationProposal, checked: boolean): string {
+function renderMutationCard(mutation: DreamMutationProposal, checked: boolean, titleMap: Map<string, string>): string {
+    const payload = toRecord(mutation.payload);
+    const title = mutation.mutationType === 'relationship_patch'
+        ? String(payload.relationTag ?? mutation.preview ?? mutation.mutationType).trim()
+        : String(payload.title ?? mutation.preview ?? mutation.mutationType).trim();
     return `
         <article class="stx-memory-dream-review__mutation${checked ? ' is-selected' : ''}" data-mutation-card="${escapeAttr(mutation.mutationId)}" data-mutation-type="${escapeAttr(mutation.mutationType)}">
             <div class="stx-memory-dream-review__mutation-head">
                 <input type="checkbox" data-dream-mutation="${escapeAttr(mutation.mutationId)}" ${checked ? 'checked' : ''}>
                 <div class="stx-memory-dream-review__mutation-body">
-                    <div class="stx-memory-dream-review__mutation-title">${escapeHtml(mutation.preview || mutation.mutationType)}</div>
+                    <div class="stx-memory-dream-review__mutation-title">${escapeHtml(localizeDreamDisplayText(title || mutation.preview || mutation.mutationType))}</div>
+                    <div class="stx-memory-dream-review__secondary">${escapeHtml(localizeDreamDisplayText(mutation.preview || '无预览文案'))}</div>
                     <div class="stx-memory-dream-review__mutation-meta">
-                        <span class="stx-memory-dream-review__pill">类 ${escapeHtml(truncateText(mutation.mutationType, 8))}</span>
+                        <span class="stx-memory-dream-review__pill">类型 ${escapeHtml(truncateText(resolveDreamMutationTypeLabel(mutation.mutationType), 8))}</span>
                         <span class="stx-memory-dream-review__pill">置 ${Number(mutation.confidence ?? 0).toFixed(2)}</span>
-                        <span class="stx-memory-dream-review__pill">波 ${escapeHtml(mutation.sourceWave)}</span>
+                        <span class="stx-memory-dream-review__pill">波段 ${escapeHtml(resolveDreamReviewWaveLabel(mutation.sourceWave))}</span>
                     </div>
                 </div>
             </div>
             <div class="stx-memory-dream-review__list">
-                <div class="stx-memory-dream-review__hint">${escapeHtml(mutation.reason || '无理由说明')}</div>
-                <div class="stx-memory-dream-review__meta">源：${escapeHtml(mutation.sourceEntryIds.slice(0, 3).join('、') || '未标注')}</div>
-                <pre class="stx-memory-dream-review__payload">${escapeHtml(JSON.stringify(mutation.payload, null, 2))}</pre>
+                <div class="stx-memory-dream-review__hint">${escapeHtml(localizeDreamDisplayText(mutation.reason || '无理由说明'))}</div>
+                <div class="stx-memory-dream-review__meta">应用后：${escapeHtml(resolveDreamMutationActionHint(mutation))}</div>
+                <div class="stx-memory-dream-review__meta">来源记忆：${escapeHtml(renderDreamMutationSourceRefs(mutation.sourceEntryIds, titleMap))}</div>
+                ${renderMutationPayloadVisual(mutation)}
                 ${renderDreamReviewExplainPanel(mutation.explain)}
             </div>
         </article>
@@ -770,6 +966,7 @@ export async function openDreamReviewDialog(input: {
                 .filter((mutation: DreamMutationProposal): boolean => mutation.confidence >= 0.65)
                 .map((mutation: DreamMutationProposal): string => mutation.mutationId),
         );
+        const recallTitleMap = buildRecallTitleMap(input.recall);
         const selectedCount = input.output.proposedMutations.filter((mutation: DreamMutationProposal): boolean => {
             return defaultSelected.has(mutation.mutationId);
         }).length;
@@ -863,7 +1060,7 @@ export async function openDreamReviewDialog(input: {
                                 </div>
                             </div>
                             <div class="stx-memory-dream-review__list">
-                                ${input.output.proposedMutations.map((mutation: DreamMutationProposal): string => renderMutationCard(mutation, defaultSelected.has(mutation.mutationId))).join('')}
+                                ${input.output.proposedMutations.map((mutation: DreamMutationProposal): string => renderMutationCard(mutation, defaultSelected.has(mutation.mutationId), recallTitleMap)).join('')}
                             </div>
                         </section>
                     </div>

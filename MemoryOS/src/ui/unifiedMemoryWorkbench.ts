@@ -776,6 +776,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             if (action === 'set-dream-subview') {
                 state.dreamSubView = String(button.dataset.subview || 'overview') as WorkbenchState['dreamSubView'];
+                const targetTab = String(button.dataset.dreamTargetTab || '').trim();
+                if (targetTab) {
+                    state.dreamWorkbenchTab = targetTab as WorkbenchState['dreamWorkbenchTab'];
+                }
                 await render();
                 return;
             }
@@ -1113,6 +1117,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             if (action === 'takeover-abort') {
                 takeoverProgressCache = await memory.chatState.abortTakeover();
                 toast.success('接管任务已终止。');
+                await render();
+                return;
+            }
+            if (action === 'takeover-mark-handled') {
+                const confirmed = window.confirm('确定将当前聊天标记为“旧聊天已处理”吗？标记后将不再自动弹出旧聊天接管提示。');
+                if (!confirmed) {
+                    return;
+                }
+                takeoverProgressCache = await memory.chatState.markTakeoverHandled();
+                toast.success('当前聊天已标记为旧聊天已处理，后续不会再自动弹出接管提示。');
                 await render();
                 return;
             }

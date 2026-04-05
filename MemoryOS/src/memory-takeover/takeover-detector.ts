@@ -23,7 +23,13 @@ export function detectTakeoverNeeded(input: {
             hasCompletedTakeover: true,
         };
     }
-    if (existingPlan && (existingPlan.status === 'running' || existingPlan.status === 'paused' || existingPlan.status === 'failed')) {
+    if (existingPlan && (
+        existingPlan.status === 'running'
+        || existingPlan.status === 'paused'
+        || existingPlan.status === 'blocked_by_batch'
+        || existingPlan.status === 'degraded'
+        || existingPlan.status === 'failed'
+    )) {
         return {
             needed: true,
             reason: 'recoverable_takeover_found',

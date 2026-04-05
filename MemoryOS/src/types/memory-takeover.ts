@@ -8,7 +8,35 @@ import type { BatchTimeAssessment, MemoryTimeContext } from '../memory-time/time
 /**
  * 功能：定义旧聊天接管任务状态。
  */
-export type MemoryTakeoverStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+export type MemoryTakeoverStatus = 'idle' | 'running' | 'paused' | 'blocked_by_batch' | 'degraded' | 'completed' | 'failed';
+
+/**
+ * 功能：定义接管批次失败类型。
+ */
+export type MemoryTakeoverBatchErrorKind =
+    | 'llm_unavailable'
+    | 'llm_timeout'
+    | 'rate_limit'
+    | 'schema_invalid'
+    | 'admission_failed'
+    | 'manual_abort'
+    | 'unknown';
+
+/**
+ * 功能：定义接管批次聚合失败状态。
+ */
+export interface MemoryTakeoverBatchFailureState {
+    batchId: string;
+    failureCount: number;
+    consecutiveFailureCount: number;
+    lastFailureAt?: number;
+    lastErrorMessage?: string;
+    lastErrorKind?: MemoryTakeoverBatchErrorKind;
+    retryable: boolean;
+    requiresManualReview: boolean;
+    quarantined: boolean;
+    attemptCount: number;
+}
 
 /**
  * 功能：定义接管楼层范围。
@@ -97,6 +125,9 @@ export interface MemoryTakeoverPlan {
     completedBatchIds: string[];
     failedBatchIds: string[];
     isolatedBatchIds: string[];
+    blockedBatchId?: string;
+    lastBlockedAt?: number;
+    degradedReason?: string;
     requestedRetryBatchId?: string;
     lastError?: string;
     lastCheckpointAt?: number;
@@ -121,6 +152,13 @@ export interface MemoryTakeoverBatch {
     admissionState?: 'pending' | 'validated' | 'repaired' | 'isolated';
     repairedOnce?: boolean;
     validationErrors?: string[];
+    failureCount?: number;
+    consecutiveFailureCount?: number;
+    lastFailureAt?: number;
+    lastErrorKind?: MemoryTakeoverBatchErrorKind;
+    retryable?: boolean;
+    requiresManualReview?: boolean;
+    quarantined?: boolean;
     startedAt?: number;
     finishedAt?: number;
     error?: string;

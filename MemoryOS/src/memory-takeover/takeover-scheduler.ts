@@ -1,4 +1,5 @@
 import {
+    loadMemoryTakeoverBatchFailureStates,
     loadMemoryTakeoverBatchMetas,
     loadMemoryTakeoverBatchResults,
     loadMemoryTakeoverPreview,
@@ -15,6 +16,8 @@ import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBaseline,
     MemoryTakeoverBatch,
+    MemoryTakeoverBatchErrorKind,
+    MemoryTakeoverBatchFailureState,
     MemoryTakeoverConsolidationResult,
     MemoryTakeoverPlan,
     MemoryTakeoverProgressSnapshot,
@@ -29,8 +32,10 @@ import { assembleTakeoverBatchPromptAssembly, runTakeoverBatch } from './takeove
 import { runTakeoverConsolidation } from './takeover-consolidator';
 import { buildTakeoverBatches, validateTakeoverBatchCoverage } from './takeover-planner';
 import { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
-import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
+import { mergeStoryEventAnchors, resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
 import { logTimeDebug } from '../memory-time/time-debug';
+
+const TAKEOVER_MAX_RETRY_PER_BATCH = 5;
 
 /**
  * 功能：执行完整旧聊天接管任务。
@@ -132,6 +137,7 @@ export async function runTakeoverScheduler(input: {
     const failedBatchIds = new Set<string>(input.plan.failedBatchIds ?? []);
     const isolatedBatchIds = new Set<string>(input.plan.isolatedBatchIds ?? []);
     const requestedRetryBatchId = String(input.plan.requestedRetryBatchId ?? '').trim();
+    const batchFailureStates = await loadMemoryTakeoverBatchFailureStates(input.chatKey);
     const allBatchResults = await loadMemoryTakeoverBatchResults(input.chatKey);
     const batchResultMap = new Map(allBatchResults.map((item) => [item.batchId, item]));
     for (const batchId of batchResultMap.keys()) {
@@ -159,7 +165,12 @@ export async function runTakeoverScheduler(input: {
         const runningBatch: MemoryTakeoverBatch = {
             ...batch,
             status: 'running',
-            attemptCount: batch.attemptCount + 1,
+            attemptCount: Math.max(batch.attemptCount, batchFailureStates.get(batch.batchId)?.attemptCount ?? 0) + 1,
+            failureCount: batchFailureStates.get(batch.batchId)?.failureCount ?? 0,
+            consecutiveFailureCount: batchFailureStates.get(batch.batchId)?.consecutiveFailureCount ?? 0,
+            retryable: batchFailureStates.get(batch.batchId)?.retryable ?? true,
+            requiresManualReview: batchFailureStates.get(batch.batchId)?.requiresManualReview ?? false,
+            quarantined: batchFailureStates.get(batch.batchId)?.quarantined ?? false,
             startedAt: Date.now(),
         };
         await saveMemoryTakeoverBatchMeta(input.chatKey, runningBatch);
@@ -222,6 +233,11 @@ export async function runTakeoverScheduler(input: {
                     existingProfile: existingTimelineProfile,
                 });
                 if (timelineEvolution.shouldPersist) {
+                    timelineEvolution.profile.currentStoryDayIndex = admission.result.batchTimeAssessment?.storyDayIndex ?? timelineEvolution.profile.currentStoryDayIndex;
+                    timelineEvolution.profile.eventAnchors = mergeStoryEventAnchors(
+                        timelineEvolution.profile.eventAnchors ?? [],
+                        admission.result.batchTimeAssessment?.eventAnchors ?? [],
+                    );
                     await writeMemoryTimelineProfile(input.chatKey, timelineEvolution.profile);
                     logTimeDebug('takeover_timeline_profile_updated', {
                         takeoverId: plan.takeoverId,
@@ -239,7 +255,24 @@ export async function runTakeoverScheduler(input: {
                     admissionState: admission.result.repairedOnce ? 'repaired' : 'validated',
                     repairedOnce: admission.result.repairedOnce,
                     validationErrors: [],
+                    failureCount: batchFailureStates.get(admission.result.batchId)?.failureCount ?? runningBatch.failureCount ?? 0,
+                    consecutiveFailureCount: 0,
+                    retryable: true,
+                    requiresManualReview: false,
+                    quarantined: false,
                     finishedAt: Date.now(),
+                });
+                batchFailureStates.set(admission.result.batchId, {
+                    batchId: admission.result.batchId,
+                    failureCount: batchFailureStates.get(admission.result.batchId)?.failureCount ?? 0,
+                    consecutiveFailureCount: 0,
+                    lastFailureAt: batchFailureStates.get(admission.result.batchId)?.lastFailureAt,
+                    lastErrorMessage: batchFailureStates.get(admission.result.batchId)?.lastErrorMessage,
+                    lastErrorKind: batchFailureStates.get(admission.result.batchId)?.lastErrorKind,
+                    retryable: true,
+                    requiresManualReview: false,
+                    quarantined: false,
+                    attemptCount: runningBatch.attemptCount,
                 });
             } else {
                 isolatedBatchIds.add(admission.result.batchId);
@@ -250,8 +283,24 @@ export async function runTakeoverScheduler(input: {
                     admissionState: 'isolated',
                     repairedOnce: true,
                     validationErrors: admission.validationErrors,
+                    lastErrorKind: 'admission_failed',
+                    retryable: false,
+                    requiresManualReview: true,
+                    quarantined: true,
                     error: `admission_isolated:${admission.validationErrors.join('；')}`,
                     finishedAt: Date.now(),
+                });
+                batchFailureStates.set(admission.result.batchId, {
+                    batchId: admission.result.batchId,
+                    failureCount: batchFailureStates.get(admission.result.batchId)?.failureCount ?? runningBatch.failureCount ?? 0,
+                    consecutiveFailureCount: batchFailureStates.get(admission.result.batchId)?.consecutiveFailureCount ?? runningBatch.consecutiveFailureCount ?? 0,
+                    lastFailureAt: Date.now(),
+                    lastErrorMessage: `admission_isolated:${admission.validationErrors.join('；')}`,
+                    lastErrorKind: 'admission_failed',
+                    retryable: false,
+                    requiresManualReview: true,
+                    quarantined: true,
+                    attemptCount: runningBatch.attemptCount,
                 });
                 await appendTakeoverDiagnostics({
                     chatKey: input.chatKey,
@@ -275,6 +324,9 @@ export async function runTakeoverScheduler(input: {
                 completedBatchIds: Array.from(completedBatchIds),
                 failedBatchIds: Array.from(failedBatchIds),
                 isolatedBatchIds: Array.from(isolatedBatchIds),
+                blockedBatchId: undefined,
+                lastBlockedAt: undefined,
+                degradedReason: isolatedBatchIds.size > 0 ? 'isolated_batches_present' : undefined,
                 requestedRetryBatchId: requestedRetryBatchId && admission.result.batchId === requestedRetryBatchId
                     ? undefined
                     : requestedRetryBatchId || undefined,
@@ -285,25 +337,56 @@ export async function runTakeoverScheduler(input: {
             await writeMemoryTakeoverPlan(input.chatKey, plan);
         } catch (error) {
             const errorMessage: string = String((error as Error)?.message ?? error);
+            const classifiedError = classifyTakeoverBatchError(error);
+            const previousFailureState = batchFailureStates.get(batch.batchId);
+            const failureCount = (previousFailureState?.failureCount ?? runningBatch.failureCount ?? 0) + 1;
+            const consecutiveFailureCount = (previousFailureState?.consecutiveFailureCount ?? runningBatch.consecutiveFailureCount ?? 0) + 1;
+            const requiresManualReview = failureCount > TAKEOVER_MAX_RETRY_PER_BATCH;
+            const quarantined = requiresManualReview;
+            const nextPlanStatus: MemoryTakeoverPlan['status'] = classifiedError.retryable || requiresManualReview
+                ? 'blocked_by_batch'
+                : 'failed';
             failedBatchIds.add(batch.batchId);
+            batchFailureStates.set(batch.batchId, {
+                batchId: batch.batchId,
+                failureCount,
+                consecutiveFailureCount,
+                lastFailureAt: Date.now(),
+                lastErrorMessage: errorMessage,
+                lastErrorKind: classifiedError.errorKind,
+                retryable: classifiedError.retryable,
+                requiresManualReview,
+                quarantined,
+                attemptCount: runningBatch.attemptCount,
+            });
             await saveMemoryTakeoverBatchMeta(input.chatKey, {
                 ...runningBatch,
                 status: 'failed',
+                failureCount,
+                consecutiveFailureCount,
+                lastFailureAt: Date.now(),
+                lastErrorKind: classifiedError.errorKind,
+                retryable: classifiedError.retryable,
+                requiresManualReview,
+                quarantined,
                 finishedAt: Date.now(),
                 error: errorMessage,
             });
             plan = {
                 ...plan,
-                status: plan.pauseOnError ? 'paused' : 'failed',
+                status: nextPlanStatus,
                 currentBatchIndex: batch.batchIndex,
                 completedBatchIds: Array.from(completedBatchIds),
                 failedBatchIds: Array.from(failedBatchIds),
                 isolatedBatchIds: Array.from(isolatedBatchIds),
+                blockedBatchId: batch.batchId,
+                lastBlockedAt: Date.now(),
+                degradedReason: requiresManualReview ? 'batch_requires_manual_review' : undefined,
                 requestedRetryBatchId: requestedRetryBatchId || undefined,
                 lastError: errorMessage,
                 lastCheckpointAt: Date.now(),
                 updatedAt: Date.now(),
-                pausedAt: plan.pauseOnError ? Date.now() : undefined,
+                pausedAt: undefined,
             };
             await writeMemoryTakeoverPlan(input.chatKey, plan);
             await appendTakeoverDiagnostics({
@@ -315,6 +398,10 @@ export async function runTakeoverScheduler(input: {
                 detail: {
                     batchId: batch.batchId,
                     error: errorMessage,
+                    errorKind: classifiedError.errorKind,
+                    failureCount,
+                    requiresManualReview,
+                    quarantined,
                 },
             });
             return buildProgressSnapshot(input.chatKey, plan);
@@ -322,15 +409,19 @@ export async function runTakeoverScheduler(input: {
     }
 
     if (failedBatchIds.size > 0) {
+        const blockedBatchState = resolveHighestPriorityBlockedBatch(batchFailureStates, Array.from(failedBatchIds));
         plan = {
             ...plan,
-            status: 'paused',
+            status: 'blocked_by_batch',
             completedBatchIds: Array.from(completedBatchIds),
             failedBatchIds: Array.from(failedBatchIds),
             isolatedBatchIds: Array.from(isolatedBatchIds),
+            blockedBatchId: blockedBatchState?.batchId,
+            lastBlockedAt: blockedBatchState?.lastFailureAt ?? Date.now(),
+            degradedReason: blockedBatchState?.requiresManualReview ? 'batch_requires_manual_review' : undefined,
             requestedRetryBatchId: undefined,
             updatedAt: Date.now(),
-            pausedAt: Date.now(),
+            pausedAt: undefined,
         };
         await writeMemoryTakeoverPlan(input.chatKey, plan);
         return buildProgressSnapshot(input.chatKey, plan);
@@ -347,11 +438,14 @@ export async function runTakeoverScheduler(input: {
     await input.applyConsolidation(consolidation);
     plan = {
         ...plan,
-        status: 'completed',
+        status: isolatedBatchIds.size > 0 ? 'degraded' : 'completed',
         currentBatchIndex: Math.max(0, batches.length - 1),
         completedBatchIds: Array.from(completedBatchIds),
         failedBatchIds: Array.from(failedBatchIds),
         isolatedBatchIds: Array.from(isolatedBatchIds),
+        blockedBatchId: undefined,
+        lastBlockedAt: undefined,
+        degradedReason: isolatedBatchIds.size > 0 ? 'isolated_batches_present' : undefined,
         requestedRetryBatchId: undefined,
         lastCheckpointAt: Date.now(),
         completedAt: Date.now(),
@@ -462,4 +556,60 @@ async function waitTakeoverRequestInterval(
         setTimeout((): void => resolve(), intervalMs);
     });
     return false;
+}
+
+/**
+ * 功能：对批次异常进行轻量分类，给恢复策略提供基础语义。
+ * @param error 原始异常。
+ * @returns 分类结果。
+ */
+function classifyTakeoverBatchError(error: unknown): {
+    errorKind: MemoryTakeoverBatchErrorKind;
+    retryable: boolean;
+    userHint: string;
+} {
+    const message = String((error as Error)?.message ?? error ?? '').toLowerCase();
+    if (message.includes('manual_abort')) {
+        return { errorKind: 'manual_abort', retryable: false, userHint: '任务已被手动中止。' };
+    }
+    if (message.includes('rate limit') || message.includes('too many requests') || message.includes('429')) {
+        return { errorKind: 'rate_limit', retryable: true, userHint: '模型正在限流，稍后可继续重试。' };
+    }
+    if (message.includes('timeout') || message.includes('timed out')) {
+        return { errorKind: 'llm_timeout', retryable: true, userHint: '模型调用超时，建议稍后重试。' };
+    }
+    if (message.includes('unavailable') || message.includes('overloaded') || message.includes('service')) {
+        return { errorKind: 'llm_unavailable', retryable: true, userHint: '模型当前不可用，可稍后重试。' };
+    }
+    if (message.includes('schema') || message.includes('json') || message.includes('parse')) {
+        return { errorKind: 'schema_invalid', retryable: true, userHint: '模型输出结构异常，建议检查 prompt 或稍后重试。' };
+    }
+    if (message.includes('admission_isolated')) {
+        return { errorKind: 'admission_failed', retryable: false, userHint: '该批次准入失败，建议人工检查。' };
+    }
+    return { errorKind: 'unknown', retryable: true, userHint: '批次执行失败，可继续重试或人工检查。' };
+}
+
+/**
+ * 功能：在多个失败批次里选出当前最值得展示的阻塞批次。
+ * @param states 批次聚合状态。
+ * @param batchIds 失败批次列表。
+ * @returns 优先展示的阻塞批次。
+ */
+function resolveHighestPriorityBlockedBatch(
+    states: Map<string, MemoryTakeoverBatchFailureState>,
+    batchIds: string[],
+): MemoryTakeoverBatchFailureState | null {
+    const candidates = batchIds
+        .map((batchId) => states.get(batchId))
+        .filter((item): item is MemoryTakeoverBatchFailureState => Boolean(item));
+    if (candidates.length <= 0) {
+        return null;
+    }
+    return candidates.sort((left, right) => {
+        if (left.requiresManualReview !== right.requiresManualReview) {
+            return left.requiresManualReview ? -1 : 1;
+        }
+        return Number(right.lastFailureAt ?? 0) - Number(left.lastFailureAt ?? 0);
+    })[0] ?? null;
 }

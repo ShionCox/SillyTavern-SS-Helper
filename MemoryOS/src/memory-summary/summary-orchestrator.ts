@@ -29,7 +29,7 @@ import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pip
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
 import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
 import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug';
-import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
+import { mergeStoryEventAnchors, resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
 import type { BatchTimeAssessment, MemoryTimelineProfile } from '../memory-time/time-types';
 import { SummaryPromptDTOService } from '../services/summary-prompt-dto-service';
 
@@ -521,6 +521,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             existingProfile: existingTimelineProfile,
         });
         if (timelineEvolution.shouldPersist) {
+            timelineEvolution.profile.currentStoryDayIndex = summaryTimeCtx.storyTime?.storyDayIndex ?? timelineEvolution.profile.currentStoryDayIndex;
+            timelineEvolution.profile.eventAnchors = mergeStoryEventAnchors(
+                timelineEvolution.profile.eventAnchors ?? [],
+                summaryBatchTimeAssessment.eventAnchors ?? [],
+            );
             await input.dependencies.putTimelineProfile(timelineEvolution.profile);
             await input.dependencies.appendMutationHistory({
                 action: 'timeline_profile_updated',

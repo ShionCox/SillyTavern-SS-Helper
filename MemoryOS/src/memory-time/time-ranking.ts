@@ -4,7 +4,7 @@
 
 import type { RetrievalCandidate } from '../memory-retrieval/types';
 import { projectMemorySemanticRecord } from '../core/memory-semantic';
-import type { MemoryTimeContext, MemoryTimeIndex, PromptTimeMeta } from './time-types';
+import type { MemoryTimeContext, MemoryTimeIndex, PartOfDay, PromptTimeDisplay, PromptTimeMeta } from './time-types';
 
 export type QueryTimeIntent =
     | 'none'
@@ -317,21 +317,24 @@ export function buildTimeIndex(timeCtx: MemoryTimeContext, currentMaxFloor: numb
  * @returns 时间标签文本。
  */
 export function buildTimeLabel(timeCtx: MemoryTimeContext, currentMaxFloor: number): string {
-    if (timeCtx.mode === 'story_explicit') {
-        const st = timeCtx.storyTime;
-        if (st?.absoluteText) return st.absoluteText;
-        if (st?.relativeText) return st.relativeText;
-    }
+    return buildPromptTimeDisplay(timeCtx, currentMaxFloor).primaryLabel;
+}
 
-    if (timeCtx.mode === 'story_inferred') {
-        if (timeCtx.durationHint?.text) return `推断：${timeCtx.durationHint.text}`;
-        if (timeCtx.storyTime?.relativeText) return `推断：${timeCtx.storyTime.relativeText}`;
-    }
-
-    const floorDiff = currentMaxFloor - timeCtx.sequenceTime.lastFloor;
-    if (floorDiff <= 5) return '近期';
-    if (floorDiff <= 20) return `较当前早约${floorDiff}层`;
-    return `早期内容（约${floorDiff}层前）`;
+export function buildPromptTimeDisplay(timeCtx: MemoryTimeContext, currentMaxFloor: number): PromptTimeDisplay {
+    const resolvedCurrentMaxFloor = Math.max(currentMaxFloor, timeCtx.sequenceTime.lastFloor, timeCtx.sequenceTime.firstFloor);
+    const floorDiff = Math.max(0, resolvedCurrentMaxFloor - timeCtx.sequenceTime.lastFloor);
+    const sequenceLabel = buildSequenceLabel(timeCtx);
+    const relativeToNowLabel = buildRelativeToNowLabel(floorDiff);
+    const storyPrimary = buildStoryPrimaryLabel(timeCtx);
+    const anchorLabel = timeCtx.storyTime?.anchorEventLabel;
+    const anchorRelationLabel = resolveAnchorRelationLabel(timeCtx.storyTime?.anchorRelation);
+    return {
+        primaryLabel: storyPrimary || '未识别具体故事时间',
+        anchorLabel,
+        anchorRelationLabel,
+        sequenceLabel,
+        relativeToNowLabel,
+    };
 }
 
 /**
@@ -342,12 +345,18 @@ export function buildTimeLabel(timeCtx: MemoryTimeContext, currentMaxFloor: numb
  */
 export function buildPromptTimeMeta(timeCtx: MemoryTimeContext, currentMaxFloor: number): PromptTimeMeta {
     const resolvedCurrentMaxFloor = Math.max(currentMaxFloor, timeCtx.sequenceTime.lastFloor, timeCtx.sequenceTime.firstFloor);
-    const timeLabelForPrompt = buildTimeLabel(timeCtx, resolvedCurrentMaxFloor);
+    const display = buildPromptTimeDisplay(timeCtx, resolvedCurrentMaxFloor);
+    const timeLabelForPrompt = display.primaryLabel;
     const timeSourceLabel = resolvePromptTimeSourceLabel(timeCtx);
     const timeConfidenceLabel = shouldRenderPromptTimeConfidence(timeCtx)
         ? resolvePromptTimeConfidenceLabel(timeCtx.confidence)
         : undefined;
     return {
+        primaryLabel: display.primaryLabel,
+        anchorLabel: display.anchorLabel,
+        anchorRelationLabel: display.anchorRelationLabel,
+        sequenceLabel: display.sequenceLabel,
+        relativeToNowLabel: display.relativeToNowLabel,
         timeLabelForPrompt,
         timeSourceLabel,
         timeConfidenceLabel,
@@ -411,6 +420,78 @@ function resolvePromptTimeSourceLabel(timeCtx: MemoryTimeContext): string {
         return '推断时间';
     }
     return '系统时序';
+}
+
+function buildStoryPrimaryLabel(timeCtx: MemoryTimeContext): string {
+    const storyTime = timeCtx.storyTime;
+    const dayLabel = storyTime?.storyDayIndex ? `第${storyTime.storyDayIndex}天` : '';
+    const partOfDayLabel = resolvePartOfDayLabel(storyTime?.normalized?.partOfDay);
+    const relativePhaseLabel = String(storyTime?.relativePhaseLabel ?? '').trim();
+
+    if (timeCtx.mode === 'story_explicit') {
+        const explicit = String(storyTime?.absoluteText ?? '').trim() || String(storyTime?.relativeText ?? '').trim();
+        if (dayLabel && partOfDayLabel) {
+            return `${dayLabel}${partOfDayLabel}`;
+        }
+        if (dayLabel && explicit) {
+            return `${dayLabel}${explicit}`;
+        }
+        if (explicit) {
+            return explicit;
+        }
+    }
+
+    if (timeCtx.mode === 'story_inferred') {
+        const inferredBase = dayLabel && partOfDayLabel
+            ? `${dayLabel}${partOfDayLabel}`
+            : (String(storyTime?.relativeText ?? '').trim() || String(timeCtx.durationHint?.text ?? '').trim() || partOfDayLabel);
+        if (inferredBase && relativePhaseLabel) {
+            return `推断为${inferredBase}${relativePhaseLabel}`;
+        }
+        if (inferredBase) {
+            return `推断为${inferredBase}`;
+        }
+    }
+
+    if (partOfDayLabel && dayLabel) {
+        return `${dayLabel}${partOfDayLabel}`;
+    }
+    if (relativePhaseLabel) {
+        return `推断为${relativePhaseLabel}`;
+    }
+    return '';
+}
+
+function buildSequenceLabel(timeCtx: MemoryTimeContext): string {
+    return `${timeCtx.sequenceTime.firstFloor}-${timeCtx.sequenceTime.lastFloor}层`;
+}
+
+function buildRelativeToNowLabel(floorDiff: number): string {
+    if (floorDiff <= 0) {
+        return '当前附近';
+    }
+    return `较当前早${floorDiff}层`;
+}
+
+function resolvePartOfDayLabel(partOfDay?: PartOfDay): string {
+    switch (partOfDay) {
+        case 'dawn': return '清晨';
+        case 'morning': return '上午';
+        case 'noon': return '正午';
+        case 'afternoon': return '午后';
+        case 'evening': return '傍晚';
+        case 'night': return '夜晚';
+        case 'midnight': return '深夜';
+        default: return '';
+    }
+}
+
+function resolveAnchorRelationLabel(value?: string): string | undefined {
+    if (value === 'after') return '之后';
+    if (value === 'before') return '之前';
+    if (value === 'during') return '期间';
+    if (value === 'same_phase') return '同阶段';
+    return undefined;
 }
 
 function resolvePromptTimeSourceMode(timeCtx: MemoryTimeContext): PromptTimeMeta['sourceMode'] {

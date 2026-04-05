@@ -4,7 +4,7 @@
 
 import type { BatchTimeAssessment, DurationHint, FallbackTimeRules, MemoryTimelineProfile } from './time-types';
 import { DEFAULT_FALLBACK_RULES } from './time-types';
-import { extractTimeSignals, detectSleepAndWake, detectSceneTransitions, detectHardCuts } from './story-time-parser';
+import { extractStoryTimeDescriptor, extractTimeSignals, detectSleepAndWake, detectSceneTransitions, detectHardCuts } from './story-time-parser';
 
 /**
  * 功能：对一个批次文本进行时间评估。
@@ -23,6 +23,11 @@ export function assessBatchTime(input: {
     const text = String(input.batchText ?? '');
 
     const signals = extractTimeSignals(text, input.startFloor);
+    const descriptor = extractStoryTimeDescriptor({
+        text,
+        sourceFloor: input.startFloor,
+        fallbackStoryDayIndex: input.previousAnchor?.currentStoryDayIndex,
+    });
     const explicitMentions = signals
         .filter(s => s.kind === 'explicit_date' || s.kind === 'relative_time' || s.kind === 'calendar_hint')
         .map(s => s.text);
@@ -50,6 +55,13 @@ export function assessBatchTime(input: {
             explicitMentions,
             anchorBefore,
             anchorAfter,
+            storyDayIndex: descriptor.storyDayIndex,
+            partOfDay: descriptor.partOfDay,
+            anchorEventId: descriptor.eventAnchors[0]?.eventId,
+            anchorEventLabel: descriptor.anchorEventLabel,
+            anchorRelation: descriptor.anchorRelation,
+            relativePhaseLabel: descriptor.relativePhaseLabel,
+            eventAnchors: descriptor.eventAnchors,
             inferredElapsed: inferred,
             sceneTransitions,
             fallbackRecommended: false,
@@ -65,6 +77,13 @@ export function assessBatchTime(input: {
             batchId: input.batchId,
             floorRange: { startFloor: input.startFloor, endFloor: input.endFloor },
             explicitMentions,
+            storyDayIndex: descriptor.storyDayIndex,
+            partOfDay: descriptor.partOfDay,
+            anchorEventId: descriptor.eventAnchors[0]?.eventId,
+            anchorEventLabel: descriptor.anchorEventLabel,
+            anchorRelation: descriptor.anchorRelation,
+            relativePhaseLabel: descriptor.relativePhaseLabel,
+            eventAnchors: descriptor.eventAnchors,
             sceneTransitions,
             inferredElapsed: inferred,
             fallbackRecommended: false,
@@ -78,6 +97,13 @@ export function assessBatchTime(input: {
         batchId: input.batchId,
         floorRange: { startFloor: input.startFloor, endFloor: input.endFloor },
         explicitMentions: [],
+        storyDayIndex: descriptor.storyDayIndex,
+        partOfDay: descriptor.partOfDay,
+        anchorEventId: descriptor.eventAnchors[0]?.eventId,
+        anchorEventLabel: descriptor.anchorEventLabel,
+        anchorRelation: descriptor.anchorRelation,
+        relativePhaseLabel: descriptor.relativePhaseLabel,
+        eventAnchors: descriptor.eventAnchors,
         sceneTransitions: [],
         fallbackRecommended: true,
         source: 'rule_engine',

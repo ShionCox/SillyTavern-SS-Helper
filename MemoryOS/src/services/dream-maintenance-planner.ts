@@ -271,7 +271,7 @@ export class DreamMaintenancePlanner {
             },
         }, {
             actionType: 'ADD',
-            sourceLabel: '梦境维护 summary candidate',
+            sourceLabel: '梦境维护总结候选',
             reasonCodes: ['dream_phase3', 'summary_candidate_promotion'],
         });
         return {

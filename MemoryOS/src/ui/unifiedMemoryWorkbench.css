@@ -854,6 +854,14 @@
   min-width: 0;
 }
 
+.stx-memory-dream-workbench__title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
 .stx-memory-dream-workbench__title {
   font-size: 14px;
   font-weight: 700;
@@ -881,12 +889,32 @@
   align-items: center;
 }
 
+.stx-memory-dream-workbench__secondary {
+  color: var(--mw-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.stx-memory-dream-workbench__status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  word-break: keep-all;
+}
+
 .stx-memory-dream-workbench__inline-id {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   max-width: 180px;
   margin-top: 0;
   margin-left: 4px;
   vertical-align: middle;
+  color: var(--mw-muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .stx-memory-dream-workbench__more-count {
@@ -919,6 +947,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stx-memory-dream-workbench__action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .stx-memory-dream-workbench__scheduler-info {

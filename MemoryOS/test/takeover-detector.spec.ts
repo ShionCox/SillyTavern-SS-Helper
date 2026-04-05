@@ -29,6 +29,7 @@ function createPlan(status: MemoryTakeoverPlan['status']): MemoryTakeoverPlan {
         totalBatches: 3,
         completedBatchIds: [],
         failedBatchIds: [],
+        isolatedBatchIds: [],
         createdAt: 1,
         updatedAt: 1,
     };
@@ -62,6 +63,18 @@ describe('旧聊天接管识别', (): void => {
             currentFloorCount: 200,
             threshold: 50,
             existingPlan: createPlan('paused'),
+        });
+
+        expect(result.needed).toBe(true);
+        expect(result.reason).toBe('recoverable_takeover_found');
+        expect(result.recoverableTakeoverId).toBe('takeover:test');
+    });
+
+    it('blocked_by_batch 状态也应视为可恢复接管', (): void => {
+        const result = detectTakeoverNeeded({
+            currentFloorCount: 200,
+            threshold: 50,
+            existingPlan: createPlan('blocked_by_batch'),
         });
 
         expect(result.needed).toBe(true);

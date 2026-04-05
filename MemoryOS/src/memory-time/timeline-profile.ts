@@ -4,14 +4,13 @@
 
 import type {
     CalendarKind,
-    FallbackTimeRules,
     MemoryTimelineProfile,
+    StoryEventAnchor,
     TimelineProfileMode,
     TimelineSignal,
-    DEFAULT_FALLBACK_RULES,
 } from './time-types';
 import { DEFAULT_FALLBACK_RULES as DEFAULTS } from './time-types';
-import { extractTimeSignals } from './story-time-parser';
+import { extractStoryTimeDescriptor, extractTimeSignals } from './story-time-parser';
 
 /**
  * 功能：从一组文本中检测并构建聊天级时间画像。
@@ -39,6 +38,18 @@ export function detectTimelineProfile(input: {
     let calendarKind: CalendarKind = 'unknown';
     let anchorTimeText: string | undefined;
     let confidence = 0.3;
+    const fallbackStoryDayIndex = input.existingProfile?.currentStoryDayIndex;
+    const descriptors = input.texts.map((text: string) => extractStoryTimeDescriptor({
+        text,
+        sourceFloor: input.anchorFloor,
+        fallbackStoryDayIndex,
+    }));
+    const currentStoryDayIndex = descriptors.map((item) => item.storyDayIndex).filter((value): value is number => Number.isFinite(value)).at(-1)
+        ?? fallbackStoryDayIndex;
+    const mergedAnchors = mergeStoryEventAnchors(
+        input.existingProfile?.eventAnchors ?? [],
+        descriptors.flatMap((item) => item.eventAnchors ?? []),
+    );
 
     if (explicitDateSignals.length > 0) {
         mode = 'explicit_world_time';
@@ -82,6 +93,8 @@ export function detectTimelineProfile(input: {
         anchorFloor: input.anchorFloor ?? 0,
         anchorTimeText,
         confidence,
+        currentStoryDayIndex,
+        eventAnchors: mergedAnchors,
         fallbackRules: input.existingProfile?.fallbackRules ?? { ...DEFAULTS },
         signals: allSignals.length > 20 ? allSignals.slice(0, 20) : allSignals,
         version,
@@ -176,6 +189,15 @@ export function resolveTimelineProfileEvolution(input: {
         };
     }
     if (!shouldUpdateProfile(existingProfile, detectedProfile.signals ?? [])) {
+        const anchorsChanged = (detectedProfile.eventAnchors?.length ?? 0) > (existingProfile.eventAnchors?.length ?? 0);
+        const storyDayChanged = Number(detectedProfile.currentStoryDayIndex ?? 0) > Number(existingProfile.currentStoryDayIndex ?? 0);
+        if (anchorsChanged || storyDayChanged) {
+            return {
+                shouldPersist: true,
+                profile: detectedProfile,
+                reason: 'upgrade',
+            };
+        }
         return {
             shouldPersist: false,
             profile: existingProfile,
@@ -199,8 +221,42 @@ export function createSequenceOnlyProfile(): MemoryTimelineProfile {
         calendarKind: 'unknown',
         anchorFloor: 0,
         confidence: 0.3,
+        eventAnchors: [],
         fallbackRules: { ...DEFAULTS },
         version: 1,
         updatedAt: Date.now(),
     };
+}
+
+export function mergeStoryEventAnchors(existing: StoryEventAnchor[], incoming: StoryEventAnchor[]): StoryEventAnchor[] {
+    const map = new Map<string, StoryEventAnchor>();
+    [...existing, ...incoming].forEach((anchor: StoryEventAnchor, index: number) => {
+        const key = String(anchor.label ?? '').trim();
+        if (!key) {
+            return;
+        }
+        const normalized: StoryEventAnchor = {
+            ...anchor,
+            eventId: String(anchor.eventId ?? '').trim() || `anchor:${index}`,
+        };
+        const current = map.get(key);
+        if (!current) {
+            map.set(key, normalized);
+            return;
+        }
+        map.set(key, {
+            ...current,
+            storyDayIndex: normalized.storyDayIndex ?? current.storyDayIndex,
+            partOfDay: normalized.partOfDay ?? current.partOfDay,
+            firstFloor: Math.min(current.firstFloor, normalized.firstFloor),
+            lastFloor: Math.max(current.lastFloor, normalized.lastFloor),
+            confidence: Math.max(current.confidence, normalized.confidence),
+        });
+    });
+    const anchors = Array.from(map.values()).sort((left, right) => left.firstFloor - right.firstFloor);
+    return anchors.map((anchor: StoryEventAnchor, index: number) => ({
+        ...anchor,
+        previousEventId: index > 0 ? anchors[index - 1]?.eventId : undefined,
+        nextEventId: index < anchors.length - 1 ? anchors[index + 1]?.eventId : undefined,
+    }));
 }

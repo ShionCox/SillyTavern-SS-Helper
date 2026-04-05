@@ -21,6 +21,7 @@ export type CalendarKind = 'gregorian' | 'lunar' | 'ancient_era' | 'fantasy_cust
  * 功能：一天中的时段。
  */
 export type PartOfDay = 'dawn' | 'morning' | 'noon' | 'afternoon' | 'evening' | 'night' | 'midnight';
+export type AnchorRelation = 'during' | 'before' | 'after' | 'same_phase';
 
 /**
  * 功能：归一化时间结构。
@@ -70,6 +71,8 @@ export interface MemoryTimelineProfile {
     anchorFloor: number;
     anchorTimeText?: string;
     anchorNormalized?: NormalizedTime;
+    currentStoryDayIndex?: number;
+    eventAnchors?: StoryEventAnchor[];
     confidence: number;
     fallbackRules: FallbackTimeRules;
     signals?: TimelineSignal[];
@@ -106,6 +109,13 @@ export interface BatchTimeAssessment {
     explicitMentions: string[];
     anchorBefore?: string;
     anchorAfter?: string;
+    storyDayIndex?: number;
+    partOfDay?: PartOfDay;
+    anchorEventId?: string;
+    anchorEventLabel?: string;
+    anchorRelation?: AnchorRelation;
+    relativePhaseLabel?: string;
+    eventAnchors?: StoryEventAnchor[];
     inferredElapsed?: DurationHint;
     sceneTransitions: string[];
     fallbackRecommended: boolean;
@@ -131,6 +141,11 @@ export interface StoryTime {
     absoluteText?: string;
     relativeText?: string;
     normalized?: NormalizedTime;
+    storyDayIndex?: number;
+    anchorEventId?: string;
+    anchorEventLabel?: string;
+    anchorRelation?: AnchorRelation;
+    relativePhaseLabel?: string;
 }
 
 /**
@@ -201,10 +216,35 @@ export interface MemoryTimeIndex {
     timeLabel: string;
 }
 
+export interface StoryEventAnchor {
+    eventId: string;
+    label: string;
+    storyDayIndex?: number;
+    partOfDay?: PartOfDay;
+    firstFloor: number;
+    lastFloor: number;
+    previousEventId?: string;
+    nextEventId?: string;
+    confidence: number;
+}
+
+export interface PromptTimeDisplay {
+    primaryLabel: string;
+    anchorLabel?: string;
+    anchorRelationLabel?: string;
+    sequenceLabel?: string;
+    relativeToNowLabel?: string;
+}
+
 /**
  * 功能：定义供 AI 阅读的时间注入元信息。
  */
 export interface PromptTimeMeta {
+    primaryLabel: string;
+    anchorLabel?: string;
+    anchorRelationLabel?: string;
+    sequenceLabel?: string;
+    relativeToNowLabel?: string;
     timeLabelForPrompt: string;
     timeSourceLabel: string;
     timeConfidenceLabel?: string;

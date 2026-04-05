@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
     loadPreviewMock,
     loadBatchResultsMock,
+    loadBatchFailureStatesMock,
+    saveBatchMetaMock,
     runBaselineMock,
     runActiveSnapshotMock,
     runBatchMock,
@@ -12,6 +14,8 @@ const {
     return {
         loadPreviewMock: vi.fn(),
         loadBatchResultsMock: vi.fn(),
+        loadBatchFailureStatesMock: vi.fn(),
+        saveBatchMetaMock: vi.fn(async () => undefined),
         runBaselineMock: vi.fn(),
         runActiveSnapshotMock: vi.fn(),
         runBatchMock: vi.fn(),
@@ -22,14 +26,17 @@ const {
 
 vi.mock('../src/db/db', () => {
     return {
+        loadMemoryTakeoverBatchFailureStates: loadBatchFailureStatesMock,
         loadMemoryTakeoverBatchMetas: vi.fn(async () => []),
         loadMemoryTakeoverBatchResults: loadBatchResultsMock,
         loadMemoryTakeoverPreview: loadPreviewMock,
+        readMemoryTimelineProfile: vi.fn(async () => null),
         readMemoryTakeoverPlan: vi.fn(async () => null),
         saveCandidateActorMentions: vi.fn(async () => undefined),
-        saveMemoryTakeoverBatchMeta: vi.fn(async () => undefined),
+        saveMemoryTakeoverBatchMeta: saveBatchMetaMock,
         saveMemoryTakeoverBatchResult: vi.fn(async () => undefined),
         saveMemoryTakeoverPreview: vi.fn(async () => undefined),
+        writeMemoryTimelineProfile: vi.fn(async () => undefined),
         writeMemoryTakeoverPlan: vi.fn(async () => undefined),
     };
 });
@@ -164,6 +171,7 @@ describe('runTakeoverScheduler', () => {
                 repairedOnce: false,
             },
         ]);
+        loadBatchFailureStatesMock.mockResolvedValue(new Map());
         runBatchMock.mockResolvedValue({
             batchId: 'takeover-1:history:0002',
             sourceRange: { startFloor: 11, endFloor: 20 },
@@ -257,7 +265,7 @@ describe('runTakeoverScheduler', () => {
         ]));
     });
 
-    it('指定失败批次重试时只执行目标批次，其他失败批次保持暂停', async () => {
+    it('指定失败批次重试时只执行目标批次，其他失败批次保持阻塞等待', async () => {
         loadBatchResultsMock.mockResolvedValue([]);
         runConsolidationMock.mockClear();
         runBatchMock.mockResolvedValue({
@@ -316,7 +324,84 @@ describe('runTakeoverScheduler', () => {
             }),
         }));
         expect(runConsolidationMock).not.toHaveBeenCalled();
-        expect(progress.plan?.status).toBe('paused');
+        expect(progress.plan?.status).toBe('blocked_by_batch');
         expect(progress.plan?.failedBatchIds).toEqual(['takeover-1:history:0001']);
+    });
+
+    it('连续失败超过阈值后应进入 blocked_by_batch，并累计失败次数', async () => {
+        loadBatchResultsMock.mockResolvedValue([]);
+        loadBatchFailureStatesMock.mockResolvedValue(new Map([
+            ['takeover-1:history:0001', {
+                batchId: 'takeover-1:history:0001',
+                failureCount: 5,
+                consecutiveFailureCount: 5,
+                lastFailureAt: 100,
+                lastErrorMessage: 'timeout',
+                lastErrorKind: 'llm_timeout',
+                retryable: true,
+                requiresManualReview: false,
+                quarantined: false,
+                attemptCount: 5,
+            }],
+        ]));
+        runBatchMock.mockRejectedValue(new Error('timeout'));
+
+        const progress = await runTakeoverScheduler({
+            chatKey: 'chat-1',
+            plan: {
+                chatKey: 'chat-1',
+                chatId: 'chat-1',
+                takeoverId: 'takeover-1',
+                status: 'blocked_by_batch',
+                mode: 'full',
+                range: { startFloor: 1, endFloor: 20 },
+                totalFloors: 20,
+                recentFloors: 20,
+                batchSize: 10,
+                useActiveSnapshot: false,
+                activeSnapshotFloors: 0,
+                prioritizeRecent: true,
+                autoContinue: true,
+                autoConsolidate: true,
+                pauseOnError: true,
+                activeWindow: null,
+                currentBatchIndex: 0,
+                totalBatches: 2,
+                completedBatchIds: [],
+                failedBatchIds: ['takeover-1:history:0001'],
+                isolatedBatchIds: [],
+                requestedRetryBatchId: 'takeover-1:history:0001',
+                blockedBatchId: 'takeover-1:history:0001',
+                createdAt: 1,
+                updatedAt: 1,
+            },
+            llm: null,
+            pluginId: 'MemoryOS',
+            existingKnownEntities: {
+                actors: [],
+                organizations: [],
+                cities: [],
+                nations: [],
+                locations: [],
+                tasks: [],
+                worldStates: [],
+            },
+            applyConsolidation: applyConsolidationMock,
+        });
+
+        expect(progress.plan?.status).toBe('blocked_by_batch');
+        expect(progress.plan?.blockedBatchId).toBe('takeover-1:history:0001');
+        expect(progress.plan?.degradedReason).toBe('batch_requires_manual_review');
+        expect(progress.plan?.failedBatchIds).toEqual(['takeover-1:history:0001']);
+        expect(saveBatchMetaMock).toHaveBeenCalledWith('chat-1', expect.objectContaining({
+            batchId: 'takeover-1:history:0001',
+            status: 'failed',
+            attemptCount: 6,
+            failureCount: 6,
+            consecutiveFailureCount: 6,
+            requiresManualReview: true,
+            quarantined: true,
+            lastErrorKind: 'llm_timeout',
+        }));
     });
 });

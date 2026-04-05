@@ -48,13 +48,14 @@ export class PromptAssemblyService {
             .join('\n')
             .toLowerCase();
 
-        const [typeMap, entries, actorProfiles, worldBinding, roleMemories, compareKeyIndex] = await Promise.all([
+        const [typeMap, entries, actorProfiles, worldBinding, roleMemories, compareKeyIndex, timelineProfile] = await Promise.all([
             this.repository.listEntryTypes().then((items) => new Map(items.map((item): [string, typeof item] => [item.key, item]))),
             this.repository.listEntries(),
             this.repository.listActorProfiles(),
             this.repository.getWorldProfileBinding(),
             this.repository.listRoleMemories(),
             this.repository.listCompareKeyIndexRecords(),
+            this.repository.getTimelineProfile(),
         ]);
         const currentMaxFloor = entries.reduce((max: number, entry: MemoryEntry): number => {
             return Math.max(max, entry.timeContext?.sequenceTime?.lastFloor ?? 0);
@@ -109,6 +110,7 @@ export class PromptAssemblyService {
             entries: selectedEntries,
             roleEntries,
             activeActorKey: effectiveActorKey,
+            timelineProfile,
         });
 
         recordMemoryDebug(this.chatKey, {
@@ -594,7 +596,11 @@ export class PromptAssemblyService {
             return normalized;
         }
         const header = [
-            `时间：${promptTimeMeta.timeLabelForPrompt}`,
+            `时间：${promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt}`,
+            ...(promptTimeMeta.anchorLabel ? [`事件：${promptTimeMeta.anchorLabel}`] : []),
+            ...(promptTimeMeta.anchorRelationLabel ? [`锚点关系：${promptTimeMeta.anchorRelationLabel}`] : []),
+            ...(promptTimeMeta.sequenceLabel ? [`顺序：${promptTimeMeta.sequenceLabel}`] : []),
+            ...(promptTimeMeta.relativeToNowLabel ? [`相对当前：${promptTimeMeta.relativeToNowLabel}`] : []),
             `来源：${promptTimeMeta.timeSourceLabel}`,
             ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
         ].join('｜');

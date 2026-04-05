@@ -17,6 +17,7 @@ const TAKEOVER_WORKBENCH_TEXT_MAP: Record<string, string> = {
     resume: '继续',
     consolidate_now: '立即整合',
     abort: '终止',
+    mark_handled: '标记已处理',
     batch_token_estimate: '批次 Token 预估',
     batch_token_estimate_empty: '点击“计算预估”后，这里会显示每一轮的 token 预估。',
     task_status: '任务状态',

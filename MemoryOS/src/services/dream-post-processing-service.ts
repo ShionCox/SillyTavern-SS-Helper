@@ -224,10 +224,10 @@ export class DreamPostProcessingService {
             proposalType: 'summary_candidate_promotion',
             status: 'pending',
             confidence: Math.min(0.95, BASE_CONFIDENCE_SUMMARY + highlightBonus + sourceBonus),
-            reason: '本轮 dream insight 可作为后续 summary pipeline 的候选材料。',
+            reason: '本轮梦境洞察可作为后续总结流程的候选材料。',
             sourceEntryIds,
             sourceNodeKeys: Array.from(new Set(sourceEntryIds.flatMap((entryId: string): string[] => input.candidateMap.get(entryId)?.sourceNodeKeys ?? []))).slice(0, 8),
-            preview: `推广 ${Math.max(1, input.output.highlights.length)} 条 dream insight 到 summary 候选`,
+            preview: `推广 ${Math.max(1, input.output.highlights.length)} 条梦境洞察到总结候选`,
             payload: {
                 candidateTitle: `梦境洞察 ${new Date().toLocaleString('zh-CN')}`,
                 candidateSummary: input.output.highlights.join('；') || input.output.narrative.slice(0, 160),

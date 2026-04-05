@@ -25,6 +25,7 @@ import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile
 import { buildSequenceTime } from '../memory-time/sequence-time';
 import { logTimeDebug } from '../memory-time/time-debug';
 import type { MemoryTimeContext, MemoryTimelineProfile } from '../memory-time/time-types';
+import { extractStoryTimeDescriptor } from '../memory-time/story-time-parser';
 
 /**
  * 功能：定义冷启动编排依赖。
@@ -514,6 +515,10 @@ function buildColdStartCandidateTimeContext(
     timelineProfile: MemoryTimelineProfile,
 ): MemoryTimeContext {
     const anchorText = resolveColdStartCandidateAnchorText(candidate);
+    const descriptor = extractStoryTimeDescriptor({
+        text: anchorText || `${candidate.title || ''} ${candidate.summary || ''}`,
+        fallbackStoryDayIndex: timelineProfile.currentStoryDayIndex,
+    });
     const hasExplicitAnchor = Boolean(anchorText && timelineProfile.mode === 'explicit_world_time');
     const hasInferredAnchor = Boolean(anchorText && timelineProfile.mode === 'implicit_world_time');
     return {
@@ -524,7 +529,13 @@ function buildColdStartCandidateTimeContext(
                 : 'sequence_fallback',
         storyTime: anchorText ? {
             calendarKind: timelineProfile.calendarKind,
+            normalized: descriptor.partOfDay ? { partOfDay: descriptor.partOfDay } : undefined,
             ...(hasExplicitAnchor ? { absoluteText: anchorText } : { relativeText: anchorText }),
+            storyDayIndex: descriptor.storyDayIndex ?? timelineProfile.currentStoryDayIndex,
+            anchorEventId: descriptor.eventAnchors[0]?.eventId,
+            anchorEventLabel: descriptor.anchorEventLabel,
+            anchorRelation: descriptor.anchorRelation,
+            relativePhaseLabel: descriptor.relativePhaseLabel,
         } : undefined,
         sequenceTime: buildSequenceTime(0, 0, `cold_start:${candidate.id}`),
         source: 'cold_start',

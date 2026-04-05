@@ -481,7 +481,7 @@ export class TakeoverService {
         }
         const nextPlan: MemoryTakeoverPlan = {
             ...plan,
-            status: 'idle',
+            status: plan.failedBatchIds.length > 0 ? 'blocked_by_batch' : 'idle',
             pausedAt: undefined,
             updatedAt: Date.now(),
         };
@@ -506,9 +506,12 @@ export class TakeoverService {
         }
         const nextPlan: MemoryTakeoverPlan = {
             ...plan,
-            status: 'idle',
+            status: 'blocked_by_batch',
+            blockedBatchId: requestedBatchId,
+            lastBlockedAt: Date.now(),
             pausedAt: undefined,
             requestedRetryBatchId: requestedBatchId,
+            lastError: undefined,
             updatedAt: Date.now(),
         };
         await writeMemoryTakeoverPlan(this.chatKey, nextPlan);
@@ -538,7 +541,10 @@ export class TakeoverService {
         await input.applyConsolidation(consolidation);
         const nextPlan: MemoryTakeoverPlan = {
             ...plan,
-            status: 'completed',
+            status: plan.isolatedBatchIds.length > 0 ? 'degraded' : 'completed',
+            blockedBatchId: undefined,
+            lastBlockedAt: undefined,
+            degradedReason: plan.isolatedBatchIds.length > 0 ? 'isolated_batches_present' : undefined,
             completedAt: Date.now(),
             updatedAt: Date.now(),
         };
@@ -561,6 +567,47 @@ export class TakeoverService {
             lastError: 'manual_abort',
             updatedAt: Date.now(),
         };
+        await writeMemoryTakeoverPlan(this.chatKey, nextPlan);
+        return this.buildProgress(nextPlan);
+    }
+
+    /**
+     * 功能：将当前聊天标记为旧聊天接管已处理，后续不再自动弹出。
+     * @param currentFloorCount 当前楼层数。
+     * @returns 最新进度快照。
+     */
+    async markAsHandled(currentFloorCount: number): Promise<MemoryTakeoverProgressSnapshot> {
+        const now = Date.now();
+        const existingPlan = await this.readPlan();
+        const normalizedFloorCount = Math.max(1, Math.trunc(Number(currentFloorCount) || 0));
+        const nextPlan: MemoryTakeoverPlan = existingPlan
+            ? {
+                ...existingPlan,
+                status: 'completed',
+                blockedBatchId: undefined,
+                lastBlockedAt: undefined,
+                degradedReason: undefined,
+                requestedRetryBatchId: undefined,
+                lastError: undefined,
+                failedBatchIds: [],
+                isolatedBatchIds: [],
+                completedAt: existingPlan.completedAt ?? now,
+                updatedAt: now,
+            }
+            : {
+                ...this.buildPlan(normalizedFloorCount),
+                status: 'completed',
+                totalFloors: normalizedFloorCount,
+                range: { startFloor: 1, endFloor: normalizedFloorCount },
+                activeWindow: null,
+                currentBatchIndex: 0,
+                totalBatches: 0,
+                completedBatchIds: [],
+                failedBatchIds: [],
+                isolatedBatchIds: [],
+                completedAt: now,
+                updatedAt: now,
+            };
         await writeMemoryTakeoverPlan(this.chatKey, nextPlan);
         return this.buildProgress(nextPlan);
     }

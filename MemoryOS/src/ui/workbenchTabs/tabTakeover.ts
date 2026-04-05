@@ -78,6 +78,9 @@ export function buildTakeoverViewMarkup(snapshot: WorkbenchSnapshot, state: Work
                     <button class="stx-memory-workbench__ghost-btn" data-action="takeover-consolidate"${state.takeoverActionRunning ? ' disabled' : ''}>
                         <i class="fa-solid fa-layer-group"></i> ${escapeHtml(resolveTakeoverWorkbenchText('consolidate_now'))}
                     </button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="takeover-mark-handled"${state.takeoverActionRunning ? ' disabled' : ''}>
+                        <i class="fa-solid fa-check-double"></i> ${escapeHtml(resolveTakeoverWorkbenchText('mark_handled'))}
+                    </button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="takeover-abort"${state.takeoverActionRunning ? ' disabled' : ''} style="border-color:rgba(239,68,68,0.35); color:var(--mw-warn);">
                         <i class="fa-solid fa-stop"></i> ${escapeHtml(resolveTakeoverWorkbenchText('abort'))}
                     </button>

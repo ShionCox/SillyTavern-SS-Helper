@@ -7,6 +7,7 @@ import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
     getTavernMessageTextEvent,
+    getTavernRuntimeContextEvent,
     isFallbackTavernChatEvent,
     parseTavernChatScopedKeyEvent,
 } from '../../../SDK/tavern';
@@ -576,6 +577,15 @@ export class MemoryOS {
         if (!settings.enabled || !settings.coldStartEnabled) {
             return;
         }
+        let takeoverDetection = await sdk.chatState.detectTakeoverNeeded();
+        if (!takeoverDetection.needed && Number(takeoverDetection.currentFloorCount ?? 0) <= 0) {
+            await this.waitForChatHydration(normalizedChatKey);
+            takeoverDetection = await sdk.chatState.detectTakeoverNeeded();
+        }
+        if (takeoverDetection.needed) {
+            logger.info(`跳过冷启动确认：当前聊天识别为旧聊天接管 (${normalizedChatKey})`);
+            return;
+        }
         if (this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
             return;
         }
@@ -634,6 +644,37 @@ export class MemoryOS {
     }
 
     /**
+     * 功能：等待宿主聊天消息完成初次注水，避免导入聊天时过早触发冷启动。
+     * @param chatKey 当前聊天键。
+     * @returns 异步完成。
+     */
+    private async waitForChatHydration(chatKey: string): Promise<void> {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        if (!normalizedChatKey) {
+            return;
+        }
+        const deadline = Date.now() + 1800;
+        while (Date.now() < deadline) {
+            const activeChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
+            if (activeChatKey !== normalizedChatKey) {
+                return;
+            }
+            const runtimeContext = getTavernRuntimeContextEvent();
+            const hostMessages = Array.isArray(runtimeContext?.chat) ? runtimeContext.chat : [];
+            const hydratedCount = hostMessages.filter((item: unknown): boolean => {
+                if (!item || typeof item !== 'object') {
+                    return false;
+                }
+                return String(getTavernMessageTextEvent(item as Record<string, unknown>) ?? '').trim().length > 0;
+            }).length;
+            if (hydratedCount > 0) {
+                return;
+            }
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+        }
+    }
+
+    /**
      * 功能：在旧聊天绑定后按需弹出接管配置。
      * @param chatKey 当前聊天键。
      * @param sdk 当前聊天的 Memory SDK。
@@ -656,7 +697,18 @@ export class MemoryOS {
             return true;
         }
 
-        const detection = await sdk.chatState.detectTakeoverNeeded();
+        const takeoverStatus = await sdk.chatState.getTakeoverStatus();
+        const currentPlanStatus = String(takeoverStatus.plan?.status ?? '').trim();
+        if (currentPlanStatus === 'completed' || currentPlanStatus === 'degraded') {
+            this.takeoverPromptedChats.add(normalizedChatKey);
+            return false;
+        }
+
+        let detection = await sdk.chatState.detectTakeoverNeeded();
+        if (!detection.needed && Number(detection.currentFloorCount ?? 0) <= 0) {
+            await this.waitForChatHydration(normalizedChatKey);
+            detection = await sdk.chatState.detectTakeoverNeeded();
+        }
         if (!detection.needed) {
             return false;
         }
@@ -856,7 +908,13 @@ export class MemoryOS {
         let currentChatKey = '';
         let bindingSerial = 0;
 
-        const rebindChat = async (_force: boolean = false): Promise<void> => {
+        const rebindChat = async (
+            _force: boolean = false,
+            options: {
+                triggerColdStart?: boolean;
+            } = {},
+        ): Promise<void> => {
+            const triggerColdStart = options.triggerColdStart === true;
             const chatKey = String(buildSdkChatKeyEvent() ?? '').trim();
             if (!chatKey) {
                 currentChatKey = '';
@@ -936,7 +994,7 @@ export class MemoryOS {
             this.initDreamSchedulerForChat(chatKey, sdk);
             void (async (): Promise<void> => {
                 const takeoverHandled = await this.maybePromptTakeover(chatKey, sdk);
-                if (!takeoverHandled) {
+                if (triggerColdStart && !takeoverHandled) {
                     await this.maybePromptColdStart(chatKey, sdk);
                 }
             })().catch((error: unknown): void => {
@@ -945,7 +1003,7 @@ export class MemoryOS {
         };
 
         this.refreshChatBindingHandler = rebindChat;
-        void rebindChat(true);
+        void rebindChat(true, { triggerColdStart: false });
 
         const onMessage = (eventType: 'chat.message.sent' | 'chat.message.received', payload: unknown): void => {
             const settings = this.readSettings();
@@ -969,13 +1027,13 @@ export class MemoryOS {
         };
 
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', (): void => {
-            void rebindChat();
+            void rebindChat(false, { triggerColdStart: false });
         });
         eventSource.on(types.CHAT_STARTED || 'chat_started', (): void => {
-            void rebindChat();
+            void rebindChat(false, { triggerColdStart: false });
         });
         eventSource.on(types.CHAT_NEW || 'chat_new', (): void => {
-            void rebindChat();
+            void rebindChat(false, { triggerColdStart: true });
         });
         eventSource.on(types.USER_MESSAGE_RENDERED || 'user_message_rendered', (payload?: unknown): void => {
             onMessage('chat.message.sent', payload);

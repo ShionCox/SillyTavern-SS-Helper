@@ -5,12 +5,13 @@ import { renderEventMemoryNarrative } from './narrative-renderer/event-renderer'
 import { renderRelationshipNarrative } from './narrative-renderer/relationship-renderer';
 import { renderWorldStateNarrative } from './narrative-renderer/world-renderer';
 import { buildPromptTimeMeta } from '../memory-time/time-ranking';
-import type { PromptTimeMeta } from '../memory-time/time-types';
+import type { MemoryTimelineProfile, PromptTimeMeta } from '../memory-time/time-types';
 
 /**
  * 功能：角色可见记忆视图。
  */
 export interface ActorVisibleMemoryContext {
+    timelineLines: string[];
     worldBaseLines: string[];
     sceneSharedLines: string[];
     entityLines: string[];
@@ -42,6 +43,7 @@ export interface BuildActorVisibleContextInput {
     entries: MemoryEntry[];
     roleEntries: PromptAssemblyRoleEntry[];
     activeActorKey?: string;
+    timelineProfile?: MemoryTimelineProfile | null;
 }
 
 /**
@@ -167,8 +169,10 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             ))
             .map((entry: PromptAssemblyRoleEntry): PromptTimeMeta | undefined => entry.promptTimeMeta),
     ], timeSourceCounts);
+    const timelineLines = buildTimelineLines(input.timelineProfile);
 
     return {
+        timelineLines,
         worldBaseLines,
         sceneSharedLines,
         entityLines,
@@ -351,7 +355,11 @@ function prependPromptTimeHeader(
     }
     const promptTimeMeta = buildPromptTimeMeta(timeContext, currentMaxFloor);
     const header = [
-        `时间：${promptTimeMeta.timeLabelForPrompt}`,
+        `时间：${promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt}`,
+        ...(promptTimeMeta.anchorLabel ? [`事件：${promptTimeMeta.anchorLabel}`] : []),
+        ...(promptTimeMeta.anchorRelationLabel ? [`锚点关系：${promptTimeMeta.anchorRelationLabel}`] : []),
+        ...(promptTimeMeta.sequenceLabel ? [`顺序：${promptTimeMeta.sequenceLabel}`] : []),
+        ...(promptTimeMeta.relativeToNowLabel ? [`相对当前：${promptTimeMeta.relativeToNowLabel}`] : []),
         `来源：${promptTimeMeta.timeSourceLabel}`,
         ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
     ].join('｜');
@@ -386,4 +394,33 @@ function buildSemanticEntryLine(entry: MemoryEntry, summary: string): string {
         detailPayload: entry.detailPayload,
     }));
     return `${semanticTag ? `${semanticTag} ` : ''}${entry.title}：${summary}`;
+}
+
+function buildTimelineLines(profile?: MemoryTimelineProfile | null): string[] {
+    const anchors = Array.isArray(profile?.eventAnchors) ? profile.eventAnchors : [];
+    if (anchors.length <= 0) {
+        return [];
+    }
+    return anchors
+        .slice(0, 6)
+        .sort((left, right) => left.firstFloor - right.firstFloor)
+        .map((anchor, index) => {
+            const dayLabel = anchor.storyDayIndex ? `第${anchor.storyDayIndex}天` : '';
+            const partLabel = resolveTimelinePartLabel(anchor.partOfDay);
+            const timeLabel = [dayLabel, partLabel].filter(Boolean).join('');
+            return `E${index + 1}：${[timeLabel, anchor.label].filter(Boolean).join('，')}`;
+        });
+}
+
+function resolveTimelinePartLabel(part?: string): string {
+    switch (part) {
+        case 'dawn': return '清晨';
+        case 'morning': return '上午';
+        case 'noon': return '正午';
+        case 'afternoon': return '午后';
+        case 'evening': return '傍晚';
+        case 'night': return '夜晚';
+        case 'midnight': return '深夜';
+        default: return '';
+    }
 }

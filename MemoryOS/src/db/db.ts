@@ -37,6 +37,7 @@ import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBaseline,
     MemoryTakeoverBatch,
+    MemoryTakeoverBatchFailureState,
     MemoryTakeoverBatchResult,
     MemoryTakeoverCandidateActorMention,
     MemoryTakeoverConsolidationResult,
@@ -311,6 +312,65 @@ export async function loadMemoryTakeoverBatchMetas(chatKey: string): Promise<Mem
     return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatch => {
         return row.payload as unknown as MemoryTakeoverBatch;
     });
+}
+
+/**
+ * 功能：聚合当前聊天所有批次的失败与重试状态。
+ * @param chatKey 聊天键。
+ * @returns 批次聚合状态映射。
+ */
+export async function loadMemoryTakeoverBatchFailureStates(chatKey: string): Promise<Map<string, MemoryTakeoverBatchFailureState>> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        order: 'asc',
+        limit: 4000,
+    });
+    const stateMap = new Map<string, MemoryTakeoverBatchFailureState>();
+    for (const row of rows) {
+        const payload = row.payload as unknown as MemoryTakeoverBatch;
+        const batchId = normalizeText(payload?.batchId);
+        if (!batchId) {
+            continue;
+        }
+        const current = stateMap.get(batchId) ?? {
+            batchId,
+            failureCount: 0,
+            consecutiveFailureCount: 0,
+            retryable: true,
+            requiresManualReview: false,
+            quarantined: false,
+            attemptCount: 0,
+        };
+        const nextAttemptCount = Math.max(
+            current.attemptCount,
+            Math.trunc(Number(payload?.attemptCount) || 0),
+        );
+        const status = normalizeText(payload?.status);
+        if (status === 'failed') {
+            current.failureCount += 1;
+            current.consecutiveFailureCount += 1;
+            current.lastFailureAt = Number(payload?.finishedAt ?? payload?.startedAt ?? row.ts ?? Date.now()) || Date.now();
+            current.lastErrorMessage = normalizeText(payload?.error) || current.lastErrorMessage;
+            current.lastErrorKind = normalizeTakeoverBatchErrorKind(payload?.lastErrorKind) ?? inferTakeoverBatchErrorKind(current.lastErrorMessage);
+            current.retryable = payload?.retryable !== false;
+            current.requiresManualReview = payload?.requiresManualReview === true;
+            current.quarantined = payload?.quarantined === true;
+        } else if (status === 'isolated') {
+            current.lastErrorMessage = normalizeText(payload?.error) || current.lastErrorMessage;
+            current.lastErrorKind = normalizeTakeoverBatchErrorKind(payload?.lastErrorKind) ?? inferTakeoverBatchErrorKind(current.lastErrorMessage) ?? 'admission_failed';
+            current.retryable = payload?.retryable !== false;
+            current.requiresManualReview = payload?.requiresManualReview === true;
+            current.quarantined = payload?.quarantined === true;
+            current.lastFailureAt = Number(payload?.finishedAt ?? payload?.startedAt ?? row.ts ?? Date.now()) || Date.now();
+        } else if (status === 'completed') {
+            current.consecutiveFailureCount = 0;
+            current.retryable = true;
+            current.requiresManualReview = false;
+            current.quarantined = false;
+        }
+        current.attemptCount = nextAttemptCount;
+        stateMap.set(batchId, current);
+    }
+    return stateMap;
 }
 
 /**
@@ -642,6 +702,61 @@ function normalizeStringArray(value: unknown): string[] {
         result.push(normalized);
     }
     return result;
+}
+
+/**
+ * 功能：归一化接管批次错误类型。
+ * @param value 原始值。
+ * @returns 错误类型。
+ */
+function normalizeTakeoverBatchErrorKind(value: unknown): MemoryTakeoverBatchFailureState['lastErrorKind'] | undefined {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return undefined;
+    }
+    const allowedKinds: MemoryTakeoverBatchFailureState['lastErrorKind'][] = [
+        'llm_unavailable',
+        'llm_timeout',
+        'rate_limit',
+        'schema_invalid',
+        'admission_failed',
+        'manual_abort',
+        'unknown',
+    ];
+    return allowedKinds.includes(normalized as MemoryTakeoverBatchFailureState['lastErrorKind'])
+        ? normalized as MemoryTakeoverBatchFailureState['lastErrorKind']
+        : undefined;
+}
+
+/**
+ * 功能：从错误消息中推断接管批次错误类型。
+ * @param errorMessage 错误消息。
+ * @returns 错误类型。
+ */
+function inferTakeoverBatchErrorKind(errorMessage: string | undefined): MemoryTakeoverBatchFailureState['lastErrorKind'] | undefined {
+    const normalized = normalizeText(errorMessage).toLowerCase();
+    if (!normalized) {
+        return undefined;
+    }
+    if (normalized.includes('admission_isolated')) {
+        return 'admission_failed';
+    }
+    if (normalized.includes('rate limit') || normalized.includes('too many requests') || normalized.includes('429')) {
+        return 'rate_limit';
+    }
+    if (normalized.includes('timeout') || normalized.includes('timed out')) {
+        return 'llm_timeout';
+    }
+    if (normalized.includes('unavailable') || normalized.includes('overloaded') || normalized.includes('service')) {
+        return 'llm_unavailable';
+    }
+    if (normalized.includes('schema') || normalized.includes('json') || normalized.includes('parse')) {
+        return 'schema_invalid';
+    }
+    if (normalized.includes('manual_abort')) {
+        return 'manual_abort';
+    }
+    return 'unknown';
 }
 
 /**

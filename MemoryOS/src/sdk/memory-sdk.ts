@@ -375,6 +375,7 @@ export class MemorySDKImpl {
         runTakeoverConsolidation: () => Promise<MemoryTakeoverExecutionResult>;
         rebuildTakeoverRange: (startFloor: number, endFloor: number, batchSize?: number) => Promise<MemoryTakeoverExecutionResult>;
         abortTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
+        markTakeoverHandled: () => Promise<MemoryTakeoverProgressSnapshot>;
         getContentLabSettings: () => Promise<ContentLabSettings>;
         saveContentLabSettings: (patch: Partial<ContentLabSettings>) => Promise<ContentLabSettings>;
         previewFloorContentBlocks: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text' }) => Promise<RawFloorRecord>;
@@ -643,7 +644,7 @@ export class MemorySDKImpl {
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                        await this.applyTakeoverConsolidation(result);
+                        await this.applyTakeoverConsolidation(result, { alignSummaryProgress: true });
                     },
                 });
                 return this.toTakeoverExecutionResult(progress, 'missing_plan');
@@ -658,7 +659,7 @@ export class MemorySDKImpl {
                     skipInitialWait: true,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                        await this.applyTakeoverConsolidation(result);
+                        await this.applyTakeoverConsolidation(result, { alignSummaryProgress: true });
                     },
                 });
                 if (!progress) {
@@ -679,7 +680,7 @@ export class MemorySDKImpl {
                     skipInitialWait: true,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                        await this.applyTakeoverConsolidation(result);
+                        await this.applyTakeoverConsolidation(result, { alignSummaryProgress: true });
                     },
                 });
                 if (!progress) {
@@ -697,7 +698,7 @@ export class MemorySDKImpl {
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                        await this.applyTakeoverConsolidation(result);
+                        await this.applyTakeoverConsolidation(result, { alignSummaryProgress: true });
                     },
                 });
                 if (!progress) {
@@ -734,13 +735,16 @@ export class MemorySDKImpl {
                     pluginId: MEMORY_OS_PLUGIN_ID,
                     existingKnownEntities: await this.readTakeoverExistingKnownEntities(),
                     applyConsolidation: async (result: MemoryTakeoverConsolidationResult): Promise<void> => {
-                        await this.applyTakeoverConsolidation(result);
+                        await this.applyTakeoverConsolidation(result, { alignSummaryProgress: false });
                     },
                 });
                 return this.toTakeoverExecutionResult(progress, 'ok');
             },
             abortTakeover: async (): Promise<MemoryTakeoverProgressSnapshot> => {
                 return this.takeoverService.abortTakeover();
+            },
+            markTakeoverHandled: async (): Promise<MemoryTakeoverProgressSnapshot> => {
+                return this.takeoverService.markAsHandled(await this.readCurrentSummaryFloorCount());
             },
             getContentLabSettings: async (): Promise<ContentLabSettings> => {
                 return this.takeoverService.readContentLabSettings();
@@ -1100,6 +1104,7 @@ export class MemorySDKImpl {
                 capture: async (input: Parameters<SummaryService['captureSummaryFromChat']>[0]) => {
                     const snapshot = await this.summaryService.captureSummaryFromChat(input);
                     if (snapshot) {
+                        await this.alignSummaryProgressToCurrentFloor();
                         await this.refreshVectorIndexAfterPipeline('手动总结');
                     }
                     return snapshot;
@@ -1811,7 +1816,10 @@ export class MemorySDKImpl {
      * @param result 接管整合结果。
      * @returns 异步完成。
      */
-    private async applyTakeoverConsolidation(result: MemoryTakeoverConsolidationResult): Promise<void> {
+    private async applyTakeoverConsolidation(
+        result: MemoryTakeoverConsolidationResult,
+        options: { alignSummaryProgress?: boolean } = {},
+    ): Promise<void> {
         const applyResults: ApplyLedgerMutationBatchResult[] = [];
         const relationshipRecords: MemoryRelationshipRecord[] = [];
         for (const actorCard of result.actorCards ?? []) {
@@ -2156,6 +2164,9 @@ export class MemorySDKImpl {
         await saveMemoryTakeoverPreview(this.chatKey_, 'consolidation', result, 'runtime');
         await this.bindWorldProfileFromTakeover(result);
         await this.markColdStartCompletedFromTakeover();
+        if (options.alignSummaryProgress !== false) {
+            await this.alignSummaryProgressToCurrentFloor();
+        }
         await this.refreshVectorIndexAfterPipeline('旧聊天处理');
     }
 
@@ -3342,6 +3353,22 @@ export class MemorySDKImpl {
             coldStartLastReasonCode: 'old_chat_takeover_completed',
             coldStartResumeRunId: undefined,
             coldStartResumeSourceBundle: undefined,
+        });
+    }
+
+    /**
+     * 功能：把总结进度对齐到当前聊天最新楼层，避免已处理历史再次进入待总结区间。
+     * @returns 异步完成。
+     */
+    private async alignSummaryProgressToCurrentFloor(): Promise<void> {
+        const currentFloorCount = await this.readCurrentSummaryFloorCount();
+        const now: number = Date.now();
+        await this.writeColdStartState({
+            summaryLastSummarizedIndex: currentFloorCount,
+            summaryLastSummarizedMessageId: undefined,
+            summaryPendingStartIndex: currentFloorCount + 1,
+            summaryPendingEndIndex: currentFloorCount,
+            summaryLastSummarizedAt: now,
         });
     }
 

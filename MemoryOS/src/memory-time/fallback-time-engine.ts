@@ -33,12 +33,18 @@ export function mapBatchToMemoryTimeContext(input: {
             mode: 'story_explicit',
             storyTime: {
                 calendarKind: profile?.calendarKind,
+                normalized: assessment.partOfDay ? { partOfDay: assessment.partOfDay } : undefined,
                 absoluteText: isAbsoluteTimeText(assessment.anchorAfter ?? assessment.anchorBefore ?? '')
                     ? (assessment.anchorAfter ?? assessment.anchorBefore)
                     : undefined,
                 relativeText: !isAbsoluteTimeText(assessment.anchorAfter ?? assessment.anchorBefore ?? '')
                     ? (assessment.anchorAfter ?? assessment.anchorBefore)
                     : undefined,
+                storyDayIndex: assessment.storyDayIndex ?? profile?.currentStoryDayIndex,
+                anchorEventId: assessment.anchorEventId ?? assessment.eventAnchors?.[0]?.eventId,
+                anchorEventLabel: assessment.anchorEventLabel ?? assessment.eventAnchors?.[0]?.label,
+                anchorRelation: assessment.anchorRelation,
+                relativePhaseLabel: assessment.relativePhaseLabel,
             },
             sequenceTime: buildSequenceTime(firstFloor, lastFloor, assessment.batchId),
             durationHint: assessment.inferredElapsed,
@@ -54,7 +60,21 @@ export function mapBatchToMemoryTimeContext(input: {
             storyTime: assessment.explicitMentions.length > 0 ? {
                 calendarKind: profile?.calendarKind,
                 relativeText: assessment.explicitMentions[0],
-            } : undefined,
+                normalized: assessment.partOfDay ? { partOfDay: assessment.partOfDay } : undefined,
+                storyDayIndex: assessment.storyDayIndex ?? profile?.currentStoryDayIndex,
+                anchorEventId: assessment.anchorEventId ?? assessment.eventAnchors?.[0]?.eventId,
+                anchorEventLabel: assessment.anchorEventLabel ?? assessment.eventAnchors?.[0]?.label,
+                anchorRelation: assessment.anchorRelation,
+                relativePhaseLabel: assessment.relativePhaseLabel,
+            } : {
+                calendarKind: profile?.calendarKind,
+                normalized: assessment.partOfDay ? { partOfDay: assessment.partOfDay } : undefined,
+                storyDayIndex: assessment.storyDayIndex ?? profile?.currentStoryDayIndex,
+                anchorEventId: assessment.anchorEventId ?? assessment.eventAnchors?.[0]?.eventId,
+                anchorEventLabel: assessment.anchorEventLabel ?? assessment.eventAnchors?.[0]?.label,
+                anchorRelation: assessment.anchorRelation,
+                relativePhaseLabel: assessment.relativePhaseLabel,
+            },
             sequenceTime: buildSequenceTime(firstFloor, lastFloor, assessment.batchId),
             durationHint: assessment.inferredElapsed,
             source,
