@@ -48,6 +48,8 @@ export { resolveActorsWorkbenchText } from './actorsWorkbenchLocale';
 export { resolvePreviewWorkbenchText } from './previewWorkbenchLocale';
 export { resolveTakeoverWorkbenchText } from './takeoverWorkbenchLocale';
 export { resolveVectorWorkbenchText } from './vectorWorkbenchLocale';
+export { resolveDreamWorkbenchText, formatDreamWorkbenchText } from './dreamWorkbenchLocale';
+export { resolveUnifiedWorkbenchText } from './unifiedWorkbenchLocale';
 export {
     resolveContentLabKindLabel,
     resolveContentLabReasonCodeLabel,

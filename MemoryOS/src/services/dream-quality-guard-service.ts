@@ -5,6 +5,7 @@ import type {
     DreamQualityReport,
     DreamSessionOutputRecord,
 } from './dream-types';
+import type { UnifiedMemoryMutation } from '../types/unified-mutation';
 
 /** explain 缺失时的质量分数惩罚 */
 const PENALTY_EXPLAIN_MISSING = 0.12;
@@ -123,6 +124,30 @@ export class DreamQualityGuardService {
         return input.output.proposedMutations.filter((mutation: DreamMutationProposal): boolean => {
             return !blockedSet.has(mutation.mutationId);
         });
+    }
+
+    validateUnifiedMutations(mutations: UnifiedMemoryMutation[]): string[] {
+        const warnings: string[] = [];
+        for (const mutation of mutations) {
+            const targetKind = normalizeText(mutation.targetKind);
+            const action = normalizeText(mutation.action).toUpperCase();
+            if (!targetKind) {
+                warnings.push('unified_mutation_target_kind_missing');
+            }
+            if (!['ADD', 'UPDATE', 'MERGE', 'INVALIDATE', 'DELETE', 'NOOP'].includes(action)) {
+                warnings.push(`unified_mutation_action_invalid:${action || 'unknown'}`);
+            }
+            if (targetKind === 'relationship') {
+                const payload = toRecord(mutation.detailPayload);
+                const sourceActorKey = normalizeText(payload.sourceActorKey ?? toRecord(mutation.sourceContext).sourceActorKey);
+                const targetActorKey = normalizeText(payload.targetActorKey ?? toRecord(mutation.sourceContext).targetActorKey);
+                const relationTag = normalizeText(payload.relationTag ?? toRecord(mutation.sourceContext).relationTag ?? mutation.title);
+                if (!sourceActorKey || !targetActorKey || !relationTag) {
+                    warnings.push(`relationship_mutation_fields_missing:${mutation.title || 'untitled'}`);
+                }
+            }
+        }
+        return Array.from(new Set(warnings));
     }
 
     private buildMutationFingerprint(mutation: DreamMutationProposal): string {

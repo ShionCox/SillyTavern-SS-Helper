@@ -140,7 +140,7 @@ export class DreamSessionRepository {
         return this.getSingleRecord<DreamSchedulerStateRecord>('dream_scheduler_state', this.chatKey);
     }
 
-    private async saveRecord<T extends Record<string, unknown>>(
+    private async saveRecord<T extends object>(
         collection: DreamRecordCollection,
         recordId: string,
         payload: T,
@@ -148,7 +148,7 @@ export class DreamSessionRepository {
     ): Promise<void> {
         await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, this.chatKey, collection, {
             recordId: String(recordId ?? '').trim(),
-            payload: payload as Record<string, unknown>,
+            payload: payload as unknown as Record<string, unknown>,
             ts: Number(ts ?? Date.now()) || Date.now(),
         });
     }

@@ -244,7 +244,7 @@ export interface ResolvedBindings {
 
 export type LedgerMutationAction = 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE' | 'NOOP';
 
-export type LedgerMutationSource = 'summary' | 'cold_start' | 'takeover' | 'manual_edit';
+export type LedgerMutationSource = 'summary' | 'cold_start' | 'takeover' | 'manual_edit' | 'dream' | 'maintenance';
 
 export interface LedgerMutation {
     targetKind: string;

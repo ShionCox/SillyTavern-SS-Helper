@@ -73,6 +73,24 @@ export {
 } from './unified-memory';
 
 export type {
+    UnifiedMemoryMutation,
+    UnifiedMemoryMutationBatchContext,
+    UnifiedRelationshipMutationApplyResult,
+    UnifiedMemoryMutationApplyResult,
+} from './unified-mutation';
+
+export type {
+    PromptReferenceKind,
+    PromptAliasEntry,
+    PromptAliasSnapshot,
+    PromptRecallHitDTO,
+    PromptBridgeNodeDTO,
+    PromptWaveHintDTO,
+    PromptGraphSummaryItemDTO,
+    DreamPromptDTO,
+} from './prompt-alias';
+
+export type {
     VectorDocSourceKind,
     EmbeddingStatus,
     VectorDocument,

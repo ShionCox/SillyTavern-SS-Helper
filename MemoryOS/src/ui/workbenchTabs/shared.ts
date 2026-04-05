@@ -212,6 +212,8 @@ export interface WorkbenchState {
     contentLabEnableToolArtifactDetection: boolean;
     contentLabEnableAIClassifier: boolean;
     contentLabEditingRuleIndex: number;
+    dreamSubView: 'overview' | 'workbench';
+    dreamWorkbenchTab: 'session' | 'diagnostics' | 'maintenance' | 'applied' | 'rollback';
     /** 时间模式过滤 */
     entryTimeFilter: 'all' | 'story_explicit' | 'story_inferred' | 'sequence_fallback' | 'no_time';
     /** 条目排序方式 */

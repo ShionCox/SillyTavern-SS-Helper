@@ -1,4 +1,5 @@
 import type { MemoryEntry, MemoryRelationshipRecord } from '../types';
+import type { UnifiedMemoryMutationApplyResult } from '../types/unified-mutation';
 
 export const DREAM_PHASE1_MAX_MUTATION_COUNT = 8;
 
@@ -26,6 +27,14 @@ export interface DreamSettingsSnapshot {
     contextMaxTokens: number;
     retrievalMode: string;
     dreamContextMaxChars: number;
+    dreamPromptVersion?: string;
+    dreamPromptStylePreset?: string;
+}
+
+export interface DreamPromptInfoRecord {
+    promptVersion: string;
+    stylePreset: string;
+    schemaVersion: string;
 }
 
 export interface DreamSessionMetaRecord {
@@ -156,6 +165,7 @@ export interface DreamMutationExplain {
 export interface DreamSessionOutputRecord {
     dreamId: string;
     chatKey: string;
+    promptInfo?: DreamPromptInfoRecord;
     narrative: string;
     highlights: string[];
     proposedMutations: DreamMutationProposal[];
@@ -278,6 +288,7 @@ export interface DreamRollbackMetadataRecord {
     affectedEntryIds: string[];
     affectedRelationshipIds: string[];
     summaryCandidateIds: string[];
+    applyResult?: UnifiedMemoryMutationApplyResult;
     createdAt: number;
     updatedAt: number;
     rolledBackAt?: number;

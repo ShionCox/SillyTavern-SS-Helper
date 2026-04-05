@@ -1347,15 +1347,25 @@ function bindUiEvents(): void {
                                     class="stx-ui-list-main"
                                     data-resource-open="${escapeHtml(resource.id)}"
                                 >
-                                    <div class="stx-ui-list-icon">
-                                        <i class="${resource.source === 'tavern' ? 'fa-solid fa-beer-mug-empty' : 'fa-solid fa-server'}"></i>
-                                    </div>
-                                    <div class="stx-ui-list-content">
-                                        <div class="stx-ui-list-title">
-                                            ${escapeHtml(resource.label || resource.id)}
-                                            <span class="stx-ui-list-tag ${resource.type}">${escapeHtml(getKindLabel(resource.type))}</span>
+                                    <div class="stx-ui-resource-head">
+                                        <div class="stx-ui-list-icon">
+                                            <i class="${resource.source === 'tavern' ? 'fa-solid fa-beer-mug-empty' : 'fa-solid fa-server'}"></i>
                                         </div>
-                                        <div class="stx-ui-list-meta">ID=${escapeHtml(resource.id)} · 来源=${escapeHtml(resource.source)}${resource.source === 'custom' && resource.type === 'generation' ? `/${escapeHtml(getApiTypeLabel(resource.apiType))}` : ''} · ${resource.enabled === false ? '停用' : '启用'}</div>
+                                        <div class="stx-ui-list-content">
+                                            <div class="stx-ui-list-title">
+                                                ${escapeHtml(resource.label || resource.id)}
+                                            </div>
+                                            <div class="stx-ui-list-meta">${escapeHtml(resource.id)}</div>
+                                        </div>
+                                    </div>
+                                    <div class="stx-ui-resource-meta">
+                                        <span class="stx-ui-list-tag ${resource.type}">${escapeHtml(getKindLabel(resource.type))}</span>
+                                        <span class="stx-ui-list-tag stx-ui-list-tag--subtle">${escapeHtml(resource.source === 'tavern' ? '酒馆代理' : '自定义')}</span>
+                                        ${resource.source === 'custom' && resource.type === 'generation' ? `<span class="stx-ui-list-tag stx-ui-list-tag--subtle">${escapeHtml(getApiTypeLabel(resource.apiType))}</span>` : ''}
+                                    </div>
+                                    <div class="stx-ui-list-desc">
+                                        <span>ID：${escapeHtml(resource.id)}</span>
+                                        <span>状态：${resource.enabled === false ? '停用' : '启用'}</span>
                                     </div>
                                 </button>
                                 <div class="stx-ui-list-side">
@@ -2076,10 +2086,7 @@ function bindUiEvents(): void {
                 const resolvedRegisteredMaxTokens = registeredMaxTokens;
                 const currentOverrideValue = existing?.maxTokens
                     ? String(existing.maxTokens)
-                    : (registeredMaxTokens ? String(registeredMaxTokens) : '');
-                const maxTokensPlaceholder = registeredMaxTokens
-                    ? `默认 ${registeredMaxTokens}，留空则不覆盖`
-                    : '留空则不覆盖';
+                    : '';
                 const staleHtml = isStale
                     ? `<span class="stx-ui-stale-indicator"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(existing?.staleReason || '绑定失效')}</span>`
                     : '';
@@ -2089,11 +2096,11 @@ function bindUiEvents(): void {
                     'data-task-assign-resource': key,
                 });
                 const normalizedDisplayName = normalizeTaskAssignmentDisplayName(pluginId, displayName);
-                const capabilityText = task.requiredCapabilities?.length ? task.requiredCapabilities.join(', ') : '无';
-                const defaultMaxTokensText = resolvedRegisteredMaxTokens ? String(resolvedRegisteredMaxTokens) : '未设置';
-                const currentOverrideText = existing?.maxTokens ? String(existing.maxTokens) : '未覆盖';
-                const resolvedMaxTokensPlaceholder = resolvedRegisteredMaxTokens
-                    ? `默认 ${resolvedRegisteredMaxTokens}，留空则不覆盖`
+                const capabilityText = task.requiredCapabilities?.length ? task.requiredCapabilities.join(' · ') : '';
+                const statusText = isOnline ? '在线' : '离线';
+                const defaultMaxTokensText = resolvedRegisteredMaxTokens ? `默认 ${resolvedRegisteredMaxTokens}` : '';
+                const overrideHintText = resolvedRegisteredMaxTokens
+                    ? `留空则沿用 ${resolvedRegisteredMaxTokens}`
                     : '留空则不覆盖';
 
                 return `
@@ -2102,23 +2109,15 @@ function bindUiEvents(): void {
                       <div class="stx-ui-consumer-map-head-main">
                         <div class="stx-ui-list-title">
                           <span class="stx-ui-online-dot ${isOnline ? 'is-online' : 'is-offline'}"></span>
-                          ${escapeHtml(normalizedDisplayName)} / ${escapeHtml(formatTaskDisplayLabel(task.taskKey, task.description))}
+                          ${escapeHtml(formatTaskDisplayLabel(task.taskKey, task.description))}
                         </div>
-                                                ${task.description ? `<div class="stx-ui-list-meta">${escapeHtml(task.description)}</div>` : ''}
                         <div class="stx-ui-consumer-map-badges">
-                          <span class="stx-ui-consumer-map-badge">类型：${escapeHtml(getKindLabel(task.taskKind))}</span>
-                          <span class="stx-ui-consumer-map-badge">能力：${escapeHtml(task.requiredCapabilities?.length ? task.requiredCapabilities.join(', ') : '无')}</span>
-                          ${registeredMaxTokens ? `<span class="stx-ui-consumer-map-badge is-accent">默认上限：${escapeHtml(String(registeredMaxTokens))}</span>` : ''}
-                          ${existing?.maxTokens ? `<span class="stx-ui-consumer-map-badge">当前覆盖：${escapeHtml(String(existing.maxTokens))}</span>` : ''}
-                        </div>
-                        <div class="stx-ui-list-meta stx-ui-consumer-map-summary">
-                          注册默认 max_tokens=${escapeHtml(defaultMaxTokensText)}，当前覆盖=${escapeHtml(currentOverrideText)}
-                        </div>
-                        ${task.maxTokens ? `<div class="stx-ui-list-meta">最大输出默认值 ${escapeHtml(String(task.maxTokens))}</div>` : ''}
-                        <div class="stx-ui-list-meta">
-                          类型=${getKindLabel(task.taskKind)}
-                          ${task.requiredCapabilities?.length ? `，需要=[${task.requiredCapabilities.join(',')}]` : ''}
-                          ${task.backgroundEligible ? '，可静默' : ''}
+                          <span class="stx-ui-consumer-map-badge">${escapeHtml(normalizedDisplayName)}</span>
+                          <span class="stx-ui-consumer-map-badge">${escapeHtml(getKindLabel(task.taskKind))}</span>
+                          <span class="stx-ui-consumer-map-badge">${escapeHtml(statusText)}</span>
+                          ${capabilityText ? `<span class="stx-ui-consumer-map-badge">${escapeHtml(capabilityText)}</span>` : ''}
+                          ${registeredMaxTokens ? `<span class="stx-ui-consumer-map-badge is-accent">${escapeHtml(defaultMaxTokensText)}</span>` : ''}
+                          ${existing?.maxTokens ? `<span class="stx-ui-consumer-map-badge">覆盖 ${escapeHtml(String(existing.maxTokens))}</span>` : ''}
                         </div>
                         ${staleHtml}
                       </div>
@@ -2135,11 +2134,11 @@ function bindUiEvents(): void {
                                                     type="number"
                                                     min="1"
                                                     step="1"
-                                                    placeholder="留空则不覆盖"
+                                                    placeholder="${escapeHtml(overrideHintText)}"
                                                     value="${escapeHtml(currentOverrideValue)}"
                                                     data-task-assign-max-tokens="${escapeHtml(key)}"
                                                 />
-                                                ${registeredMaxTokens ? `<span class="stx-ui-field-hint">注册默认值：${escapeHtml(String(registeredMaxTokens))}</span>` : ''}
+                                                ${registeredMaxTokens ? `<span class="stx-ui-field-hint">${escapeHtml(defaultMaxTokensText)}</span>` : ''}
                                             </div>
                     </div>
                     <div class="stx-ui-consumer-map-actions">

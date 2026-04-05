@@ -230,7 +230,8 @@ export class MemoryOS {
     private rebuildingDatabase: boolean;
     private reloadingAfterDatabaseRebuild: boolean;
     private dreamScheduler: DreamSchedulerService | null;
-    private dreamIdleTimerHandle: ReturnType<typeof setInterval> | null;
+    private dreamIdleTimerHandle: number | null;
+    private dreamIdleActivityHandler: (() => void) | null;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -249,6 +250,7 @@ export class MemoryOS {
         this.reloadingAfterDatabaseRebuild = false;
         this.dreamScheduler = null;
         this.dreamIdleTimerHandle = null;
+        this.dreamIdleActivityHandler = null;
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -1113,6 +1115,7 @@ export class MemoryOS {
         const onUserActivity = (): void => {
             lastActivityTs = Date.now();
         };
+        this.dreamIdleActivityHandler = onUserActivity;
         document.addEventListener('keydown', onUserActivity, { passive: true });
         document.addEventListener('pointerdown', onUserActivity, { passive: true });
 
@@ -1145,6 +1148,11 @@ export class MemoryOS {
             window.clearInterval(this.dreamIdleTimerHandle);
             this.dreamIdleTimerHandle = null;
         }
+        if (this.dreamIdleActivityHandler !== null) {
+            document.removeEventListener('keydown', this.dreamIdleActivityHandler);
+            document.removeEventListener('pointerdown', this.dreamIdleActivityHandler);
+            this.dreamIdleActivityHandler = null;
+        }
     }
 
     /**
@@ -1153,7 +1161,7 @@ export class MemoryOS {
      */
     private async maybeEnqueueDreamOnGenerationEnded(memory: MemorySDKImpl): Promise<void> {
         const settings = this.readSettings();
-        if (!settings.dreamEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowGenerationEndedTrigger) {
+        if (!settings.dreamEnabled || !settings.dreamAutoTriggerEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowGenerationEndedTrigger) {
             return;
         }
         if (!this.dreamScheduler) {
@@ -1198,7 +1206,7 @@ export class MemoryOS {
      */
     private async maybeEnqueueDreamOnIdle(chatKey: string, memory: MemorySDKImpl): Promise<void> {
         const settings = this.readSettings();
-        if (!settings.dreamEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowIdleTrigger) {
+        if (!settings.dreamEnabled || !settings.dreamAutoTriggerEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowIdleTrigger) {
             return;
         }
         if (!this.dreamScheduler) {

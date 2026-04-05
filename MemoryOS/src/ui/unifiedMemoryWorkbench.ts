@@ -6,7 +6,7 @@ import { escapeHtml } from './editorShared';
 import { buildTakeoverPreviewMarkup } from './takeoverPreviewMarkup';
 import { waitForUiPaint } from './uiAsync';
 import type { UnifiedMemoryWorkbenchOpenOptions, UnifiedWorkbenchViewMode } from './unifiedMemoryWorkbenchTypes';
-import { openDreamWorkbench } from './dream-workbench';
+import { buildDreamViewMarkup } from './workbenchTabs/tabDream';
 import { GraphService } from '../services/graph-service';
 import type {
     ActorMemoryProfile,
@@ -41,6 +41,7 @@ import {
     toRecord,
     toStringArray,
     truncateText,
+    formatTimestamp,
 } from './workbenchTabs/shared';
 import { buildEntriesViewMarkup } from './workbenchTabs/tabEntries';
 import { buildTypesViewMarkup } from './workbenchTabs/tabTypes';
@@ -50,7 +51,12 @@ import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { buildVectorsViewMarkup } from './workbenchTabs/tabVectors';
 import { buildContentLabViewMarkup } from './workbenchTabs/tabContentLab';
-import { resolveTakeoverWorkbenchText } from './workbenchLocale';
+import {
+    formatDreamWorkbenchText,
+    resolveDreamWorkbenchText,
+    resolveTakeoverWorkbenchText,
+    resolveUnifiedWorkbenchText,
+} from './workbenchLocale';
 import { buildTakeoverFallbackEstimate, parseTakeoverFormDraft } from './takeoverFormShared';
 import {
     type ContentLabSettings,
@@ -139,6 +145,7 @@ function getMemoryBindingStatus(): { connected?: boolean; chatKey?: string; erro
     return status as { connected?: boolean; chatKey?: string; error?: string; updatedAt?: number };
 }
 
+
 /**
  * 功能：构建工作台整体 HTML。
  * @param snapshot 工作台快照。
@@ -185,44 +192,44 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
         <div class="stx-memory-workbench">
             <header class="stx-memory-workbench__header">
                 <div class="stx-memory-workbench__brand">
-                    <i class="fa-solid fa-microchip"></i> MemoryOS 记忆工作台
+                    <i class="fa-solid fa-microchip"></i> ${escapeHtml(resolveUnifiedWorkbenchText('workbench_brand'))}
                 </div>
                 <nav class="stx-memory-workbench__nav">
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'entries' ? ' is-active' : ''}" data-workbench-view="entries">
-                        条目中心
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_entries'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'types' ? ' is-active' : ''}" data-workbench-view="types">
-                        类型工坊
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_types'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'actors' ? ' is-active' : ''}" data-workbench-view="actors">
-                        角色档案
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_actors'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'world-entities' ? ' is-active' : ''}" data-workbench-view="world-entities">
-                        世界实体
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_world_entities'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'preview' ? ' is-active' : ''}" data-workbench-view="preview">
-                        诊断中心
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_preview'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'dream' ? ' is-active' : ''}" data-workbench-view="dream">
-                        梦境维护
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_dream'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'vectors' ? ' is-active' : ''}" data-workbench-view="vectors">
-                        向量实验室
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_vectors'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'memory-graph' ? ' is-active' : ''}" data-workbench-view="memory-graph">
-                        可视化记忆
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_memory_graph'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'takeover' ? ' is-active' : ''}" data-workbench-view="takeover">
-                        旧聊天接管
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_takeover'))}
                     </button>
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'content-lab' ? ' is-active' : ''}" data-workbench-view="content-lab">
-                        内容拆分实验室
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_content_lab'))}
                     </button>
                 </nav>
                 <div class="stx-memory-workbench__stats">
-                    <span title="当前聊天中的记忆条目数量">条目 <strong>${snapshot.entries.length}</strong></span>
-                    <span title="当前聊天可用的条目类型数量">类型 <strong>${snapshot.entryTypes.length}</strong></span>
-                    <span title="角色与条目之间的真实绑定数量">绑定 <strong>${snapshot.roleMemories.length}</strong></span>
+                    <span title="${escapeAttr(resolveUnifiedWorkbenchText('stat_entries_title'))}">${escapeHtml(resolveUnifiedWorkbenchText('stat_entries'))} <strong>${snapshot.entries.length}</strong></span>
+                    <span title="${escapeAttr(resolveUnifiedWorkbenchText('stat_types_title'))}">${escapeHtml(resolveUnifiedWorkbenchText('stat_types'))} <strong>${snapshot.entryTypes.length}</strong></span>
+                    <span title="${escapeAttr(resolveUnifiedWorkbenchText('stat_bindings_title'))}">${escapeHtml(resolveUnifiedWorkbenchText('stat_bindings'))} <strong>${snapshot.roleMemories.length}</strong></span>
                 </div>
             </header>
             <main class="stx-memory-workbench__main">
@@ -232,35 +239,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                 ${buildWorldEntitiesViewMarkup(snapshot, state)}
                 ${buildPreviewViewMarkup(snapshot, state)}
                 <section class="stx-memory-workbench__view${state.currentView === 'dream' ? ' is-active' : ''}" data-view="dream"${state.currentView !== 'dream' ? ' hidden' : ''}>
-                    <div class="stx-memory-workbench__section">
-                        <div class="stx-memory-workbench__panel">
-                            <div class="stx-memory-workbench__panel-header">
-                                <div>
-                                    <h3>Dream Maintenance Pipeline</h3>
-                                    <p>查看第三阶段自动 dream、maintenance queue、quality report 与 rollback 入口。</p>
-                                </div>
-                                <div class="stx-memory-workbench__panel-actions">
-                                    <button type="button" data-action="open-dream-workbench">打开 Dream Workbench</button>
-                                    <button type="button" data-action="trigger-manual-dream">手动做梦</button>
-                                </div>
-                            </div>
-                            <div class="stx-memory-workbench__stats-grid">
-                                <div class="stx-memory-workbench__stat-card"><span>Session</span><strong>${snapshot.dreamSnapshot.sessions.length}</strong></div>
-                                <div class="stx-memory-workbench__stat-card"><span>Maintenance Queue</span><strong>${snapshot.dreamSnapshot.maintenanceProposals.filter((item) => item.status === 'pending').length}</strong></div>
-                                <div class="stx-memory-workbench__stat-card"><span>Quality Reports</span><strong>${snapshot.dreamSnapshot.qualityReports.length}</strong></div>
-                                <div class="stx-memory-workbench__stat-card"><span>Scheduler</span><strong>${escapeHtml(snapshot.dreamSnapshot.schedulerState?.active ? '运行中' : (snapshot.dreamSnapshot.schedulerState?.lastDecision?.blockedBy?.[0] || '空闲'))}</strong></div>
-                            </div>
-                            <div class="stx-memory-workbench__info-grid" style="margin-top:12px;">
-                                ${snapshot.dreamSnapshot.sessions.slice(0, 6).map((session) => `
-                                    <article class="stx-memory-workbench__info-card">
-                                        <div class="stx-memory-workbench__info-title">${escapeHtml(session.meta?.dreamId || '未知 dream')}</div>
-                                        <div class="stx-memory-workbench__info-subtitle">状态：${escapeHtml(session.meta?.status || 'unknown')} / 触发：${escapeHtml(session.meta?.triggerReason || 'unknown')}</div>
-                                        <div class="stx-memory-workbench__info-body">${escapeHtml(session.output?.highlights.join('；') || session.output?.narrative.slice(0, 120) || '暂无输出')}</div>
-                                    </article>
-                                `).join('') || '<div class="stx-memory-workbench__empty-card">当前还没有 dream session。</div>'}
-                            </div>
-                        </div>
-                    </div>
+                    ${buildDreamViewMarkup(snapshot, state)}
                 </section>
                 ${buildVectorsViewMarkup(snapshot, state)}
                 <section class="stx-memory-workbench__view${state.currentView === 'memory-graph' ? ' is-active' : ''}" data-view="memory-graph"${state.currentView !== 'memory-graph' ? ' hidden' : ''}>
@@ -420,6 +399,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         contentLabEditingRuleIndex: -1,
         entryTimeFilter: 'all',
         entrySortOrder: 'updated-desc',
+        dreamSubView: 'overview',
+        dreamWorkbenchTab: 'session',
     };
     let takeoverPreviewSequence = 0;
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
@@ -544,8 +525,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.diagnostics.listMutationHistory(16),
             memory.unifiedMemory.diagnostics.listEntryAuditRecords(24),
             takeoverProgressCache ? Promise.resolve(takeoverProgressCache) : memory.chatState.getTakeoverStatus(),
-            memory.unifiedMemory.diagnostics.listDreamSessions(12),
-            memory.unifiedMemory.diagnostics.listDreamMaintenanceProposals(18),
+            memory.unifiedMemory.diagnostics.listDreamSessions(32),
+            memory.unifiedMemory.diagnostics.listDreamMaintenanceProposals(32),
             memory.unifiedMemory.diagnostics.listDreamQualityReports(12),
             memory.unifiedMemory.diagnostics.getDreamSchedulerState(),
         ]);
@@ -791,6 +772,103 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 if (state.currentView === 'preview') {
                     void refreshPreviewSnapshot();
                 }
+                return;
+            }
+            if (action === 'set-dream-subview') {
+                state.dreamSubView = String(button.dataset.subview || 'overview') as WorkbenchState['dreamSubView'];
+                await render();
+                return;
+            }
+            if (action === 'set-dream-workbench-tab') {
+                state.dreamWorkbenchTab = String(button.dataset.tab || 'session') as WorkbenchState['dreamWorkbenchTab'];
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-refresh') {
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-manual-dream') {
+                const result = await memory.chatState.startDreamSession('manual');
+                if (!result.ok) {
+                    toast.error(`手动 dream 启动失败：${String(result.errorMessage ?? result.reasonCode ?? 'unknown')}`);
+                } else {
+                    toast.success('手动 dream 启动成功。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-rollback') {
+                const dreamId = String(button.dataset.dreamId || '').trim();
+                if (!dreamId) return;
+                const result = await memory.chatState.rollbackDreamSession(dreamId);
+                if (!result.ok) {
+                    toast.error(`回滚失败：${result.reasonCode || '未知原因'}`);
+                } else {
+                    toast.success('回滚成功。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-rollback-mutation') {
+                const dreamId = String(button.dataset.dreamId || '').trim();
+                const mutationId = String(button.dataset.mutationId || '').trim();
+                if (!dreamId || !mutationId) return;
+                const result = await memory.chatState.rollbackDreamMutation(dreamId, mutationId);
+                if (!result.ok) {
+                    toast.error(`变更回滚失败：${result.reasonCode || '未知原因'}`);
+                } else {
+                    toast.success('变更回滚成功。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-approve-maintenance') {
+                const proposalId = String(button.dataset.proposalId || '').trim();
+                if (!proposalId) return;
+                const result = await memory.chatState.applyDreamMaintenanceProposal(proposalId);
+                if (!result.ok) {
+                    toast.error(`应用失败：${result.reasonCode || '未知原因'}`);
+                } else {
+                    toast.success('提案已应用。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'dream-workbench-reject-maintenance') {
+                const proposalId = String(button.dataset.proposalId || '').trim();
+                if (!proposalId) return;
+                const result = await memory.chatState.rejectDreamMaintenanceProposal(proposalId);
+                if (!result.ok) {
+                    toast.error(`拒绝失败：${result.reasonCode || '未知原因'}`);
+                } else {
+                    toast.info('提案已拒绝。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
+            if (action === 'trigger-manual-dream') {
+                const result = await memory.chatState.startDreamSession('manual');
+                if (!result.ok) {
+                    toast.error(`手动 dream 启动失败：${String(result.errorMessage ?? result.reasonCode ?? 'unknown')}`);
+                    return;
+                }
+                if (result.status === 'approved') {
+                    toast.success('手动 dream 已完成并写回。');
+                } else if (result.status === 'deferred') {
+                    toast.info('手动 dream 已生成，等待审批或后续处理。');
+                } else if (result.status === 'rejected') {
+                    toast.info('手动 dream 已完成，但本轮提案未被应用。');
+                } else {
+                    toast.success('手动 dream 已启动。');
+                }
+                await render();
                 return;
             }
             if (action === 'export-chat-database') {

@@ -41,6 +41,10 @@ export interface MemoryLLMApi {
             messages: Array<{ role: 'system' | 'user'; content: string }>;
         };
         schema?: unknown;
+        schemaCompat?: {
+            strictAutofill?: 'off' | 'default' | 'provider';
+            onIncompatible?: 'downgrade' | 'error';
+        };
         budget?: { maxLatencyMs?: number; maxTokens?: number; maxCost?: number };
         enqueue?: { displayMode?: 'fullscreen' | 'compact' | 'silent'; autoCloseMs?: number };
     }) => Promise<MemoryLLMRunResult<T>>;
@@ -61,4 +65,3 @@ export function readMemoryLLMApi(): MemoryLLMApi | null {
     }
     return llm as MemoryLLMApi;
 }
-

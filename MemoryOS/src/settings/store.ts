@@ -9,6 +9,15 @@ export type MemoryOSSettings = {
     toolbarQuickActionsEnabled: boolean;
     dreamEnabled: boolean;
     dreamAutoTriggerEnabled: boolean;
+    dreamPromptEnabled: boolean;
+    dreamPromptVersion: string;
+    dreamPromptStylePreset: string;
+    dreamPromptAllowNarrativeExpansion: boolean;
+    dreamPromptMaxHighlights: number;
+    dreamPromptMaxMutations: number;
+    dreamPromptRequireExplain: boolean;
+    dreamPromptStrictJson: boolean;
+    dreamPromptWeakInferenceOnly: boolean;
     dreamContextMaxChars: number;
     dreamRecentTopK: number;
     dreamMidTopK: number;
@@ -145,6 +154,15 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     toolbarQuickActionsEnabled: true,
     dreamEnabled: true,
     dreamAutoTriggerEnabled: false,
+    dreamPromptEnabled: true,
+    dreamPromptVersion: 'v1.0.0',
+    dreamPromptStylePreset: 'reflective',
+    dreamPromptAllowNarrativeExpansion: true,
+    dreamPromptMaxHighlights: 4,
+    dreamPromptMaxMutations: 8,
+    dreamPromptRequireExplain: true,
+    dreamPromptStrictJson: true,
+    dreamPromptWeakInferenceOnly: true,
     dreamContextMaxChars: 6000,
     dreamRecentTopK: 10,
     dreamMidTopK: 8,
@@ -270,6 +288,14 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     const dreamContextMaxChars: number = Math.max(
         1000,
         Math.min(30000, Math.trunc(Number(candidate.dreamContextMaxChars) || DEFAULT_MEMORY_OS_SETTINGS.dreamContextMaxChars)),
+    );
+    const dreamPromptMaxHighlights: number = Math.max(
+        1,
+        Math.min(8, Math.trunc(Number(candidate.dreamPromptMaxHighlights) || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptMaxHighlights)),
+    );
+    const dreamPromptMaxMutations: number = Math.max(
+        1,
+        Math.min(20, Math.trunc(Number(candidate.dreamPromptMaxMutations) || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptMaxMutations)),
     );
     const dreamRecentTopK: number = Math.max(
         1,
@@ -501,13 +527,22 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,
         dreamEnabled: candidate.dreamEnabled !== false,
         dreamAutoTriggerEnabled: candidate.dreamAutoTriggerEnabled === true,
+        dreamPromptEnabled: candidate.dreamPromptEnabled !== false,
+        dreamPromptVersion: String(candidate.dreamPromptVersion ?? DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion,
+        dreamPromptStylePreset: String(candidate.dreamPromptStylePreset ?? candidate.dreamStylePreset ?? DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset,
+        dreamPromptAllowNarrativeExpansion: candidate.dreamPromptAllowNarrativeExpansion !== false,
+        dreamPromptMaxHighlights,
+        dreamPromptMaxMutations,
+        dreamPromptRequireExplain: candidate.dreamPromptRequireExplain !== false,
+        dreamPromptStrictJson: candidate.dreamPromptStrictJson !== false,
+        dreamPromptWeakInferenceOnly: candidate.dreamPromptWeakInferenceOnly !== false,
         dreamContextMaxChars,
         dreamRecentTopK,
         dreamMidTopK,
         dreamDeepTopK,
         dreamFusedMaxItems,
         dreamRequireApproval: candidate.dreamRequireApproval !== false,
-        dreamStylePreset: String(candidate.dreamStylePreset ?? DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset,
+        dreamStylePreset: String(candidate.dreamStylePreset ?? candidate.dreamPromptStylePreset ?? DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset,
         dreamWaveEnabled: candidate.dreamWaveEnabled !== false,
         dreamWaveRecentTopK,
         dreamWaveMidTopK,

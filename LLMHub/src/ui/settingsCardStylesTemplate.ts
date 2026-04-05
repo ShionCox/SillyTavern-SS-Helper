@@ -414,9 +414,9 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-list {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       align-items: start;
-      gap: 8px;
+      gap: 10px;
       width: 100%;
       min-width: 0;
       max-width: 100%;
@@ -430,29 +430,35 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-list-item {
       display: flex;
+      flex-direction: row;
       justify-content: flex-start;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
       width: 100%;
       min-width: 0;
       max-width: 100%;
-      padding: 12px 14px;
-      border: 1px solid var(--ss-theme-border, rgba(255, 255, 255, 0.15));
-      border-radius: 10px;
+      padding: 14px;
+      border: 1px solid color-mix(in srgb, var(--ss-theme-accent, #c5a059) 26%, var(--ss-theme-border, rgba(255, 255, 255, 0.15)));
+      border-radius: 14px;
       box-sizing: border-box;
-      background: var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--ss-theme-accent, #c5a059) 8%, transparent), transparent 42%),
+        var(--ss-theme-surface-2, rgba(0, 0, 0, 0.2));
       cursor: pointer;
       text-align: left;
       color: inherit;
-      transition: all 0.2s ease;
+      overflow: hidden;
+      transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
     }
 
     #${cardId} .stx-ui-list-main {
       display: flex;
-      align-items: center;
-      gap: 14px;
-      flex: 1;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      flex: 1 1 auto;
       min-width: 0;
+      width: 100%;
       padding: 0;
       border: 0;
       background: transparent;
@@ -466,9 +472,12 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       justify-content: flex-end;
       flex: 0 0 auto;
-      margin-left: auto;
+      align-self: stretch;
       min-width: 0;
       max-width: 100%;
+      min-width: 92px;
+      padding-left: 12px;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
     }
 
     #${cardId} .stx-ui-list-item:hover {
@@ -488,13 +497,21 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--ss-theme-text, #fff) 8%, transparent);
-      font-size: 16px;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--ss-theme-text, #fff) 10%, transparent);
+      font-size: 15px;
       color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 90%, transparent);
       flex-shrink: 0;
+    }
+
+    #${cardId} .stx-ui-resource-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      width: 100%;
     }
 
     #${cardId} .stx-ui-list-content {
@@ -502,29 +519,37 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 5px;
     }
 
     #${cardId} .stx-ui-list-tag {
       font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 4px;
+      line-height: 1.2;
+      padding: 3px 7px;
+      border-radius: 999px;
       background: rgba(255, 255, 255, 0.1);
-      margin-left: 8px;
       font-weight: 500;
       vertical-align: middle;
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
     }
 
     #${cardId} .stx-ui-list-tag.generation { color: #8ce99a; background: rgba(140, 233, 154, 0.15); }
     #${cardId} .stx-ui-list-tag.embedding { color: #74c0fc; background: rgba(116, 192, 252, 0.15); }
     #${cardId} .stx-ui-list-tag.rerank { color: #ffa8a8; background: rgba(255, 168, 168, 0.15); }
+    #${cardId} .stx-ui-list-tag--subtle {
+      color: color-mix(in srgb, var(--ss-theme-text, #f5e7c8) 76%, transparent);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
 
     #${cardId} .stx-ui-list-toggle {
       display: inline-flex;
       align-items: center;
       justify-content: flex-end;
       min-width: 72px;
+      margin-left: auto;
     }
 
     #${cardId} .stx-ui-list-toggle-copy {
@@ -544,19 +569,69 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      font-size: 14px;
+      gap: 6px;
+      font-size: 15px;
       font-weight: 700;
-      line-height: 1.2;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
       word-break: break-word;
     }
 
     #${cardId} .stx-ui-list-meta {
       font-size: 12px;
-      opacity: 0.65;
-      line-height: 1.2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      opacity: 0.72;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+    }
+
+    #${cardId} .stx-ui-resource-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    #${cardId} .stx-ui-list-desc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: color-mix(in srgb, var(--ss-theme-text, #f5e7c8) 72%, transparent);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    #${cardId} .stx-ui-list-desc > span {
+      min-width: 0;
+    }
+
+    @media (max-width: 780px) {
+      #${cardId} .stx-ui-list {
+        grid-template-columns: 1fr;
+      }
+
+      #${cardId} .stx-ui-list-item {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      #${cardId} .stx-ui-list-side {
+        justify-content: flex-start;
+        align-self: auto;
+        min-width: 0;
+        padding-left: 0;
+        padding-top: 8px;
+        border-left: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      #${cardId} .stx-ui-list-toggle {
+        justify-content: flex-start;
+        margin-left: 0;
+      }
     }
 
     #${cardId} .stx-ui-advanced {
@@ -609,12 +684,13 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
     #${cardId} .stx-ui-consumer-map-row {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       min-width: 0;
       width: 100%;
       max-width: 100%;
       overflow: hidden;
-      padding: 10px 12px;
+      padding: 12px;
+      border-radius: 12px;
     }
 
     #${cardId} .stx-ui-consumer-map-head {
@@ -631,20 +707,19 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       flex-direction: column;
       flex: 1 1 260px;
       min-width: 0;
-      gap: 8px;
+      gap: 6px;
     }
 
     #${cardId} .stx-ui-consumer-map-badges {
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
-      margin-top: 4px;
     }
 
     #${cardId} .stx-ui-consumer-map-badge {
       display: inline-flex;
       align-items: center;
-      min-height: 22px;
+      min-height: 20px;
       padding: 0 7px;
       border-radius: 999px;
       border: 1px solid rgba(212, 164, 93, 0.22);
@@ -653,6 +728,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       font-size: 10px;
       line-height: 1.2;
       white-space: nowrap;
+      max-width: 100%;
     }
 
     #${cardId} .stx-ui-consumer-map-badge.is-accent {
@@ -663,8 +739,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-consumer-map-form {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 4px 8px;
+      grid-template-columns: minmax(0, 1.45fr) minmax(180px, 0.85fr);
+      gap: 6px 10px;
       width: 100%;
       min-width: 0;
       max-width: 100%;
@@ -688,15 +764,8 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    #${cardId} .stx-ui-consumer-map-summary {
-      font-size: 11px;
-      line-height: 1.35;
-      color: color-mix(in srgb, var(--ss-theme-accent, #c5a059) 72%, var(--ss-theme-text, #f5e7c8));
-      white-space: normal;
-      word-break: break-word;
+      justify-content: flex-start;
+      padding-top: 2px;
     }
 
     #${cardId} .stx-ui-consumer-map-status {

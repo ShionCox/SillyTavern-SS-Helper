@@ -3,11 +3,12 @@ import type { MemoryLLMApi } from '../memory-summary';
 import { readMemoryOSSettings } from '../settings/store';
 import { DreamMaintenancePlanner } from './dream-maintenance-planner';
 import { DreamMutationApplier } from './dream-mutation-applier';
+import { DreamPromptService } from './dream-prompt-service';
 import { DreamPostProcessingService } from './dream-post-processing-service';
 import { DreamQualityGuardService } from './dream-quality-guard-service';
 import { DreamRecallDiagnosticsService } from './dream-recall-diagnostics-service';
 import { DreamSessionRepository } from './dream-session-repository';
-import { DreamWaveRecallService, type DreamWaveRecallBuildResult } from './dream-wave-recall-service';
+import { DreamWaveRecallService } from './dream-wave-recall-service';
 import {
     DREAM_PHASE1_MAX_MUTATION_COUNT,
     type DreamMaintenanceProposalRecord,
@@ -15,7 +16,7 @@ import {
     type DreamMutationProposal,
     type DreamQualityReport,
     type DreamRecallCandidate,
-    type DreamRecallHit,
+    type DreamRecallSource,
     type DreamReviewDecision,
     type DreamSessionDiagnosticsRecord,
     type DreamSessionGraphSnapshotRecord,
@@ -60,6 +61,7 @@ export class DreamingService {
     private readonly recallService: DreamWaveRecallService;
     private readonly postProcessingService: DreamPostProcessingService;
     private readonly maintenancePlanner: DreamMaintenancePlanner;
+    private readonly promptService: DreamPromptService;
     private readonly qualityGuardService: DreamQualityGuardService;
     private readonly getLLM: () => MemoryLLMApi | null;
     private readonly pluginId: string;
@@ -103,6 +105,7 @@ export class DreamingService {
             chatKey: this.chatKey,
             repository: this.repository,
         });
+        this.promptService = new DreamPromptService();
         this.qualityGuardService = new DreamQualityGuardService(this.chatKey);
         this.getLLM = input.getLLM;
         this.pluginId = input.pluginId;
@@ -138,6 +141,8 @@ export class DreamingService {
                 contextMaxTokens: settings.contextMaxTokens,
                 retrievalMode: settings.retrievalMode,
                 dreamContextMaxChars: settings.dreamContextMaxChars,
+                dreamPromptVersion: settings.dreamPromptVersion,
+                dreamPromptStylePreset: settings.dreamPromptStylePreset,
             },
         };
         runningChatKeys.add(this.chatKey);
@@ -179,8 +184,10 @@ export class DreamingService {
 
             const output = await this.generateDreamOutput({
                 dreamId,
+                meta,
                 recall: recallBundle.recall,
                 diagnostics: recallBundle.diagnostics,
+                graphSnapshot: graphSnapshotRecord,
                 candidateMap: recallBundle.candidateMap,
             });
             const maintenanceProposals = settings.dreamMaintenanceEnabled
@@ -212,7 +219,9 @@ export class DreamingService {
                 updatedAt: Date.now(),
             });
 
-            if (reason !== 'manual') {
+            const shouldDeferAutoApproval = reason !== 'manual' && settings.dreamRequireApproval;
+
+            if (shouldDeferAutoApproval) {
                 await this.dreamRepository.saveDreamSessionApproval({
                     dreamId,
                     chatKey: this.chatKey,
@@ -369,83 +378,41 @@ export class DreamingService {
         }
     }
 
-    buildDreamPrompt(input: {
-        dreamId: string;
-        recall: Omit<DreamSessionRecallRecord, 'dreamId' | 'chatKey'>;
-        diagnostics: Omit<DreamSessionDiagnosticsRecord, 'dreamId' | 'chatKey'>;
-    }): Array<{ role: 'system' | 'user'; content: string }> {
-        const settings = readMemoryOSSettings();
-        const renderWave = (title: string, hits: DreamRecallHit[]): string => {
-            if (hits.length <= 0) {
-                return `=== ${title} ===\n暂无命中`;
-            }
-            return [
-                `=== ${title} ===`,
-                ...hits.map((hit: DreamRecallHit, index: number): string => {
-                    return [
-                        `#${index + 1}`,
-                        `entryId: ${hit.entryId}`,
-                        `score: ${Number(hit.score ?? 0).toFixed(3)}`,
-                        `title: ${hit.title}`,
-                        `summary: ${hit.summary}`,
-                        `actorKeys: ${hit.actorKeys.join(', ') || '无'}`,
-                        `relationKeys: ${hit.relationKeys.join(', ') || '无'}`,
-                        `tags: ${hit.tags.join(', ') || '无'}`,
-                    ].join('\n');
-                }),
-            ].join('\n\n');
-        };
-        const diagnosticsText = input.diagnostics.waveOutputs.map((wave) => {
-            return [
-                `wave=${wave.waveType}`,
-                `seeds=${wave.seedEntryIds.join(', ') || '无'}`,
-                `activated=${wave.activatedNodeKeys.slice(0, 8).join(', ') || '无'}`,
-                `reason=${wave.diagnostics.baseReason.join(' / ') || '无'}`,
-            ].join('\n');
-        }).join('\n\n');
-        const dreamTreeContext = [
-            renderWave('近期碎片 recent', input.recall.recentHits),
-            renderWave('中期回音 mid', input.recall.midHits),
-            renderWave('深层回声 deep', input.recall.deepHits),
-            `=== 诊断桥接 ===\n${diagnosticsText || '无诊断信息'}`,
-        ].join('\n\n').slice(0, settings.dreamContextMaxChars);
-        return [
-            {
-                role: 'system',
-                content: [
-                    '你是 MemoryOS 的梦境整理助手。',
-                    '你的任务是根据 DreamWave 第二阶段的 recent / mid / deep 分层召回、图桥节点和融合诊断，生成一段梦境叙事、若干发现摘要，以及供人工审批的记忆修改提案。',
-                    '约束：',
-                    '1. 只能输出 JSON。',
-                    '2. 不允许删除记忆。',
-                    '3. 不允许伪造硬事实，推断类内容必须明确写在 reason、preview 与 explain 中。',
-                    '4. proposedMutations 最多 8 条。',
-                    '5. 每条 mutation 必须包含 sourceEntryIds 与 explain。',
-                    '6. explain 中必须包含 sourceWave、sourceEntryIds、sourceNodeKeys、bridgeNodeKeys、explanationSteps、confidenceBreakdown。',
-                    '7. 自然语言字段必须使用简体中文。',
-                ].join('\n'),
-            },
-            {
-                role: 'user',
-                content: [
-                    `dreamId: ${input.dreamId}`,
-                    '请把这些近期碎片、中期回音、深层回声与图桥节点编织成一段梦境，再产出可审批的结构化提案：',
-                    dreamTreeContext || '当前没有可用召回记忆，请返回平稳的空提案。',
-                ].join('\n\n'),
-            },
-        ];
-    }
-
     private async generateDreamOutput(input: {
         dreamId: string;
+        meta: DreamSessionMetaRecord;
         recall: Omit<DreamSessionRecallRecord, 'dreamId' | 'chatKey'>;
         diagnostics: Omit<DreamSessionDiagnosticsRecord, 'dreamId' | 'chatKey'>;
+        graphSnapshot?: DreamSessionGraphSnapshotRecord | null;
         candidateMap: Map<string, DreamRecallCandidate>;
     }): Promise<DreamSessionOutputRecord> {
         const llm = this.getLLM();
         if (!llm) {
             throw new Error('当前未连接可用的 LLMHub 服务，无法执行梦境生成。');
         }
+        const settings = readMemoryOSSettings();
+        const promptBuildResult = this.promptService.buildDreamPrompt({
+            meta: input.meta,
+            recall: {
+                ...input.recall,
+                dreamId: input.dreamId,
+                chatKey: this.chatKey,
+            },
+            diagnostics: {
+                ...input.diagnostics,
+                dreamId: input.dreamId,
+                chatKey: this.chatKey,
+            },
+            graphSnapshot: input.graphSnapshot
+                ? {
+                    ...input.graphSnapshot,
+                    dreamId: input.dreamId,
+                    chatKey: this.chatKey,
+                }
+                : null,
+            settings,
+            candidateMap: input.candidateMap,
+        });
         const schema = {
             type: 'object',
             additionalProperties: false,
@@ -458,25 +425,25 @@ export class DreamingService {
                     items: {
                         type: 'object',
                         additionalProperties: false,
-                        required: ['mutationId', 'mutationType', 'confidence', 'reason', 'sourceWave', 'sourceEntryIds', 'preview', 'payload', 'explain'],
+                        required: ['mutationId', 'mutationType', 'confidence', 'reason', 'sourceWave', 'sourceEntryRefs', 'preview', 'payload', 'explain'],
                         properties: {
                             mutationId: { type: 'string' },
                             mutationType: { type: 'string', enum: ['entry_create', 'entry_patch', 'relationship_patch'] },
                             confidence: { type: 'number' },
                             reason: { type: 'string' },
                             sourceWave: { type: 'string', enum: ['recent', 'mid', 'deep', 'fused'] },
-                            sourceEntryIds: { type: 'array', items: { type: 'string' } },
+                            sourceEntryRefs: { type: 'array', items: { type: 'string' } },
                             preview: { type: 'string' },
-                            payload: { type: 'object' },
+                            payload: this.buildDreamMutationPayloadSchema(),
                             explain: {
                                 type: 'object',
                                 additionalProperties: false,
-                                required: ['sourceWave', 'sourceEntryIds', 'sourceNodeKeys', 'bridgeNodeKeys', 'explanationSteps', 'confidenceBreakdown'],
+                                required: ['sourceWave', 'sourceEntryRefs', 'sourceNodeRefs', 'bridgeNodeRefs', 'explanationSteps', 'confidenceBreakdown'],
                                 properties: {
                                     sourceWave: { type: 'string', enum: ['recent', 'mid', 'deep', 'fused'] },
-                                    sourceEntryIds: { type: 'array', items: { type: 'string' } },
-                                    sourceNodeKeys: { type: 'array', items: { type: 'string' } },
-                                    bridgeNodeKeys: { type: 'array', items: { type: 'string' } },
+                                    sourceEntryRefs: { type: 'array', items: { type: 'string' } },
+                                    sourceNodeRefs: { type: 'array', items: { type: 'string' } },
+                                    bridgeNodeRefs: { type: 'array', items: { type: 'string' } },
                                     explanationSteps: { type: 'array', items: { type: 'string' } },
                                     confidenceBreakdown: {
                                         type: 'object',
@@ -507,9 +474,15 @@ export class DreamingService {
             taskDescription: '梦境第二阶段结构化输出',
             taskKind: 'generation',
             input: {
-                messages: this.buildDreamPrompt(input),
+                messages: promptBuildResult.messages,
             },
             schema,
+            schemaCompat: settings.dreamPromptStrictJson
+                ? {
+                    strictAutofill: 'default',
+                    onIncompatible: 'error',
+                }
+                : undefined,
             enqueue: {
                 displayMode: 'compact',
             },
@@ -517,15 +490,63 @@ export class DreamingService {
         if (!result.ok) {
             throw new Error(String(result.error ?? result.reasonCode ?? 'dream_llm_failed'));
         }
-        const normalized = this.normalizeDreamOutput(result.data, input.candidateMap);
+        const normalized = this.normalizeDreamOutput(result.data, {
+            candidateMap: input.candidateMap,
+            entryRefToEntryId: promptBuildResult.promptContext.entryRefToEntryId,
+            nodeRefToNodeKey: promptBuildResult.promptContext.nodeRefToNodeKey,
+            candidateByEntryRef: promptBuildResult.promptContext.candidateByEntryRef,
+        });
+        this.validateDreamOutput(normalized, settings);
         return {
             dreamId: input.dreamId,
             chatKey: this.chatKey,
+            promptInfo: promptBuildResult.promptInfo,
             narrative: normalized.narrative,
             highlights: normalized.highlights,
             proposedMutations: normalized.proposedMutations,
             createdAt: Date.now(),
             updatedAt: Date.now(),
+        };
+    }
+
+    private buildDreamMutationPayloadSchema(): Record<string, unknown> {
+        return {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                entryId: { type: 'string' },
+                title: { type: 'string' },
+                entryType: { type: 'string' },
+                summary: { type: 'string' },
+                detail: { type: 'string' },
+                tags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                compareKey: { type: 'string' },
+                entityKey: { type: 'string' },
+                matchKeys: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                actorBindings: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                ongoing: { type: 'boolean' },
+                relationshipId: { type: 'string' },
+                sourceActorKey: { type: 'string' },
+                targetActorKey: { type: 'string' },
+                relationTag: { type: 'string' },
+                state: { type: 'string' },
+                trust: { type: 'number' },
+                affection: { type: 'number' },
+                tension: { type: 'number' },
+                participants: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+            },
         };
     }
 
@@ -535,15 +556,21 @@ export class DreamingService {
             highlights?: string[];
             proposedMutations?: Array<Record<string, unknown>>;
         },
-        candidateMap: Map<string, DreamRecallCandidate>,
+        promptContext: {
+            candidateMap: Map<string, DreamRecallCandidate>;
+            entryRefToEntryId: Map<string, string>;
+            nodeRefToNodeKey: Map<string, string>;
+            candidateByEntryRef: Map<string, DreamRecallCandidate>;
+        },
     ): {
         narrative: string;
         highlights: string[];
         proposedMutations: DreamMutationProposal[];
     } {
         const narrative = String(value?.narrative ?? '').trim() || '本轮梦境只感到记忆在回声中轻微震荡，没有形成足够稳定的新叙事。';
+        const settings = readMemoryOSSettings();
         const highlights = Array.isArray(value?.highlights)
-            ? value.highlights.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean).slice(0, 8)
+            ? Array.from(new Set(value.highlights.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean))).slice(0, settings.dreamPromptMaxHighlights)
             : [];
         const proposedMutations = (Array.isArray(value?.proposedMutations) ? value.proposedMutations : [])
             .map((item: Record<string, unknown>, index: number): DreamMutationProposal | null => {
@@ -551,9 +578,7 @@ export class DreamingService {
                 if (mutationType !== 'entry_create' && mutationType !== 'entry_patch' && mutationType !== 'relationship_patch') {
                     return null;
                 }
-                const sourceEntryIds = Array.isArray(item.sourceEntryIds)
-                    ? item.sourceEntryIds.map((entryId: unknown): string => String(entryId ?? '').trim()).filter(Boolean)
-                    : [];
+                const sourceEntryIds = this.decodePromptEntryRefs(item.sourceEntryRefs ?? item.sourceEntryIds, promptContext.entryRefToEntryId);
                 if (sourceEntryIds.length <= 0) {
                     return null;
                 }
@@ -570,12 +595,12 @@ export class DreamingService {
                     explain: this.normalizeMutationExplain(item.explain, {
                         sourceWave,
                         sourceEntryIds,
-                        candidateMap,
+                        promptContext,
                     }),
                 };
             })
             .filter((item: DreamMutationProposal | null): item is DreamMutationProposal => Boolean(item))
-            .slice(0, DREAM_PHASE1_MAX_MUTATION_COUNT);
+            .slice(0, Math.min(DREAM_PHASE1_MAX_MUTATION_COUNT, settings.dreamPromptMaxMutations));
         return {
             narrative,
             highlights,
@@ -586,14 +611,19 @@ export class DreamingService {
     private normalizeMutationExplain(
         value: unknown,
         fallback: {
-            sourceWave: DreamRecallHit['source'];
+            sourceWave: DreamRecallSource;
             sourceEntryIds: string[];
-            candidateMap: Map<string, DreamRecallCandidate>;
+            promptContext: {
+                candidateMap: Map<string, DreamRecallCandidate>;
+                entryRefToEntryId: Map<string, string>;
+                nodeRefToNodeKey: Map<string, string>;
+                candidateByEntryRef: Map<string, DreamRecallCandidate>;
+            };
         },
     ): DreamMutationExplain {
         const record = this.toRecord(value);
         const sourceCandidates = fallback.sourceEntryIds
-            .map((entryId: string): DreamRecallCandidate | undefined => fallback.candidateMap.get(entryId))
+            .map((entryId: string): DreamRecallCandidate | undefined => fallback.promptContext.candidateMap.get(entryId))
             .filter((item: DreamRecallCandidate | undefined): item is DreamRecallCandidate => Boolean(item));
         const sourceNodeKeys = Array.from(new Set(
             sourceCandidates.flatMap((candidate: DreamRecallCandidate): string[] => candidate.sourceNodeKeys),
@@ -616,15 +646,9 @@ export class DreamingService {
         const finalScore = Math.max(0, Math.min(1, retrievalScore + activationScore * WEIGHT_ACTIVATION + noveltyScore * WEIGHT_NOVELTY - repetitionPenalty * WEIGHT_REPETITION_PENALTY));
         return {
             sourceWave: this.normalizeSourceWave(record.sourceWave || fallback.sourceWave),
-            sourceEntryIds: Array.isArray(record.sourceEntryIds)
-                ? record.sourceEntryIds.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
-                : fallback.sourceEntryIds,
-            sourceNodeKeys: Array.isArray(record.sourceNodeKeys)
-                ? record.sourceNodeKeys.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
-                : sourceNodeKeys,
-            bridgeNodeKeys: Array.isArray(record.bridgeNodeKeys)
-                ? record.bridgeNodeKeys.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
-                : bridgeNodeKeys,
+            sourceEntryIds: this.decodePromptEntryRefs(record.sourceEntryRefs ?? record.sourceEntryIds, fallback.promptContext.entryRefToEntryId, fallback.sourceEntryIds),
+            sourceNodeKeys: this.decodePromptNodeRefs(record.sourceNodeRefs ?? record.sourceNodeKeys, fallback.promptContext.nodeRefToNodeKey, sourceNodeKeys),
+            bridgeNodeKeys: this.decodePromptNodeRefs(record.bridgeNodeRefs ?? record.bridgeNodeKeys, fallback.promptContext.nodeRefToNodeKey, bridgeNodeKeys),
             explanationSteps: Array.isArray(record.explanationSteps)
                 ? record.explanationSteps.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean).slice(0, 6)
                 : [
@@ -647,6 +671,42 @@ export class DreamingService {
         return normalized === 'recent' || normalized === 'mid' || normalized === 'deep' ? normalized : 'fused';
     }
 
+    private decodePromptEntryRefs(
+        value: unknown,
+        entryRefToEntryId: Map<string, string>,
+        fallback: string[] = [],
+    ): string[] {
+        if (!Array.isArray(value)) {
+            return fallback;
+        }
+        const decoded = value.map((item: unknown): string => {
+            const normalized = String(item ?? '').trim();
+            if (!normalized) {
+                return '';
+            }
+            return entryRefToEntryId.get(normalized) ?? normalized;
+        }).filter(Boolean);
+        return decoded.length > 0 ? Array.from(new Set(decoded)) : fallback;
+    }
+
+    private decodePromptNodeRefs(
+        value: unknown,
+        nodeRefToNodeKey: Map<string, string>,
+        fallback: string[] = [],
+    ): string[] {
+        if (!Array.isArray(value)) {
+            return fallback;
+        }
+        const decoded = value.map((item: unknown): string => {
+            const normalized = String(item ?? '').trim();
+            if (!normalized) {
+                return '';
+            }
+            return nodeRefToNodeKey.get(normalized) ?? normalized;
+        }).filter(Boolean);
+        return decoded.length > 0 ? Array.from(new Set(decoded)) : fallback;
+    }
+
     private clampUnitInterval(value: unknown): number {
         const numeric = Number(value);
         if (!Number.isFinite(numeric)) {
@@ -660,6 +720,44 @@ export class DreamingService {
             return {};
         }
         return value as Record<string, unknown>;
+    }
+
+    private validateDreamOutput(
+        output: {
+            narrative: string;
+            highlights: string[];
+            proposedMutations: DreamMutationProposal[];
+        },
+        settings: ReturnType<typeof readMemoryOSSettings>,
+    ): void {
+        if (!String(output.narrative ?? '').trim()) {
+            throw new Error('invalid_dream_output:narrative_missing');
+        }
+        if (!Array.isArray(output.highlights)) {
+            throw new Error('invalid_dream_output:highlights_invalid');
+        }
+        if (!Array.isArray(output.proposedMutations)) {
+            throw new Error('invalid_dream_output:mutations_invalid');
+        }
+        if (output.highlights.length > settings.dreamPromptMaxHighlights) {
+            throw new Error('invalid_dream_output:too_many_highlights');
+        }
+        if (output.proposedMutations.length > settings.dreamPromptMaxMutations) {
+            throw new Error('invalid_dream_output:too_many_mutations');
+        }
+        for (const mutation of output.proposedMutations) {
+            if (mutation.sourceEntryIds.length <= 0) {
+                throw new Error(`invalid_dream_output:missing_source_entries:${mutation.mutationId}`);
+            }
+            if (settings.dreamPromptRequireExplain) {
+                if (!mutation.explain || mutation.explain.sourceEntryIds.length <= 0 || mutation.explain.explanationSteps.length <= 0) {
+                    throw new Error(`invalid_dream_output:missing_explain:${mutation.mutationId}`);
+                }
+            }
+            if (mutation.confidence < 0 || mutation.confidence > 1) {
+                throw new Error(`invalid_dream_output:confidence_out_of_range:${mutation.mutationId}`);
+            }
+        }
     }
 
     private async maybeAutoApplyLowRiskMaintenance(input: {

@@ -22,6 +22,12 @@ export { BindingResolutionService } from './binding-resolution-service';
 export { DreamingService } from './dreaming-service';
 export { DreamSessionRepository } from './dream-session-repository';
 export { DreamMutationApplier } from './dream-mutation-applier';
+export { DreamMutationTranslator } from './dream-mutation-translator';
+export { UnifiedMemoryMutationService } from './unified-memory-mutation-service';
+export { RelationshipMutationService } from './relationship-mutation-service';
+export { PromptReferenceService } from './prompt-reference-service';
+export { DreamPromptDTOService } from './dream-prompt-dto-service';
+export { SummaryPromptDTOService } from './summary-prompt-dto-service';
 export { DreamWaveRecallService } from './dream-wave-recall-service';
 export { DreamRecallDiagnosticsService } from './dream-recall-diagnostics-service';
 export type {

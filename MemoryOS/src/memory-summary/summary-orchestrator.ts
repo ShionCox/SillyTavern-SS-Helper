@@ -31,6 +31,7 @@ import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine
 import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug';
 import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
 import type { BatchTimeAssessment, MemoryTimelineProfile } from '../memory-time/time-types';
+import { SummaryPromptDTOService } from '../services/summary-prompt-dto-service';
 
 /**
  * 功能：定义总结编排器依赖。
@@ -372,7 +373,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         );
         const activeTypeSchemas = focusTypeSchemas.length > 0 ? focusTypeSchemas : resumedPlannerContext.typeSchemas;
         const strictSummarySchema = buildStrictSummaryMutationSchema(summarySchema, activeTypeSchemas);
-        const mutationContext = buildSlimMutationContext(
+        const mutationContextResult = buildSlimMutationContext(
             resumedPlannerContext,
             batchDecision,
             settings.summarySecondStageRollingDigestMaxChars || budget.maxRollingDigestChars,
@@ -380,7 +381,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             batchPlan.candidateIds,
         );
         const summaryUserPayload = buildStructuredTaskUserPayload(
-            JSON.stringify(normalizeNarrativeValueWithUserPlaceholder({ ...mutationContext, userPlaceholder }, promptUserDisplayName), null, 2),
+            JSON.stringify(normalizeNarrativeValueWithUserPlaceholder({ ...mutationContextResult.payload, userPlaceholder }, promptUserDisplayName), null, 2),
             JSON.stringify(strictSummarySchema ?? {}, null, 2),
             JSON.stringify(summaryOutputSample ?? {}, null, 2),
         );
@@ -409,7 +410,8 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 batchResult.reasonCode || 'summary_llm_failed',
             );
         }
-        const trimmedDocument = trimMutationDocumentActions(batchResult.data, batchPlan.actionBudget);
+        const decodedDocument = decodeSummaryPromptDocument(batchResult.data, mutationContextResult);
+        const trimmedDocument = trimMutationDocumentActions(decodedDocument, batchPlan.actionBudget);
 
         // 稀疏 patch 校验：确保 LLM 输出为有效 patch，而非完整 state 副本
         const patchValidation = validateSummaryPatch(trimmedDocument.actions);
@@ -643,56 +645,108 @@ function buildSlimMutationContext(
     rollingDigestMaxChars: number,
     candidateSummaryMaxChars: number,
     candidateIds?: string[],
-): Record<string, unknown> {
+): {
+    payload: Record<string, unknown>;
+    candidateRefToCandidateId: Map<string, string>;
+} {
     const focusTypes = plannerDecision.focus_types;
     const filteredTypeSchemas = focusTypes.length > 0
         ? context.typeSchemas.filter((schema) => focusTypes.includes(schema.schemaId))
         : context.typeSchemas;
     const activeTypeSchemas = filteredTypeSchemas.length > 0 ? filteredTypeSchemas : context.typeSchemas;
     const candidateIdSet = new Set((candidateIds ?? []).filter(Boolean));
-    const slimCandidates = (candidateIdSet.size > 0
+    const activeCandidates = candidateIdSet.size > 0
         ? context.candidateRecords.filter((candidate) => candidateIdSet.has(candidate.candidateId))
-        : context.candidateRecords)
-        .map((candidate) => ({
+        : context.candidateRecords;
+    const promptDtoService = new SummaryPromptDTOService();
+    const candidatePromptResult = promptDtoService.build({
+        candidates: activeCandidates.map((candidate) => ({
             candidateId: candidate.candidateId,
+            entryId: candidate.recordId,
             targetKind: candidate.targetKind,
-            compareKey: candidate.compareKey,
             title: candidate.title,
             summary: truncateTextForContext(candidate.summary ?? '', candidateSummaryMaxChars),
-            status: candidate.status,
-        }));
+            compareKey: candidate.compareKey,
+        })),
+    });
+    const slimCandidates = candidatePromptResult.candidates.map((candidate) => ({
+        candidateId: candidate.candidateRef,
+        entryRef: candidate.entryRef,
+        targetKind: candidate.targetKind,
+        compareKey: candidate.compareKey,
+        title: candidate.title,
+        summary: candidate.summary,
+        status: activeCandidates.find((item) => item.candidateId === candidatePromptResult.candidateRefToCandidateId.get(candidate.candidateRef))?.status ?? 'active',
+    }));
     const rollingDigest = context.recentSummaryDigest.length > 0
         ? context.recentSummaryDigest
             .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, rollingDigestMaxChars)}`)
             .join(' | ')
         : '';
     return {
-        task: context.task,
-        schemaVersion: context.schemaVersion,
-        window: {
-            fromTurn: context.window.fromTurn,
-            toTurn: context.window.toTurn,
-            windowFacts: extractWindowFacts(context.window.summaryText),
-            ...(context.window.recentContextText ? { recentContext: extractWindowFacts(context.window.recentContextText).slice(0, 8) } : {}),
+        payload: {
+            task: context.task,
+            schemaVersion: context.schemaVersion,
+            window: {
+                fromTurn: context.window.fromTurn,
+                toTurn: context.window.toTurn,
+                windowFacts: extractWindowFacts(context.window.summaryText),
+                ...(context.window.recentContextText ? { recentContext: extractWindowFacts(context.window.recentContextText).slice(0, 8) } : {}),
+            },
+            detectedSignals: context.detectedSignals,
+            plannerDecision,
+            rollingDigest,
+            typeSchemas: activeTypeSchemas,
+            candidateRecords: slimCandidates,
+            promptReferenceRules: {
+                candidateRefPrefix: 'S',
+                entryRefPrefix: 'E',
+                requirement: '引用已有候选时只使用 candidateId 中提供的短别名，不要输出真实 candidateId 或 entryId。',
+            },
+            rules: context.rules,
+            patchMode: {
+                enabled: true,
+                description: '本次输出为稀疏 patch 模式，仅输出变化字段。',
+                constraints: [
+                    '只输出发生变化的字段，未变化字段不要出现在 payload 中。',
+                    '严禁返回完整旧 state 副本。',
+                    '数组字段如需变更请输出完整新数组。',
+                    '嵌套 fields 对象中只输出变化的子字段。',
+                    '若无实质变更，使用 action=NOOP。',
+                    '若引用已有候选，candidateId 只能填写当前上下文中的短别名。',
+                ],
+            },
         },
-        detectedSignals: context.detectedSignals,
-        plannerDecision,
-        rollingDigest,
-        typeSchemas: activeTypeSchemas,
-        candidateRecords: slimCandidates,
-        rules: context.rules,
-        patchMode: {
-            enabled: true,
-            description: '本次输出为稀疏 patch 模式，仅输出变化字段。',
-            constraints: [
-                '只输出发生变化的字段，未变化字段不要出现在 payload 中。',
-                '严禁返回完整旧 state 副本。',
-                '数组字段如需变更请输出完整新数组。',
-                '嵌套 fields 对象中只输出变化的子字段。',
-                '若无实质变更，使用 action=NOOP。',
-            ],
-        },
+        candidateRefToCandidateId: candidatePromptResult.candidateRefToCandidateId,
     };
+}
+
+function decodeSummaryPromptDocument(
+    document: SummaryMutationDocument,
+    context: {
+        candidateRefToCandidateId: Map<string, string>;
+    },
+): SummaryMutationDocument {
+    return {
+        ...document,
+        actions: Array.isArray(document.actions)
+            ? document.actions.map((action: SummaryMutationDocument['actions'][number]): SummaryMutationDocument['actions'][number] => ({
+                ...action,
+                candidateId: decodeSummaryCandidateRef(action.candidateId, context.candidateRefToCandidateId),
+            }))
+            : [],
+    };
+}
+
+function decodeSummaryCandidateRef(
+    value: string | undefined,
+    candidateRefToCandidateId: Map<string, string>,
+): string | undefined {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return undefined;
+    }
+    return candidateRefToCandidateId.get(normalized) ?? normalized;
 }
 
 /**

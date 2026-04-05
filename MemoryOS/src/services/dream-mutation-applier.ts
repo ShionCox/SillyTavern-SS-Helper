@@ -1,6 +1,8 @@
 import type { EntryRepository } from '../repository/entry-repository';
 import type { MemoryEntry, MemoryRelationshipRecord } from '../types';
+import { DreamMutationTranslator } from './dream-mutation-translator';
 import { DreamSessionRepository } from './dream-session-repository';
+import { UnifiedMemoryMutationService } from './unified-memory-mutation-service';
 import type {
     DreamMutationProposal,
     DreamRollbackMetadataRecord,
@@ -22,11 +24,18 @@ export class DreamMutationApplier {
     private readonly chatKey: string;
     private readonly repository: EntryRepository;
     private readonly dreamRepository: DreamSessionRepository;
+    private readonly translator: DreamMutationTranslator;
+    private readonly unifiedMutationService: UnifiedMemoryMutationService;
 
     constructor(chatKey: string, repository: EntryRepository) {
         this.chatKey = String(chatKey ?? '').trim();
         this.repository = repository;
         this.dreamRepository = new DreamSessionRepository(this.chatKey);
+        this.translator = new DreamMutationTranslator();
+        this.unifiedMutationService = new UnifiedMemoryMutationService({
+            chatKey: this.chatKey,
+            repository: this.repository,
+        });
     }
 
     async applyDreamMutations(input: {
@@ -41,23 +50,35 @@ export class DreamMutationApplier {
         });
         await this.dreamRepository.saveDreamRollbackSnapshot(rollbackSnapshot);
 
-        const dreamSession = await this.dreamRepository.getDreamSessionById(input.dreamId);
-        const dreamCreatedAt = dreamSession.meta?.createdAt ?? 0;
-
-        const appliedMutationIds: string[] = [];
-        const skippedMutationIds: string[] = [];
-        const affectedEntryIds = new Set<string>();
-        const affectedRelationshipIds = new Set<string>();
-        for (const mutation of input.mutations) {
-            const applied = await this.applySingleMutation(input.dreamId, mutation, dreamCreatedAt);
-            if (applied.ok) {
-                appliedMutationIds.push(mutation.mutationId);
-                applied.affectedEntryIds.forEach((entryId: string): void => affectedEntryIds.add(entryId));
-                applied.affectedRelationshipIds.forEach((relationshipId: string): void => affectedRelationshipIds.add(relationshipId));
-            } else {
-                skippedMutationIds.push(mutation.mutationId);
-            }
-        }
+        const translatedMutations = this.translator.translateMutations({
+            dreamId: input.dreamId,
+            mutations: input.mutations,
+        });
+        const unifiedResult = await this.unifiedMutationService.applyMutations({
+            mutations: translatedMutations,
+            context: {
+                chatKey: this.chatKey,
+                source: 'dream',
+                sourceLabel: 'Dream Review 批准写回',
+                allowCreate: true,
+                allowInvalidate: true,
+            },
+        });
+        const appliedMutationIds = Array.from(new Set([
+            ...unifiedResult.appliedEntryMutationIds,
+            ...unifiedResult.appliedRelationshipMutationIds,
+        ]));
+        const skippedMutationIds = Array.from(new Set(unifiedResult.skippedMutationIds));
+        const affectedEntryIds = new Set<string>([
+            ...unifiedResult.createdEntryIds,
+            ...unifiedResult.updatedEntryIds,
+            ...unifiedResult.invalidatedEntryIds,
+            ...unifiedResult.deletedEntryIds,
+        ]);
+        const affectedRelationshipIds = new Set<string>([
+            ...unifiedResult.createdRelationshipIds,
+            ...unifiedResult.updatedRelationshipIds,
+        ]);
 
         const touchedEntryIds = Array.from(new Set([...rollbackSnapshot.touchedEntryIds, ...affectedEntryIds]));
         const touchedRelationshipIds = Array.from(new Set([...rollbackSnapshot.touchedRelationshipIds, ...affectedRelationshipIds]));
@@ -82,6 +103,7 @@ export class DreamMutationApplier {
             affectedEntryIds: touchedEntryIds,
             affectedRelationshipIds: touchedRelationshipIds,
             summaryCandidateIds: [],
+            applyResult: unifiedResult,
             createdAt: Date.now(),
             updatedAt: Date.now(),
         };
