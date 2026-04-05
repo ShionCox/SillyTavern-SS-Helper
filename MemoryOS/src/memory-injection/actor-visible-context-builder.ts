@@ -13,7 +13,8 @@ import type { MemoryTimelineProfile, PromptTimeMeta } from '../memory-time/time-
 export interface ActorVisibleMemoryContext {
     timelineLines: string[];
     worldBaseLines: string[];
-    sceneSharedLines: string[];
+    sceneActiveLines: string[];
+    sceneRecentLines: string[];
     entityLines: string[];
     diagnostics: {
         actorKey: string;
@@ -69,14 +70,15 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
             prependPromptTimeHeader(buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'), entry.timeContext, currentMaxFloor),
         ));
 
-    const sceneSharedLines = input.entries
+    const sceneEntries = input.entries
         .filter((entry: MemoryEntry): boolean => isSceneSharedType(entry.entryType))
-        .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => prependPromptTimeHeader(
-            buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'),
-            entry.timeContext,
-            currentMaxFloor,
-        ));
+        .sort(compareEntriesByScenePriority(currentMaxFloor));
+    const sceneActiveLines = sceneEntries
+        .filter((entry: MemoryEntry): boolean => isActiveSceneEntry(entry, currentMaxFloor))
+        .map((entry: MemoryEntry): string => renderSceneEntryLine(entry, currentMaxFloor));
+    const sceneRecentLines = sceneEntries
+        .filter((entry: MemoryEntry): boolean => !isActiveSceneEntry(entry, currentMaxFloor))
+        .map((entry: MemoryEntry): string => renderSceneEntryLine(entry, currentMaxFloor));
 
     const entityLines = input.entries
         .filter((entry: MemoryEntry): boolean => isEntityType(entry.entryType))
@@ -127,7 +129,8 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         retentionStageCounts[stage] += 1;
     });
     const totalInjectedCount = worldBaseLines.length
-        + sceneSharedLines.length
+        + sceneActiveLines.length
+        + sceneRecentLines.length
         + entityLines.length
         + identityLines.length
         + relationshipLines.length
@@ -136,7 +139,8 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
         + interpretationLines.length;
     const estimatedChars = [
         ...worldBaseLines,
-        ...sceneSharedLines,
+        ...sceneActiveLines,
+        ...sceneRecentLines,
         ...entityLines,
         ...identityLines,
         ...relationshipLines,
@@ -174,7 +178,8 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     return {
         timelineLines,
         worldBaseLines,
-        sceneSharedLines,
+        sceneActiveLines,
+        sceneRecentLines,
         entityLines,
         diagnostics: {
             actorKey: activeActorKey || 'actor',
@@ -246,6 +251,13 @@ function renderEntityLine(entry: MemoryEntry, currentMaxFloor: number): string {
         detailPayload: entry.detailPayload,
     })) || `[${typeLabel}]`} ${entry.title}：${summary}`;
     return prependPromptTimeHeader(body, entry.timeContext, currentMaxFloor);
+}
+
+function renderSceneEntryLine(entry: MemoryEntry, currentMaxFloor: number): string {
+    const summary = entry.summary || entry.detail || '暂无详情';
+    const body = buildSemanticEntryLine(entry, summary);
+    const primaryLabelOverride = resolveScenePrimaryLabelOverride(entry, summary);
+    return prependPromptTimeHeader(body, entry.timeContext, currentMaxFloor, primaryLabelOverride);
 }
 
 /**
@@ -348,6 +360,7 @@ function prependPromptTimeHeader(
     text: string,
     timeContext: MemoryEntry['timeContext'],
     currentMaxFloor: number,
+    primaryLabelOverride?: string,
 ): string {
     const normalized = String(text ?? '').trim();
     if (!normalized || !timeContext) {
@@ -355,14 +368,12 @@ function prependPromptTimeHeader(
     }
     const promptTimeMeta = buildPromptTimeMeta(timeContext, currentMaxFloor);
     const header = [
-        `时间：${promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt}`,
-        ...(promptTimeMeta.anchorLabel ? [`事件：${promptTimeMeta.anchorLabel}`] : []),
-        ...(promptTimeMeta.anchorRelationLabel ? [`锚点关系：${promptTimeMeta.anchorRelationLabel}`] : []),
-        ...(promptTimeMeta.sequenceLabel ? [`顺序：${promptTimeMeta.sequenceLabel}`] : []),
-        ...(promptTimeMeta.relativeToNowLabel ? [`相对当前：${promptTimeMeta.relativeToNowLabel}`] : []),
-        `来源：${promptTimeMeta.timeSourceLabel}`,
-        ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
-    ].join('｜');
+        primaryLabelOverride || promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt,
+        promptTimeMeta.anchorDisplayLabel,
+        promptTimeMeta.relativeToNowLabel,
+        promptTimeMeta.timeSourceLabel,
+        promptTimeMeta.timeConfidenceLabel,
+    ].filter((item: string | undefined): item is string => Boolean(String(item ?? '').trim())).join('｜');
     return `[${header}] ${normalized}`;
 }
 
@@ -402,13 +413,13 @@ function buildTimelineLines(profile?: MemoryTimelineProfile | null): string[] {
         return [];
     }
     return anchors
-        .slice(0, 6)
+        .slice(0, 5)
         .sort((left, right) => left.firstFloor - right.firstFloor)
         .map((anchor, index) => {
             const dayLabel = anchor.storyDayIndex ? `第${anchor.storyDayIndex}天` : '';
             const partLabel = resolveTimelinePartLabel(anchor.partOfDay);
             const timeLabel = [dayLabel, partLabel].filter(Boolean).join('');
-            return `E${index + 1}：${[timeLabel, anchor.label].filter(Boolean).join('，')}`;
+            return `T${index + 1}：${[timeLabel, anchor.label].filter(Boolean).join('，')}`;
         });
 }
 
@@ -423,4 +434,65 @@ function resolveTimelinePartLabel(part?: string): string {
         case 'midnight': return '深夜';
         default: return '';
     }
+}
+
+function isActiveSceneEntry(entry: MemoryEntry, currentMaxFloor: number): boolean {
+    const floorDiff = Math.max(0, currentMaxFloor - (entry.timeContext?.sequenceTime?.lastFloor ?? 0));
+    const payload = toRecord(entry.detailPayload);
+    const fields = toRecord(payload.fields);
+    const visibilityScope = String(fields.visibilityScope ?? payload.visibilityScope ?? '').trim();
+    if (entry.ongoing === true) {
+        return true;
+    }
+    if (floorDiff <= 12) {
+        return true;
+    }
+    return /当前|现场|共处|同处|ongoing|active|present/u.test(visibilityScope);
+}
+
+function compareEntriesByScenePriority(currentMaxFloor: number): (left: MemoryEntry, right: MemoryEntry) => number {
+    return (left: MemoryEntry, right: MemoryEntry): number => {
+        const activeDiff = Number(isActiveSceneEntry(right, currentMaxFloor)) - Number(isActiveSceneEntry(left, currentMaxFloor));
+        if (activeDiff !== 0) {
+            return activeDiff;
+        }
+        return right.updatedAt - left.updatedAt;
+    };
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+function resolveScenePrimaryLabelOverride(entry: MemoryEntry, summary: string): string | undefined {
+    const partLabel = resolveSceneSemanticPartLabel(`${entry.title} ${summary}`);
+    if (!partLabel) {
+        return undefined;
+    }
+    const storyDayIndex = entry.timeContext?.storyTime?.storyDayIndex;
+    return storyDayIndex ? `第${storyDayIndex}天${partLabel}` : partLabel;
+}
+
+function resolveSceneSemanticPartLabel(text: string): string | undefined {
+    const normalized = String(text ?? '').trim();
+    if (!normalized) {
+        return undefined;
+    }
+    const orderedMatchers: Array<{ pattern: RegExp; label: string }> = [
+        { pattern: /清晨到白日|清晨至白日|清晨到白天|清晨至白天/u, label: '清晨到白日' },
+        { pattern: /上午到中午|上午至中午/u, label: '上午到中午' },
+        { pattern: /傍晚到深夜|傍晚至深夜/u, label: '傍晚到深夜' },
+        { pattern: /深夜稍后|夜晚稍后/u, label: '深夜稍后' },
+        { pattern: /清晨|凌晨|拂晓/u, label: '清晨' },
+        { pattern: /早上|上午/u, label: '上午' },
+        { pattern: /中午|正午/u, label: '正午' },
+        { pattern: /午后|下午/u, label: '午后' },
+        { pattern: /傍晚|黄昏/u, label: '傍晚' },
+        { pattern: /夜晚|入夜|晚上/u, label: '夜晚' },
+        { pattern: /深夜|半夜/u, label: '深夜' },
+    ];
+    return orderedMatchers.find((item) => item.pattern.test(normalized))?.label;
 }

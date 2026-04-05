@@ -5,6 +5,8 @@ export interface NarrativeStyleProfile {
     styleId: string;
     worldBaseTitle: string;
     sceneSharedTitle: string;
+    sceneActiveTitle?: string;
+    sceneRecentTitle?: string;
     actorViewTitle: string;
     relationshipTitle: string;
     eventTitle: string;
@@ -25,4 +27,3 @@ export function renderBulletLines(lines: string[]): string {
     }
     return normalizedLines.map((line: string): string => `- ${line}`).join('\n');
 }
-

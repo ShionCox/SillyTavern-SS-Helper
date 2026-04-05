@@ -33,7 +33,6 @@ export interface PromptInjectionPipelineLogEntry {
 export interface PromptInjectionPipelineResult {
     query: string;
     sourceMessageId?: string;
-    settingsMaxTokens: number;
     baseDiagnostics: BaseInjectionDiagnosticsSnapshot;
     injectionResult: {
         shouldInject: boolean;
@@ -59,7 +58,6 @@ type PromptInjectResult = {
 };
 
 type PipelineSettings = {
-    contextMaxTokens?: number;
     injectionPromptEnabled?: boolean;
     injectionPreviewEnabled?: boolean;
 };
@@ -68,7 +66,7 @@ type PipelineMemoryLike = {
     getChatKey?: () => string;
     unifiedMemory?: {
         prompts?: {
-            preview?: (args: { query: string; promptMessages: SdkTavernPromptMessageEvent[]; maxTokens: number }) => Promise<PromptAssemblySnapshot>;
+            preview?: (args: { query: string; promptMessages: SdkTavernPromptMessageEvent[] }) => Promise<PromptAssemblySnapshot>;
             inject?: (args: {
                 promptMessages: SdkTavernPromptMessageEvent[];
                 source?: string;
@@ -170,7 +168,6 @@ export async function runPromptReadyInjectionPipeline(input: {
     const logs: PromptInjectionPipelineLogEntry[] = [];
     const promptMessages = input.promptMessages;
     const settings = input.readSettings();
-    const settingsMaxTokens = Number(settings.contextMaxTokens) || 1200;
     const injectionPromptEnabled = settings.injectionPromptEnabled !== false;
     const injectionPreviewEnabled = settings.injectionPreviewEnabled !== false;
     const latestUserMessage = findLatestPromptUserMessage(promptMessages);
@@ -196,7 +193,6 @@ export async function runPromptReadyInjectionPipeline(input: {
         ? await input.memory.unifiedMemory.prompts.preview({
             query,
             promptMessages,
-            maxTokens: settingsMaxTokens,
         })
         : null;
 
@@ -267,7 +263,6 @@ export async function runPromptReadyInjectionPipeline(input: {
     return {
         query,
         sourceMessageId,
-        settingsMaxTokens,
         baseDiagnostics,
         injectionResult,
         latestExplanation: latestExplanation ?? null,

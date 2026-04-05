@@ -16,6 +16,7 @@ import type { MemoryCompareKeyIndexRecord } from '../db/db';
 import { getSharedRetrievalService } from '../runtime/vector-runtime';
 import { buildPromptTimeMeta } from '../memory-time/time-ranking';
 import type { PromptTimeMeta } from '../memory-time/time-types';
+import { estimateXmlNarrativeRetrievalMaxChars } from '../memory-injection/xml-markdown-renderer';
 
 /**
  * 功能：统一承接 Prompt 检索、记忆保留阶段计算与注入文本组装。
@@ -39,7 +40,6 @@ export class PromptAssemblyService {
     async buildPromptAssembly(input: {
         query?: string;
         promptMessages?: SdkTavernPromptMessageEvent[];
-        maxTokens?: number;
     }): Promise<PromptAssemblySnapshot> {
         const settings = readMemoryOSSettings();
         const query = this.normalizeText(input.query);
@@ -68,7 +68,20 @@ export class PromptAssemblyService {
             chatKey: this.chatKey,
             candidates: retrievalCandidates,
             rulePackMode: settings.retrievalRulePack,
-            maxChars: Math.max(2600, Number(input.maxTokens ?? settings.contextMaxTokens) * 4),
+            maxChars: estimateXmlNarrativeRetrievalMaxChars(
+                settings.injectionCustomBudgetEnabled ? {
+                    timelineMaxItems: settings.timelineMaxItems,
+                    worldBaseMaxItems: settings.worldBaseMaxItems,
+                    sceneActiveMaxItems: settings.sceneActiveMaxItems,
+                    sceneRecentMaxItems: settings.sceneRecentMaxItems,
+                    entityMaxItems: settings.entityMaxItems,
+                    identityMaxItems: settings.identityMaxItems,
+                    relationshipMaxItems: settings.relationshipMaxItems,
+                    eventMaxItems: settings.eventMaxItems,
+                    shadowEventMaxItems: settings.shadowEventMaxItems,
+                    interpretationMaxItems: settings.interpretationMaxItems,
+                } : {},
+            ),
             maxCandidates: 18,
             actorProfiles: actorProfiles.map((profile: ActorMemoryProfile) => ({
                 actorKey: profile.actorKey,
@@ -125,13 +138,23 @@ export class PromptAssemblyService {
             },
         });
 
-        const xmlNarrative = renderMemoryContextXmlMarkdown(visibleContext, worldProfile.primary.injectionStyle, {
-            worldBaseChars: 900,
-            sceneSharedChars: 700,
-            actorViewChars: 1400,
-            totalChars: 2600,
-        });
-        const systemText = this.trimTextToBudget(xmlNarrative, input.maxTokens ?? 1400);
+        const xmlNarrative = renderMemoryContextXmlMarkdown(
+            visibleContext,
+            worldProfile.primary.injectionStyle,
+            settings.injectionCustomBudgetEnabled ? {
+                timelineMaxItems: settings.timelineMaxItems,
+                worldBaseMaxItems: settings.worldBaseMaxItems,
+                sceneActiveMaxItems: settings.sceneActiveMaxItems,
+                sceneRecentMaxItems: settings.sceneRecentMaxItems,
+                entityMaxItems: settings.entityMaxItems,
+                identityMaxItems: settings.identityMaxItems,
+                relationshipMaxItems: settings.relationshipMaxItems,
+                eventMaxItems: settings.eventMaxItems,
+                shadowEventMaxItems: settings.shadowEventMaxItems,
+                interpretationMaxItems: settings.interpretationMaxItems,
+            } : {},
+        );
+        const systemText = xmlNarrative;
 
         const snapshot: PromptAssemblySnapshot = {
             generatedAt: Date.now(),
@@ -596,14 +619,12 @@ export class PromptAssemblyService {
             return normalized;
         }
         const header = [
-            `时间：${promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt}`,
-            ...(promptTimeMeta.anchorLabel ? [`事件：${promptTimeMeta.anchorLabel}`] : []),
-            ...(promptTimeMeta.anchorRelationLabel ? [`锚点关系：${promptTimeMeta.anchorRelationLabel}`] : []),
-            ...(promptTimeMeta.sequenceLabel ? [`顺序：${promptTimeMeta.sequenceLabel}`] : []),
-            ...(promptTimeMeta.relativeToNowLabel ? [`相对当前：${promptTimeMeta.relativeToNowLabel}`] : []),
-            `来源：${promptTimeMeta.timeSourceLabel}`,
-            ...(promptTimeMeta.timeConfidenceLabel ? [`置信度：${promptTimeMeta.timeConfidenceLabel}`] : []),
-        ].join('｜');
+            promptTimeMeta.primaryLabel || promptTimeMeta.timeLabelForPrompt,
+            promptTimeMeta.anchorDisplayLabel,
+            promptTimeMeta.relativeToNowLabel,
+            promptTimeMeta.timeSourceLabel,
+            promptTimeMeta.timeConfidenceLabel,
+        ].filter((item: string | undefined): item is string => Boolean(String(item ?? '').trim())).join('｜');
         return `[${header}] ${normalized}`;
     }
 
@@ -640,12 +661,6 @@ export class PromptAssemblyService {
         return text.split(/[,，、\n]+/).map((item: string): string => this.normalizeText(item)).filter(Boolean);
     }
 
-    /**
-     * 功能：按预算裁剪文本。
-     * @param text 原始文本
-     * @param maxTokens 最大 token 预算
-     * @returns 裁剪结果
-     */
     /**
      * 功能：把任意绑定对象归一化为统一结构。
      * @param value 原始绑定值
@@ -685,20 +700,6 @@ export class PromptAssemblyService {
                 .map((item: string): string => this.normalizeText(item))
                 .filter(Boolean),
         ));
-    }
-
-    private trimTextToBudget(text: string, maxTokens: number): string {
-        const normalized = this.normalizeText(text);
-        if (!normalized) {
-            return '';
-        }
-        const maxChars = Math.max(240, (Number(maxTokens ?? 1200) || 1200) * 2);
-        if (text.length <= maxChars) {
-            return text;
-        }
-        const kept = text.slice(0, maxChars);
-        const trimmedIndex = kept.lastIndexOf('\n');
-        return `${trimmedIndex > 0 ? kept.slice(0, trimmedIndex) : kept}\n- 其余内容因预算已省略`;
     }
 
     /**

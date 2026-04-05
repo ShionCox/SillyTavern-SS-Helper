@@ -20,6 +20,7 @@ import { resolveSemanticKindLabel } from '../core/memory-semantic';
 import { readMemoryOSSettings, resolveRetrievalEnableQueryContextBuilder } from '../settings/store';
 import { HybridRetrievalService } from './hybrid-retrieval-service';
 import { buildQueryContextBundle } from './query-context-builder';
+import { estimateXmlNarrativeRetrievalMaxChars } from '../memory-injection/xml-markdown-renderer';
 
 /**
  * 功能：全系统统一检索入口服务。
@@ -85,7 +86,20 @@ export class MemoryRetrievalService {
                 rulePackMode: input.rulePackMode ?? settings.retrievalRulePack,
                 budget: {
                     maxCandidates: config.topK,
-                    maxChars: input.maxChars ?? Math.max(2600, settings.contextMaxTokens * 4),
+                    maxChars: input.maxChars ?? estimateXmlNarrativeRetrievalMaxChars(
+                        settings.injectionCustomBudgetEnabled ? {
+                            timelineMaxItems: settings.timelineMaxItems,
+                            worldBaseMaxItems: settings.worldBaseMaxItems,
+                            sceneActiveMaxItems: settings.sceneActiveMaxItems,
+                            sceneRecentMaxItems: settings.sceneRecentMaxItems,
+                            entityMaxItems: settings.entityMaxItems,
+                            identityMaxItems: settings.identityMaxItems,
+                            relationshipMaxItems: settings.relationshipMaxItems,
+                            eventMaxItems: settings.eventMaxItems,
+                            shadowEventMaxItems: settings.shadowEventMaxItems,
+                            interpretationMaxItems: settings.interpretationMaxItems,
+                        } : {},
+                    ),
                 },
             },
             filteredCandidates,

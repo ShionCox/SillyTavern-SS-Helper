@@ -24,7 +24,6 @@ export type DreamNeuronNodeType =
     | 'compareKey';
 
 export interface DreamSettingsSnapshot {
-    contextMaxTokens: number;
     retrievalMode: string;
     dreamContextMaxChars: number;
     dreamPromptVersion?: string;

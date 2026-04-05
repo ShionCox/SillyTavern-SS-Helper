@@ -84,7 +84,18 @@ const TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID = 'stx-memoryos-takeover-default-auto
 const TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID = 'stx-memoryos-takeover-default-pause-on-error';
 const INJECTION_PROMPT_ID = 'stx-memoryos-injection-prompt-enabled';
 const INJECTION_PREVIEW_ID = 'stx-memoryos-injection-preview-enabled';
-const CONTEXT_TOKENS_ID = 'stx-memoryos-context-max-tokens';
+const INJECTION_CUSTOM_BUDGET_ID = 'stx-memoryos-injection-custom-budget-enabled';
+const INJECTION_BUDGET_FIELDS_ID = 'stx-memoryos-injection-budget-fields';
+const TIMELINE_MAX_ITEMS_ID = 'stx-memoryos-timeline-max-items';
+const WORLD_BASE_MAX_ITEMS_ID = 'stx-memoryos-world-base-max-items';
+const SCENE_ACTIVE_MAX_ITEMS_ID = 'stx-memoryos-scene-active-max-items';
+const SCENE_RECENT_MAX_ITEMS_ID = 'stx-memoryos-scene-recent-max-items';
+const ENTITY_MAX_ITEMS_ID = 'stx-memoryos-entity-max-items';
+const IDENTITY_MAX_ITEMS_ID = 'stx-memoryos-identity-max-items';
+const RELATIONSHIP_MAX_ITEMS_ID = 'stx-memoryos-relationship-max-items';
+const EVENT_MAX_ITEMS_ID = 'stx-memoryos-event-max-items';
+const SHADOW_EVENT_MAX_ITEMS_ID = 'stx-memoryos-shadow-event-max-items';
+const INTERPRETATION_MAX_ITEMS_ID = 'stx-memoryos-interpretation-max-items';
 const RETRIEVAL_MODE_ID = 'stx-memoryos-retrieval-mode';
 const RETRIEVAL_DEFAULT_TOPK_ID = 'stx-memoryos-retrieval-default-topk';
 const RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID = 'stx-memoryos-retrieval-default-expand-depth';
@@ -322,7 +333,8 @@ function buildSettingsContentHtml(): string {
             ${divider('注入链路')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Prompt 注入</div><div class="stx-ui-item-desc">控制是否执行主注入链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PROMPT_ID, '启用 Prompt 注入')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用注入预览</div><div class="stx-ui-item-desc">在正式注入前额外计算并显示预览信息，便于调试。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PREVIEW_ID, '启用注入预览')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入上下文预算</div><div class="stx-ui-item-desc">限制注入阶段可使用的最大 token 预算。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${CONTEXT_TOKENS_ID}">contextMaxTokens</label>${numberField(CONTEXT_TOKENS_ID,200,10000,50)}</div></div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自定义注入条数预算</div><div class="stx-ui-item-desc">默认使用内置预算且不显示细项；开启后可分别设置各分区最多保留多少条。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_CUSTOM_BUDGET_ID, '自定义注入条数预算')}</div></div>
+            <div id="${INJECTION_BUDGET_FIELDS_ID}" class="stx-ui-item stx-ui-item-stack" hidden><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入条数预算</div><div class="stx-ui-item-desc">控制 XML 注入块每个分区最多保留多少条，所有条目按整条保留，不再按字符截半条。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${TIMELINE_MAX_ITEMS_ID}">timelineMaxItems</label>${numberField(TIMELINE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${WORLD_BASE_MAX_ITEMS_ID}">worldBaseMaxItems</label>${numberField(WORLD_BASE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_ACTIVE_MAX_ITEMS_ID}">sceneActiveMaxItems</label>${numberField(SCENE_ACTIVE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_RECENT_MAX_ITEMS_ID}">sceneRecentMaxItems</label>${numberField(SCENE_RECENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${ENTITY_MAX_ITEMS_ID}">entityMaxItems</label>${numberField(ENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${IDENTITY_MAX_ITEMS_ID}">identityMaxItems</label>${numberField(IDENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${RELATIONSHIP_MAX_ITEMS_ID}">relationshipMaxItems</label>${numberField(RELATIONSHIP_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${EVENT_MAX_ITEMS_ID}">eventMaxItems</label>${numberField(EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SHADOW_EVENT_MAX_ITEMS_ID}">shadowEventMaxItems</label>${numberField(SHADOW_EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${INTERPRETATION_MAX_ITEMS_ID}">interpretationMaxItems</label>${numberField(INTERPRETATION_MAX_ITEMS_ID,0,20,1)}</div></div></div>
             ${divider('检索与诊断')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索模式</div><div class="stx-ui-item-desc">控制召回主链使用的检索链路：仅词法（默认稳定）、仅向量（测试）、混合（综合）。</div></div><div class="stx-ui-inline">${retrievalModeSelect}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索参数</div><div class="stx-ui-item-desc">控制召回行为的查询级默认配置。</div></div><div class="stx-ui-form-grid">
@@ -500,7 +512,17 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID, settings.takeoverDefaultPauseOnError],
         [INJECTION_PROMPT_ID, settings.injectionPromptEnabled],
         [INJECTION_PREVIEW_ID, settings.injectionPreviewEnabled],
-        [CONTEXT_TOKENS_ID, String(settings.contextMaxTokens)],
+        [INJECTION_CUSTOM_BUDGET_ID, settings.injectionCustomBudgetEnabled],
+        [TIMELINE_MAX_ITEMS_ID, String(settings.timelineMaxItems)],
+        [WORLD_BASE_MAX_ITEMS_ID, String(settings.worldBaseMaxItems)],
+        [SCENE_ACTIVE_MAX_ITEMS_ID, String(settings.sceneActiveMaxItems)],
+        [SCENE_RECENT_MAX_ITEMS_ID, String(settings.sceneRecentMaxItems)],
+        [ENTITY_MAX_ITEMS_ID, String(settings.entityMaxItems)],
+        [IDENTITY_MAX_ITEMS_ID, String(settings.identityMaxItems)],
+        [RELATIONSHIP_MAX_ITEMS_ID, String(settings.relationshipMaxItems)],
+        [EVENT_MAX_ITEMS_ID, String(settings.eventMaxItems)],
+        [SHADOW_EVENT_MAX_ITEMS_ID, String(settings.shadowEventMaxItems)],
+        [INTERPRETATION_MAX_ITEMS_ID, String(settings.interpretationMaxItems)],
         [RETRIEVAL_MODE_ID, settings.retrievalMode],
         [RETRIEVAL_DEFAULT_TOPK_ID, String(settings.retrievalDefaultTopK)],
         [RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(settings.retrievalDefaultExpandDepth)],
@@ -558,6 +580,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
     } finally {
         isSyncingForm = false;
     }
+    syncInjectionBudgetUiState();
     syncVectorSettingsUiState();
 }
 
@@ -616,7 +639,17 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         toolbarQuickActionsEnabled: checked(TOOLBAR_QUICK_ACTIONS_ID, DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled),
         injectionPromptEnabled: checked(INJECTION_PROMPT_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled),
         injectionPreviewEnabled: checked(INJECTION_PREVIEW_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled),
-        contextMaxTokens: Number(text(CONTEXT_TOKENS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens))),
+        injectionCustomBudgetEnabled: checked(INJECTION_CUSTOM_BUDGET_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionCustomBudgetEnabled),
+        timelineMaxItems: Number(text(TIMELINE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.timelineMaxItems))),
+        worldBaseMaxItems: Number(text(WORLD_BASE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.worldBaseMaxItems))),
+        sceneActiveMaxItems: Number(text(SCENE_ACTIVE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.sceneActiveMaxItems))),
+        sceneRecentMaxItems: Number(text(SCENE_RECENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.sceneRecentMaxItems))),
+        entityMaxItems: Number(text(ENTITY_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.entityMaxItems))),
+        identityMaxItems: Number(text(IDENTITY_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.identityMaxItems))),
+        relationshipMaxItems: Number(text(RELATIONSHIP_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.relationshipMaxItems))),
+        eventMaxItems: Number(text(EVENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.eventMaxItems))),
+        shadowEventMaxItems: Number(text(SHADOW_EVENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.shadowEventMaxItems))),
+        interpretationMaxItems: Number(text(INTERPRETATION_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.interpretationMaxItems))),
         retrievalMode: (() => {
             const v = text(RETRIEVAL_MODE_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalMode);
             return v === 'lexical_only' || v === 'vector_only' || v === 'hybrid' ? v : DEFAULT_MEMORY_OS_SETTINGS.retrievalMode;
@@ -724,6 +757,31 @@ function syncVectorSettingsUiState(): void {
     });
 }
 
+function syncInjectionBudgetUiState(): void {
+    const customBudgetEnabled = (document.getElementById(INJECTION_CUSTOM_BUDGET_ID) as HTMLInputElement | null)?.checked ?? false;
+    const container = document.getElementById(INJECTION_BUDGET_FIELDS_ID);
+    if (container) {
+        container.hidden = !customBudgetEnabled;
+    }
+    [
+        TIMELINE_MAX_ITEMS_ID,
+        WORLD_BASE_MAX_ITEMS_ID,
+        SCENE_ACTIVE_MAX_ITEMS_ID,
+        SCENE_RECENT_MAX_ITEMS_ID,
+        ENTITY_MAX_ITEMS_ID,
+        IDENTITY_MAX_ITEMS_ID,
+        RELATIONSHIP_MAX_ITEMS_ID,
+        EVENT_MAX_ITEMS_ID,
+        SHADOW_EVENT_MAX_ITEMS_ID,
+        INTERPRETATION_MAX_ITEMS_ID,
+    ].forEach((id: string): void => {
+        const element = document.getElementById(id) as HTMLInputElement | null;
+        if (element) {
+            element.disabled = !customBudgetEnabled;
+        }
+    });
+}
+
 /**
  * 功能：设置状态提示文案。
  * @param text 文案。
@@ -777,16 +835,19 @@ function bindActionEvents(): void {
         if (element.id === BTN_ID || element.id === RESET_BTN_ID) return;
         if (element instanceof HTMLInputElement && element.type === 'checkbox') {
             element.addEventListener('change', (): void => {
+                syncInjectionBudgetUiState();
                 syncVectorSettingsUiState();
                 scheduleAutoSave();
             });
             return;
         }
         element.addEventListener('input', (): void => {
+            syncInjectionBudgetUiState();
             syncVectorSettingsUiState();
             scheduleAutoSave();
         });
         element.addEventListener('change', (): void => {
+            syncInjectionBudgetUiState();
             syncVectorSettingsUiState();
             scheduleAutoSave();
         });

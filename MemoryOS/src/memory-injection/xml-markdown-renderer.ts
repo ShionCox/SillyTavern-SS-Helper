@@ -6,17 +6,29 @@ import { getNarrativeStyleProfile } from './narrative-renderer/style-profiles';
  * 功能：定义注入层预算配置。
  */
 export interface XmlNarrativeBudgetOptions {
-    worldBaseChars: number;
-    sceneSharedChars: number;
-    actorViewChars: number;
-    totalChars: number;
+    timelineMaxItems: number;
+    worldBaseMaxItems: number;
+    sceneActiveMaxItems: number;
+    sceneRecentMaxItems: number;
+    entityMaxItems: number;
+    identityMaxItems: number;
+    relationshipMaxItems: number;
+    eventMaxItems: number;
+    shadowEventMaxItems: number;
+    interpretationMaxItems: number;
 }
 
-const DEFAULT_BUDGET: XmlNarrativeBudgetOptions = {
-    worldBaseChars: 900,
-    sceneSharedChars: 700,
-    actorViewChars: 1400,
-    totalChars: 3200,
+export const DEFAULT_XML_NARRATIVE_BUDGET: XmlNarrativeBudgetOptions = {
+    timelineMaxItems: 5,
+    worldBaseMaxItems: 4,
+    sceneActiveMaxItems: 3,
+    sceneRecentMaxItems: 3,
+    entityMaxItems: 3,
+    identityMaxItems: 3,
+    relationshipMaxItems: 4,
+    eventMaxItems: 5,
+    shadowEventMaxItems: 2,
+    interpretationMaxItems: 3,
 };
 
 /**
@@ -33,39 +45,24 @@ export function renderMemoryContextXmlMarkdown(
 ): string {
     const style = getNarrativeStyleProfile(injectionStyle);
     const budget = normalizeBudget(budgetOptions);
-    const worldBaseLines = trimLinesByBudget(context.worldBaseLines, budget.worldBaseChars);
-    const sceneSharedLines = trimLinesByBudget(context.sceneSharedLines, budget.sceneSharedChars);
-    const entityLines = trimLinesByBudget(context.entityLines ?? [], Math.floor(budget.sceneSharedChars * 0.6));
-    const actorViewLines = trimLinesByBudget([
-        ...context.actorView.identityLines,
-        ...context.actorView.relationshipLines,
-        ...context.actorView.eventLines,
-        ...context.actorView.shadowEventLines,
-        ...context.actorView.interpretationLines,
-    ], budget.actorViewChars);
+    const timelineLines = takeLinesByCount(context.timelineLines, budget.timelineMaxItems);
+    const worldBaseLines = takeLinesByCount(context.worldBaseLines, budget.worldBaseMaxItems);
+    const sceneActiveLines = takeLinesByCount(context.sceneActiveLines, budget.sceneActiveMaxItems);
+    const sceneRecentLines = takeLinesByCount(context.sceneRecentLines, budget.sceneRecentMaxItems);
+    const entityLines = takeLinesByCount(context.entityLines ?? [], budget.entityMaxItems);
+    const identityLines = takeLinesByCount(context.actorView.identityLines, budget.identityMaxItems);
+    const relationshipLines = takeLinesByCount(context.actorView.relationshipLines, budget.relationshipMaxItems);
+    const eventLines = takeLinesByCount(context.actorView.eventLines, budget.eventMaxItems);
+    const shadowEventLines = takeLinesByCount(context.actorView.shadowEventLines ?? [], budget.shadowEventMaxItems);
+    const interpretationLines = takeLinesByCount(context.actorView.interpretationLines, budget.interpretationMaxItems);
 
-    const identityLines = trimLinesByBudget(context.actorView.identityLines, Math.floor(budget.actorViewChars * 0.22));
-    const relationshipLines = trimLinesByBudget(
-        context.actorView.relationshipLines,
-        Math.floor(budget.actorViewChars * 0.28),
-    );
-    const eventLines = trimLinesByBudget(context.actorView.eventLines, Math.floor(budget.actorViewChars * 0.32));
-    const shadowEventLines = trimLinesByBudget(
-        context.actorView.shadowEventLines ?? [],
-        Math.floor(budget.actorViewChars * 0.24),
-    );
-    const interpretationLines = trimLinesByBudget(
-        context.actorView.interpretationLines,
-        Math.floor(budget.actorViewChars * 0.28),
-    );
-
-    const assembled = [
+    return [
         '<memory_context version="1.0">',
-        ...(context.timelineLines.length > 0 ? [
-            '  <timeline_overview>',
-            '## 当前事件时间线',
-            renderBulletLines(context.timelineLines),
-            '  </timeline_overview>',
+        ...(timelineLines.length > 0 ? [
+            '  <timeline_index>',
+            '## 当前时间线',
+            renderBulletLines(timelineLines),
+            '  </timeline_index>',
             '',
         ] : []),
         '  <world_base>',
@@ -73,11 +70,20 @@ export function renderMemoryContextXmlMarkdown(
         renderBulletLines(worldBaseLines),
         '  </world_base>',
         '',
-        '  <scene_shared>',
-        `## ${style.sceneSharedTitle}`,
-        renderBulletLines(sceneSharedLines),
-        '  </scene_shared>',
-        '',
+        ...(sceneActiveLines.length > 0 ? [
+            '  <scene_active>',
+            `## ${style.sceneActiveTitle ?? style.sceneSharedTitle}`,
+            renderBulletLines(sceneActiveLines),
+            '  </scene_active>',
+            '',
+        ] : []),
+        ...(sceneRecentLines.length > 0 ? [
+            '  <scene_recent>',
+            `## ${style.sceneRecentTitle ?? '近期重要场景'}`,
+            renderBulletLines(sceneRecentLines),
+            '  </scene_recent>',
+            '',
+        ] : []),
         ...(entityLines.length > 0 ? [
             '  <entity_ledger>',
             '## 已知实体',
@@ -105,12 +111,6 @@ export function renderMemoryContextXmlMarkdown(
         '  </actor_view>',
         '</memory_context>',
     ].join('\n').trim();
-
-    if (assembled.length <= budget.totalChars) {
-        return assembled;
-    }
-    const hardTrimmed = assembled.slice(0, budget.totalChars).trim();
-    return `${hardTrimmed}\n<!-- budget_trimmed -->`;
 }
 
 /**
@@ -131,42 +131,54 @@ function escapeXmlAttribute(value: string): string {
  * @param value 原始配置。
  * @returns 标准化预算。
  */
-function normalizeBudget(value: Partial<XmlNarrativeBudgetOptions>): XmlNarrativeBudgetOptions {
-    const worldBaseChars = Math.max(300, Number(value.worldBaseChars ?? DEFAULT_BUDGET.worldBaseChars) || DEFAULT_BUDGET.worldBaseChars);
-    const sceneSharedChars = Math.max(240, Number(value.sceneSharedChars ?? DEFAULT_BUDGET.sceneSharedChars) || DEFAULT_BUDGET.sceneSharedChars);
-    const actorViewChars = Math.max(420, Number(value.actorViewChars ?? DEFAULT_BUDGET.actorViewChars) || DEFAULT_BUDGET.actorViewChars);
-    const totalChars = Math.max(
-        1000,
-        Number(value.totalChars ?? DEFAULT_BUDGET.totalChars) || DEFAULT_BUDGET.totalChars,
-    );
+export function normalizeBudget(value: Partial<XmlNarrativeBudgetOptions>): XmlNarrativeBudgetOptions {
+    const timelineMaxItems = Math.max(0, Math.trunc(Number(value.timelineMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.timelineMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.timelineMaxItems));
+    const worldBaseMaxItems = Math.max(0, Math.trunc(Number(value.worldBaseMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.worldBaseMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.worldBaseMaxItems));
+    const sceneActiveMaxItems = Math.max(0, Math.trunc(Number(value.sceneActiveMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.sceneActiveMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.sceneActiveMaxItems));
+    const sceneRecentMaxItems = Math.max(0, Math.trunc(Number(value.sceneRecentMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.sceneRecentMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.sceneRecentMaxItems));
+    const entityMaxItems = Math.max(0, Math.trunc(Number(value.entityMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.entityMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.entityMaxItems));
+    const identityMaxItems = Math.max(0, Math.trunc(Number(value.identityMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.identityMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.identityMaxItems));
+    const relationshipMaxItems = Math.max(0, Math.trunc(Number(value.relationshipMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.relationshipMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.relationshipMaxItems));
+    const eventMaxItems = Math.max(0, Math.trunc(Number(value.eventMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.eventMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.eventMaxItems));
+    const shadowEventMaxItems = Math.max(0, Math.trunc(Number(value.shadowEventMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.shadowEventMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.shadowEventMaxItems));
+    const interpretationMaxItems = Math.max(0, Math.trunc(Number(value.interpretationMaxItems ?? DEFAULT_XML_NARRATIVE_BUDGET.interpretationMaxItems) || DEFAULT_XML_NARRATIVE_BUDGET.interpretationMaxItems));
     return {
-        worldBaseChars,
-        sceneSharedChars,
-        actorViewChars,
-        totalChars,
+        timelineMaxItems,
+        worldBaseMaxItems,
+        sceneActiveMaxItems,
+        sceneRecentMaxItems,
+        entityMaxItems,
+        identityMaxItems,
+        relationshipMaxItems,
+        eventMaxItems,
+        shadowEventMaxItems,
+        interpretationMaxItems,
     };
 }
 
 /**
- * 功能：按字符预算裁剪条目列表。
+ * 功能：按条数裁剪条目列表。
  * @param lines 文本行。
- * @param budgetChars 预算字符数。
+ * @param maxItems 最大条数。
  * @returns 裁剪后的行列表。
  */
-function trimLinesByBudget(lines: string[], budgetChars: number): string[] {
-    const result: string[] = [];
-    let used = 0;
-    for (const line of lines) {
-        const normalized = String(line ?? '').trim();
-        if (!normalized) {
-            continue;
-        }
-        const next = normalized.length + 2;
-        if (result.length > 0 && used + next > budgetChars) {
-            break;
-        }
-        result.push(normalized);
-        used += next;
-    }
-    return result;
+function takeLinesByCount(lines: string[], maxItems: number): string[] {
+    const normalizedLines = (Array.isArray(lines) ? lines : [])
+        .map((line: string): string => String(line ?? '').trim())
+        .filter(Boolean);
+    return normalizedLines.slice(0, Math.max(0, maxItems));
+}
+
+export function estimateXmlNarrativeRetrievalMaxChars(budgetOptions: Partial<XmlNarrativeBudgetOptions> = {}): number {
+    const budget = normalizeBudget(budgetOptions);
+    const totalPlannedItems = budget.worldBaseMaxItems
+        + budget.sceneActiveMaxItems
+        + budget.sceneRecentMaxItems
+        + budget.entityMaxItems
+        + budget.identityMaxItems
+        + budget.relationshipMaxItems
+        + budget.eventMaxItems
+        + budget.shadowEventMaxItems
+        + budget.interpretationMaxItems;
+    return Math.max(2600, totalPlannedItems * 240);
 }

@@ -138,7 +138,6 @@ export class DreamingService {
             createdAt: now,
             updatedAt: now,
             settingsSnapshot: {
-                contextMaxTokens: settings.contextMaxTokens,
                 retrievalMode: settings.retrievalMode,
                 dreamContextMaxChars: settings.dreamContextMaxChars,
                 dreamPromptVersion: settings.dreamPromptVersion,

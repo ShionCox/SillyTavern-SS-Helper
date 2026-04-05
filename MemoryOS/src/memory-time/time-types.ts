@@ -232,6 +232,7 @@ export interface PromptTimeDisplay {
     primaryLabel: string;
     anchorLabel?: string;
     anchorRelationLabel?: string;
+    anchorDisplayLabel?: string;
     sequenceLabel?: string;
     relativeToNowLabel?: string;
 }
@@ -243,10 +244,11 @@ export interface PromptTimeMeta {
     primaryLabel: string;
     anchorLabel?: string;
     anchorRelationLabel?: string;
+    anchorDisplayLabel?: string;
     sequenceLabel?: string;
     relativeToNowLabel?: string;
     timeLabelForPrompt: string;
-    timeSourceLabel: string;
+    timeSourceLabel?: string;
     timeConfidenceLabel?: string;
     sourceMode: 'explicit_story' | 'inferred_story' | 'sequence_fallback';
 }

@@ -416,6 +416,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let disposed = false;
 
     /**
+     * 功能：使诊断中心预览快照失效，确保下次进入时重新按当前链路生成。
+     * @returns 无返回值。
+     */
+    const invalidatePreviewSnapshot = (): void => {
+        previewCache = null;
+        previewRecallExplanationCache = null;
+        state.previewTabLoaded = false;
+    };
+
+    /**
      * 功能：构造空的向量快照，占位表示尚未加载。
      * @param loaded 是否已加载。
      * @returns 空向量快照。
@@ -757,16 +767,14 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             if (action === 'refresh-preview') {
                 state.previewQuery = readInputValue(root, '#stx-memory-preview-query');
-                previewCache = null;
-                previewRecallExplanationCache = null;
+                invalidatePreviewSnapshot();
                 await render();
                 void refreshPreviewSnapshot();
                 return;
             }
             if (action === 'capture-summary') {
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
-                previewCache = null;
-                previewRecallExplanationCache = null;
+                invalidatePreviewSnapshot();
                 toast.success('已触发强制快照归档。');
                 await render();
                 if (state.currentView === 'preview') {
@@ -1359,7 +1367,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     const bindEvents = (snapshot: WorkbenchSnapshot): void => {
         root.querySelectorAll<HTMLElement>('[data-workbench-view]').forEach((button: HTMLElement): void => {
             button.addEventListener('click', (): void => {
-                state.currentView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
+                const nextView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
+                state.currentView = nextView;
+                if (nextView === 'preview') {
+                    invalidatePreviewSnapshot();
+                }
                 void render().then((): void => {
                     void loadDeferredTabData(state.currentView);
                     if (state.currentView === 'takeover') {

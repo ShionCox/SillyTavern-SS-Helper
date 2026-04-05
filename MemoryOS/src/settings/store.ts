@@ -48,9 +48,19 @@ export type MemoryOSSettings = {
     dreamAutoApplyLowRiskMaintenance: boolean;
     dreamWorkbenchEnabled: boolean;
     dreamRollbackEnabled: boolean;
-    contextMaxTokens: number;
     injectionPromptEnabled: boolean;
     injectionPreviewEnabled: boolean;
+    injectionCustomBudgetEnabled: boolean;
+    timelineMaxItems: number;
+    worldBaseMaxItems: number;
+    sceneActiveMaxItems: number;
+    sceneRecentMaxItems: number;
+    entityMaxItems: number;
+    identityMaxItems: number;
+    relationshipMaxItems: number;
+    eventMaxItems: number;
+    shadowEventMaxItems: number;
+    interpretationMaxItems: number;
     summaryAutoTriggerEnabled: boolean;
     summaryProgressOverlayEnabled: boolean;
     summaryIntervalFloors: number;
@@ -193,9 +203,19 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     dreamAutoApplyLowRiskMaintenance: false,
     dreamWorkbenchEnabled: true,
     dreamRollbackEnabled: true,
-    contextMaxTokens: 1200,
     injectionPromptEnabled: true,
     injectionPreviewEnabled: true,
+    injectionCustomBudgetEnabled: false,
+    timelineMaxItems: 5,
+    worldBaseMaxItems: 4,
+    sceneActiveMaxItems: 3,
+    sceneRecentMaxItems: 3,
+    entityMaxItems: 3,
+    identityMaxItems: 3,
+    relationshipMaxItems: 4,
+    eventMaxItems: 5,
+    shadowEventMaxItems: 2,
+    interpretationMaxItems: 3,
     summaryAutoTriggerEnabled: true,
     summaryProgressOverlayEnabled: true,
     summaryIntervalFloors: 1,
@@ -281,9 +301,45 @@ export function resolveRetrievalEnableQueryContextBuilder(
  * @returns 归一化后的设置。
  */
 export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>): MemoryOSSettings {
-    const contextMaxTokens: number = Math.max(
-        200,
-        Math.min(10000, Number(candidate.contextMaxTokens) || DEFAULT_MEMORY_OS_SETTINGS.contextMaxTokens),
+    const timelineMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.timelineMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.timelineMaxItems)),
+    );
+    const worldBaseMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.worldBaseMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.worldBaseMaxItems)),
+    );
+    const sceneActiveMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.sceneActiveMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.sceneActiveMaxItems)),
+    );
+    const sceneRecentMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.sceneRecentMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.sceneRecentMaxItems)),
+    );
+    const entityMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.entityMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.entityMaxItems)),
+    );
+    const identityMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.identityMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.identityMaxItems)),
+    );
+    const relationshipMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.relationshipMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.relationshipMaxItems)),
+    );
+    const eventMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.eventMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.eventMaxItems)),
+    );
+    const shadowEventMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.shadowEventMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.shadowEventMaxItems)),
+    );
+    const interpretationMaxItems: number = Math.max(
+        0,
+        Math.min(20, Math.trunc(Number(candidate.interpretationMaxItems) || DEFAULT_MEMORY_OS_SETTINGS.interpretationMaxItems)),
     );
     const dreamContextMaxChars: number = Math.max(
         1000,
@@ -566,9 +622,19 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         dreamAutoApplyLowRiskMaintenance: candidate.dreamAutoApplyLowRiskMaintenance === true,
         dreamWorkbenchEnabled: candidate.dreamWorkbenchEnabled !== false,
         dreamRollbackEnabled: candidate.dreamRollbackEnabled !== false,
-        contextMaxTokens,
         injectionPromptEnabled: candidate.injectionPromptEnabled !== false,
         injectionPreviewEnabled: candidate.injectionPreviewEnabled !== false,
+        injectionCustomBudgetEnabled: candidate.injectionCustomBudgetEnabled === true,
+        timelineMaxItems,
+        worldBaseMaxItems,
+        sceneActiveMaxItems,
+        sceneRecentMaxItems,
+        entityMaxItems,
+        identityMaxItems,
+        relationshipMaxItems,
+        eventMaxItems,
+        shadowEventMaxItems,
+        interpretationMaxItems,
         summaryAutoTriggerEnabled: candidate.summaryAutoTriggerEnabled !== false,
         summaryProgressOverlayEnabled: candidate.summaryProgressOverlayEnabled !== false,
         summaryIntervalFloors,
