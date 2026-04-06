@@ -110,9 +110,11 @@ import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallS
 import { openDreamReviewDialog } from '../ui/dream-review-dialog';
 import {
     applyManualWorldStrategyOverride,
+    buildWorldStrategyExplanationFromDetection,
     resetChatWorldStrategyToAuto,
     resolveChatWorldStrategy,
 } from '../services/world-strategy-service';
+import { detectWorldProfile } from '../memory-world-profile';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
@@ -232,6 +234,7 @@ export interface MemoryColdStartWorldbookSelection {
  */
 export interface MemoryTakeoverExecutionResult {
     ok: boolean;
+    finished: boolean;
     reasonCode: string;
     errorMessage?: string;
     progress: MemoryTakeoverProgressSnapshot | null;
@@ -448,6 +451,10 @@ export class MemorySDKImpl {
              getWorldProfileBinding: () => ReturnType<EntryRepository['getWorldProfileBinding']>;
              setWorldProfileBinding: (input: { primaryProfile: string; secondaryProfiles?: string[] }) => Promise<WorldProfileBinding>;
              resetWorldProfileBinding: () => Promise<WorldProfileBinding | null>;
+             testWorldProfile: (input: { text: string }) => Promise<{
+                 detection: ReturnType<typeof detectWorldProfile>;
+                 explanation: ReturnType<typeof buildWorldStrategyExplanationFromDetection>;
+             }>;
              listMutationHistory: (limit?: number) => ReturnType<EntryRepository['listMutationHistory']>;
              listEntryAuditRecords: (limit?: number) => ReturnType<EntryRepository['listEntryAuditRecords']>;
              getVectorRuntimeStatus: () => Promise<MemoryVectorRuntimeStatus>;
@@ -672,6 +679,7 @@ export class MemorySDKImpl {
                 if (!progress) {
                     return {
                         ok: false,
+                        finished: false,
                         reasonCode: 'takeover_plan_missing',
                         errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
                         progress: null,
@@ -693,6 +701,7 @@ export class MemorySDKImpl {
                 if (!progress) {
                     return {
                         ok: false,
+                        finished: false,
                         reasonCode: 'takeover_plan_missing',
                         errorMessage: '当前聊天还没有可恢复的旧聊天处理计划。',
                         progress: null,
@@ -711,16 +720,13 @@ export class MemorySDKImpl {
                 if (!progress) {
                     return {
                         ok: false,
+                        finished: false,
                         reasonCode: 'takeover_plan_missing',
                         errorMessage: '当前聊天还没有可整合的旧聊天处理计划。',
                         progress: null,
                     };
                 }
-                return {
-                    ok: true,
-                    reasonCode: 'completed',
-                    progress,
-                };
+                return this.toTakeoverExecutionResult(progress, 'ok');
             },
             rebuildTakeoverRange: async (startFloor: number, endFloor: number, batchSize?: number): Promise<MemoryTakeoverExecutionResult> => {
                 const snapshot = await this.takeoverService.createPlanSnapshot(await this.readCurrentSummaryFloorCount(), {
@@ -732,6 +738,7 @@ export class MemorySDKImpl {
                 if (!snapshot.plan) {
                     return {
                         ok: false,
+                        finished: false,
                         reasonCode: 'takeover_plan_missing',
                         errorMessage: '当前聊天还没有可重建区间的旧聊天处理计划。',
                         progress: snapshot,
@@ -1159,6 +1166,20 @@ export class MemorySDKImpl {
                     });
                     return strategy.binding;
                 },
+                testWorldProfile: async (input: { text: string }) => {
+                    const normalizedText = String(input.text ?? '').trim();
+                    const detection = detectWorldProfile({
+                        signals: [{
+                            text: normalizedText,
+                            sourceType: 'query',
+                            weight: 1.5,
+                        }],
+                    });
+                    return {
+                        detection,
+                        explanation: buildWorldStrategyExplanationFromDetection(detection),
+                    };
+                },
                 listMutationHistory: async (limit?: number) => this.entryRepository.listMutationHistory(limit),
                 listEntryAuditRecords: async (limit?: number) => this.entryRepository.listEntryAuditRecords(limit),
                 getVectorRuntimeStatus: async (): Promise<MemoryVectorRuntimeStatus> => this.readVectorRuntimeStatus(),
@@ -1315,10 +1336,14 @@ export class MemorySDKImpl {
         progress: MemoryTakeoverProgressSnapshot,
         fallbackReasonCode: string,
     ): MemoryTakeoverExecutionResult {
+        const planStatus = progress.plan?.status;
+        const isFinished = planStatus === 'completed' || planStatus === 'degraded';
+        const isSuccessful = Boolean(progress.plan) && planStatus !== 'failed' && planStatus !== 'paused';
         return {
-            ok: Boolean(progress.plan) && progress.plan?.status !== 'failed' && progress.plan?.status !== 'paused',
-            reasonCode: progress.plan?.status === 'completed' ? 'completed' : (progress.plan?.status ?? fallbackReasonCode),
-            errorMessage: progress.plan?.status === 'failed' || progress.plan?.status === 'paused'
+            ok: isSuccessful,
+            finished: isFinished,
+            reasonCode: planStatus === 'completed' ? 'completed' : (planStatus ?? fallbackReasonCode),
+            errorMessage: planStatus === 'failed' || planStatus === 'paused'
                 ? String(progress.plan?.lastError ?? '').trim() || undefined
                 : undefined,
             progress,

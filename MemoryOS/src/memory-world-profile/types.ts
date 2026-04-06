@@ -44,6 +44,10 @@ export interface WorldProfileDetectionResult {
     secondaryProfiles: string[];
     confidence: number;
     reasonCodes: string[];
+    matchedKeywords?: string[];
+    conflictKeywords?: string[];
+    sourceTypes?: string[];
+    mixedProfileCandidate?: string;
 }
 
 /**

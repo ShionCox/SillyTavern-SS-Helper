@@ -125,6 +125,7 @@ export class PromptAssemblyService {
             roleEntries,
             activeActorKey: effectiveActorKey,
             timelineProfile,
+            injectionStyle: worldStrategy.profile.primary.injectionStyle,
         });
 
         recordMemoryDebug(this.chatKey, {

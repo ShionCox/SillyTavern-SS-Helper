@@ -33,6 +33,7 @@ import type {
 } from '../../../SDK/db';
 import { SSHelperDatabase } from '../../../SDK/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { clearAllVectorDataForChat } from './vector-db';
 import type {
     MemoryTakeoverActiveSnapshot,
     MemoryTakeoverBaseline,
@@ -902,6 +903,7 @@ export async function clearMemoryChatData(
                 },
             },
         }),
+        clearAllVectorDataForChat(chatKey),
     ]);
 }
 

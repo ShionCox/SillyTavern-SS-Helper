@@ -42,7 +42,7 @@ export interface MemoryLLMApi {
         };
         schema?: unknown;
         schemaCompat?: {
-            strictAutofill?: 'off' | 'default' | 'provider';
+            strictAutofill?: 'off' | 'default' | 'force';
             onIncompatible?: 'downgrade' | 'error';
         };
         budget?: { maxLatencyMs?: number; maxTokens?: number; maxCost?: number };

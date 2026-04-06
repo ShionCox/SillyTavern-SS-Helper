@@ -337,6 +337,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         previewQuery: '',
         previewTabLoaded: false,
         previewTabLoading: false,
+        worldProfileTestInput: '',
+        worldProfileTestRunning: false,
+        worldProfileTestResult: null,
         bindEntryId: '',
         actorQuery: '',
         actorSortOrder: 'stat-desc',
@@ -406,6 +409,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let takeoverProgressCache: WorkbenchSnapshot['takeoverProgress'] = null;
     let takeoverProgressSequence = 0;
     let takeoverProgressPollTimer: number | null = null;
+    let previewLoadSequence = 0;
     let previewCache: WorkbenchSnapshot['preview'] = null;
     let previewRecallExplanationCache: WorkbenchSnapshot['recallExplanation'] = null;
     let vectorLoadSequence = 0;
@@ -420,9 +424,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 无返回值。
      */
     const invalidatePreviewSnapshot = (): void => {
+        previewLoadSequence += 1;
         previewCache = null;
         previewRecallExplanationCache = null;
         state.previewTabLoaded = false;
+        state.previewTabLoading = false;
     };
 
     /**
@@ -447,6 +453,20 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         recallStats: [],
     });
     let vectorCache: WorkbenchSnapshot['vectorSnapshot'] = createEmptyVectorSnapshot(false);
+
+    /**
+     * 功能：使向量快照失效，确保清库后不再保留旧缓存。
+     * @returns 无返回值。
+     */
+    const invalidateVectorSnapshot = (): void => {
+        vectorLoadSequence += 1;
+        vectorCache = createEmptyVectorSnapshot(false);
+        state.vectorTabLoaded = false;
+        state.vectorTabLoading = false;
+        state.vectorSelectedDocId = '';
+        state.vectorTestResult = null;
+        state.vectorTestProgress = null;
+    };
 
     /**
      * 功能：将内容实验室配置同步到工作台状态。
@@ -784,9 +804,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 invalidatePreviewSnapshot();
                 toast.success('当前聊天的世界画像已切换为手动覆盖。');
                 await render();
-                if (state.currentView === 'preview') {
-                    void refreshPreviewSnapshot();
-                }
                 return;
             }
             if (action === 'world-profile-reset') {
@@ -794,8 +811,42 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 invalidatePreviewSnapshot();
                 toast.success('当前聊天的世界画像已恢复自动识别。');
                 await render();
-                if (state.currentView === 'preview') {
-                    void refreshPreviewSnapshot();
+                return;
+            }
+            if (action === 'world-profile-test') {
+                const testInput = readInputValue(root, '#stx-memory-world-profile-test-input');
+                if (!testInput) {
+                    toast.info('请先输入一段测试文本。');
+                    return;
+                }
+                state.worldProfileTestInput = testInput;
+                state.worldProfileTestRunning = true;
+                await render();
+                try {
+                    const result = await memory.unifiedMemory.diagnostics.testWorldProfile({
+                        text: testInput,
+                    });
+                    state.worldProfileTestResult = {
+                        primaryProfile: result.detection.primaryProfile,
+                        secondaryProfiles: result.detection.secondaryProfiles,
+                        confidence: result.detection.confidence,
+                        reasonCodes: result.detection.reasonCodes,
+                        matchedKeywords: result.detection.matchedKeywords ?? [],
+                        conflictKeywords: result.detection.conflictKeywords ?? [],
+                        sourceTypes: result.detection.sourceTypes ?? [],
+                        mixedProfileCandidate: result.detection.mixedProfileCandidate,
+                        preferredSchemas: result.explanation.preferredSchemas,
+                        preferredFacets: result.explanation.preferredFacets,
+                        suppressedTypes: result.explanation.suppressedTypes,
+                        fieldExtensions: result.explanation.fieldExtensions,
+                    };
+                    toast.success('世界画像测试完成。');
+                } catch (error) {
+                    logger.warn('世界画像测试失败', error);
+                    toast.error(`世界画像测试失败：${String((error as Error)?.message ?? error)}`);
+                } finally {
+                    state.worldProfileTestRunning = false;
+                    await render();
                 }
                 return;
             }
@@ -804,9 +855,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 invalidatePreviewSnapshot();
                 toast.success('已触发强制快照归档。');
                 await render();
-                if (state.currentView === 'preview') {
-                    void refreshPreviewSnapshot();
-                }
                 return;
             }
             if (action === 'set-dream-subview') {
@@ -922,6 +970,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 if (!confirmed) {
                     return;
                 }
+                invalidatePreviewSnapshot();
+                invalidateVectorSnapshot();
                 await memory.chatState.clearCurrentChatData();
                 state.selectedEntryId = '';
                 state.selectedTypeKey = '';
@@ -1108,7 +1158,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         toast.error(executionResult.errorMessage || `旧聊天接管启动失败：${executionResult.reasonCode}`);
                         return;
                     }
-                    toast.success('旧聊天接管本轮执行已完成。');
+                    toastTakeoverExecutionResult(executionResult, {
+                        completedText: '旧聊天接管本轮执行已完成。',
+                        runningText: '旧聊天接管仍在后台收尾，请稍后刷新进度。',
+                        blockedText: '旧聊天接管已执行到阻塞点，请根据提示继续处理。',
+                    });
                 });
                 return;
             }
@@ -1132,7 +1186,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         toast.error(executionResult.errorMessage || `接管任务继续失败：${executionResult.reasonCode}`);
                         return;
                     }
-                    toast.success('接管任务本轮继续执行已完成。');
+                    toastTakeoverExecutionResult(executionResult, {
+                        completedText: '接管任务本轮继续执行已完成。',
+                        runningText: '接管任务仍在后台继续执行，请稍后刷新进度。',
+                        blockedText: '接管任务已继续到阻塞点，请根据提示继续处理。',
+                    });
                 });
                 return;
             }
@@ -1145,7 +1203,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         toast.error(executionResult.errorMessage || `接管整合失败：${executionResult.reasonCode}`);
                         return;
                     }
-                    toast.success('接管整合已完成。');
+                    toastTakeoverExecutionResult(executionResult, {
+                        completedText: '接管整合已完成。',
+                        runningText: '接管整合仍在后台收尾，请稍后刷新进度。',
+                        blockedText: '接管整合已停在阻塞点，请根据提示继续处理。',
+                    });
                 });
                 return;
             }
@@ -1396,9 +1458,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             button.addEventListener('click', (): void => {
                 const nextView = String(button.dataset.workbenchView ?? 'entries') as WorkbenchView;
                 state.currentView = nextView;
-                if (nextView === 'preview') {
-                    invalidatePreviewSnapshot();
-                }
                 void render().then((): void => {
                     void loadDeferredTabData(state.currentView);
                     if (state.currentView === 'takeover') {
@@ -1747,19 +1806,29 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             state.previewTabLoading = false;
             return;
         }
+        const currentSequence = ++previewLoadSequence;
         state.previewTabLoading = true;
         try {
             const [preview, recallExplanation] = await Promise.all([
                 memory.unifiedMemory.prompts.preview({ query: state.previewQuery }),
                 memory.chatState.getLatestRecallExplanation(),
             ]);
+            if (disposed || currentSequence !== previewLoadSequence) {
+                return;
+            }
             previewCache = preview;
             previewRecallExplanationCache = normalizeRecallExplanation(recallExplanation);
             state.previewTabLoaded = true;
         } catch (error) {
+            if (currentSequence !== previewLoadSequence) {
+                return;
+            }
             logger.error('加载诊断中心预览失败', error);
             toast.error(`诊断加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
+            if (currentSequence !== previewLoadSequence) {
+                return;
+            }
             state.previewTabLoading = false;
             if (!disposed && state.currentView === 'preview') {
                 await render();
@@ -1933,10 +2002,6 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 异步完成。
      */
     const loadDeferredTabData = async (view: WorkbenchView): Promise<void> => {
-        if (view === 'preview' && !state.previewTabLoaded && !state.previewTabLoading) {
-            await refreshPreviewSnapshot();
-            return;
-        }
         if (view === 'vectors' && !state.vectorTabLoaded && !state.vectorTabLoading) {
             await refreshVectorSnapshot();
             return;
@@ -2356,4 +2421,34 @@ function downloadJsonFile(fileName: string, data: unknown): void {
     window.setTimeout((): void => {
         URL.revokeObjectURL(objectUrl);
     }, 0);
+}
+
+/**
+ * 功能：根据旧聊天接管执行结果显示统一提示。
+ * @param result 接管执行结果。
+ * @param options 文案配置。
+ * @returns 无返回值。
+ */
+function toastTakeoverExecutionResult(
+    result: {
+        finished: boolean;
+        reasonCode: string;
+        progress: { plan?: { status?: string } | null } | null;
+    },
+    options: {
+        completedText: string;
+        runningText: string;
+        blockedText: string;
+    },
+): void {
+    const status = String(result.progress?.plan?.status ?? result.reasonCode ?? '').trim();
+    if (result.finished || status === 'completed' || status === 'degraded') {
+        toast.success(options.completedText);
+        return;
+    }
+    if (status === 'blocked_by_batch') {
+        toast.warning(options.blockedText);
+        return;
+    }
+    toast.info(options.runningText);
 }

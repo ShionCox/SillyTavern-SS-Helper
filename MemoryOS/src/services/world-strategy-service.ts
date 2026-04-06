@@ -1,4 +1,5 @@
 import {
+    buildWorldProfileSourceHash,
     detectWorldProfile,
     listWorldProfiles,
     resolveWorldProfile,
@@ -18,6 +19,10 @@ export interface WorldStrategyRepository {
         detectedFrom: string[];
         bindingMode?: 'auto' | 'manual';
     }): Promise<WorldProfileBinding>;
+    appendMutationHistory?(input: {
+        action: string;
+        payload: Record<string, unknown>;
+    }): Promise<unknown>;
 }
 
 export interface WorldStrategyExplanation {
@@ -35,6 +40,11 @@ export interface WorldStrategyExplanation {
     fieldExtensions: Record<string, string[]>;
     capabilities: ResolvedWorldProfile['mergedCapabilities'];
     effectSummary: string[];
+    matchedKeywords: string[];
+    conflictKeywords: string[];
+    sourceTypes: string[];
+    mixedProfileCandidate?: string;
+    sourceHash?: string;
 }
 
 export interface ResolvedChatWorldStrategy {
@@ -73,6 +83,12 @@ export async function resolveChatWorldStrategy(input: {
     const binding = input.binding ?? await input.repository?.getWorldProfileBinding() ?? null;
     const normalizedTexts = normalizeTextList(input.texts ?? []);
     const normalizedDetectedFrom = normalizeTextList(input.detectedFrom ?? normalizedTexts);
+    const detectionSourceHash = normalizedDetectedFrom.length > 0
+        ? buildWorldProfileSourceHash({
+            chatKey: 'chat',
+            detectedFrom: normalizedDetectedFrom,
+        })
+        : '';
 
     if (binding && binding.bindingMode === 'manual' && !input.forceRedetect) {
         return buildResolvedStrategy({
@@ -81,7 +97,7 @@ export async function resolveChatWorldStrategy(input: {
         });
     }
 
-    if (binding && !input.forceRedetect) {
+    if (binding && !input.forceRedetect && (!detectionSourceHash || binding.sourceHash === detectionSourceHash)) {
         return buildResolvedStrategy({
             detection: bindingToDetection(binding),
             binding,
@@ -89,7 +105,11 @@ export async function resolveChatWorldStrategy(input: {
     }
 
     const detection = detectWorldProfile({
-        texts: normalizedTexts,
+        signals: normalizedTexts.map((text: string, index: number) => ({
+            text,
+            sourceType: index === 0 ? 'query' : index === 1 ? 'system_prompt' : 'entry_summary',
+            weight: index === 0 ? 1.2 : index === 1 ? 2 : 0.92,
+        })),
     });
     let persistedBinding = binding ?? null;
 
@@ -105,6 +125,28 @@ export async function resolveChatWorldStrategy(input: {
             detectedFrom: normalizedDetectedFrom,
             bindingMode: 'auto',
         });
+        const bindingChanged = !binding
+            || binding.primaryProfile !== persistedBinding.primaryProfile
+            || normalizeTextList(binding.secondaryProfiles ?? []).join('|') !== normalizeTextList(persistedBinding.secondaryProfiles ?? []).join('|')
+            || binding.bindingMode !== persistedBinding.bindingMode
+            || binding.sourceHash !== persistedBinding.sourceHash;
+        if (bindingChanged && input.repository.appendMutationHistory) {
+            await input.repository.appendMutationHistory({
+                action: 'world_profile_bound',
+                payload: {
+                    source: input.forceRedetect ? 'world_strategy_redetect' : 'world_strategy_auto',
+                    primaryProfile: detection.primaryProfile,
+                    secondaryProfiles: detection.secondaryProfiles,
+                    confidence: detection.confidence,
+                    reasonCodes: detection.reasonCodes,
+                    bindingMode: 'auto',
+                    sourceHash: persistedBinding.sourceHash,
+                    previousPrimaryProfile: binding?.primaryProfile ?? '',
+                    previousSecondaryProfiles: binding?.secondaryProfiles ?? [],
+                    changed: binding ? binding.primaryProfile !== persistedBinding.primaryProfile : true,
+                },
+            });
+        }
     }
 
     return buildResolvedStrategy({
@@ -233,8 +275,10 @@ export function sortEntriesByWorldStrategy<T extends { entryType: string; update
     const weights = new Map(strategy.profile.mergedPreferredSchemas.map((schemaId: string, index: number): [string, number] => {
         return [schemaId, strategy.profile.mergedPreferredSchemas.length - index];
     }));
+    const suppressedTypes = new Set(strategy.profile.mergedSummaryBias.suppressedTypes);
     return [...entries].sort((left: T, right: T): number => {
-        const diff = (weights.get(right.entryType) ?? 0) - (weights.get(left.entryType) ?? 0);
+        const diff = resolveWorldEntryWeight(right.entryType, weights, suppressedTypes)
+            - resolveWorldEntryWeight(left.entryType, weights, suppressedTypes);
         if (diff !== 0) {
             return diff;
         }
@@ -252,6 +296,12 @@ export function buildWorldStrategyHintText(
     strategy: ResolvedChatWorldStrategy,
     scene: 'summary' | 'dream' | 'takeover' | 'bootstrap' | 'prompt',
 ): string {
+    const commonHints = [
+        `检索优先 schema：${strategy.explanation.preferredSchemas.join(' / ') || '无'}`,
+        `抑制类型：${strategy.explanation.suppressedTypes.join(' / ') || '无'}`,
+        `扩展字段重点：${summarizeFieldExtensions(strategy.explanation.fieldExtensions)}`,
+        strategy.explanation.mixedProfileCandidate ? `混合题材候选：${strategy.explanation.mixedProfileCandidate}` : '',
+    ].filter(Boolean);
     const hints = scene === 'summary'
         ? strategy.summaryHints
         : scene === 'dream'
@@ -263,6 +313,7 @@ export function buildWorldStrategyHintText(
                     : strategy.explanation.effectSummary;
     return [
         `当前世界画像：${strategy.explanation.displayName}（${strategy.explanation.profileId}）`,
+        ...commonHints.map((item: string): string => `- ${item}`),
         ...hints.map((item: string): string => `- ${item}`),
     ].join('\n');
 }
@@ -293,6 +344,18 @@ export function buildWorldStrategyExplanationFromBinding(binding: WorldProfileBi
     }).explanation;
 }
 
+/**
+ * 功能：基于识别结果直接构建世界策略说明。
+ * @param detection 识别结果。
+ * @returns 世界策略说明。
+ */
+export function buildWorldStrategyExplanationFromDetection(detection: WorldProfileDetectionResult): WorldStrategyExplanation {
+    return buildResolvedStrategy({
+        detection,
+        binding: null,
+    }).explanation;
+}
+
 function buildResolvedStrategy(input: {
     detection: WorldProfileDetectionResult;
     binding: WorldProfileBinding | null;
@@ -319,6 +382,20 @@ function buildResolvedStrategy(input: {
             fieldExtensions: profile.mergedFieldExtensions,
             capabilities: profile.mergedCapabilities,
             effectSummary,
+            matchedKeywords: uniqueStrings([
+                ...(input.detection.matchedKeywords ?? []),
+                ...extractReasonValues(input.detection.reasonCodes, 'kw'),
+            ]),
+            conflictKeywords: uniqueStrings([
+                ...(input.detection.conflictKeywords ?? []),
+                ...extractReasonValues(input.detection.reasonCodes, 'conflict'),
+            ]),
+            sourceTypes: uniqueStrings([
+                ...(input.detection.sourceTypes ?? []),
+                ...extractReasonValues(input.detection.reasonCodes, 'signal'),
+            ]),
+            mixedProfileCandidate: input.detection.mixedProfileCandidate || extractReasonValues(input.detection.reasonCodes, 'mixed')[0] || undefined,
+            sourceHash: input.binding?.sourceHash,
         },
         retrievalBias: {
             preferredSchemas: profile.mergedPreferredSchemas,
@@ -345,6 +422,10 @@ function bindingToDetection(binding: WorldProfileBinding): WorldProfileDetection
             ...(binding.reasonCodes ?? []),
             'source:world_profile_binding',
         ]),
+        matchedKeywords: extractReasonValues(binding.reasonCodes ?? [], 'kw'),
+        conflictKeywords: extractReasonValues(binding.reasonCodes ?? [], 'conflict'),
+        sourceTypes: extractReasonValues(binding.reasonCodes ?? [], 'signal'),
+        mixedProfileCandidate: extractReasonValues(binding.reasonCodes ?? [], 'mixed')[0] ?? '',
     };
 }
 
@@ -352,6 +433,7 @@ function buildEffectSummary(profile: ResolvedWorldProfile): string[] {
     return [
         `注入风格使用 ${profile.primary.injectionStyle}。`,
         `检索优先 schema：${profile.mergedPreferredSchemas.join(' / ') || '无'}。`,
+        `抑制类型：${profile.mergedSummaryBias.suppressedTypes.join(' / ') || '无'}。`,
         `总结强化类型：${profile.mergedSummaryBias.boostedTypes.join(' / ') || '无'}。`,
         `扩展字段重点：${summarizeFieldExtensions(profile.mergedFieldExtensions)}。`,
     ];
@@ -478,4 +560,23 @@ function summarizeFieldExtensions(fieldExtensions: Record<string, string[]>): st
         .slice(0, 3)
         .map(([schemaId, fields]): string => `${schemaId}.${fields.slice(0, 3).join('/')}`);
     return rows.join('；') || '无';
+}
+
+function resolveWorldEntryWeight(
+    entryType: string,
+    weights: Map<string, number>,
+    suppressedTypes: Set<string>,
+): number {
+    const normalizedType = String(entryType ?? '').trim();
+    const preferredWeight = weights.get(normalizedType) ?? 0;
+    const suppressedPenalty = suppressedTypes.has(normalizedType) ? 3 : 0;
+    return preferredWeight - suppressedPenalty;
+}
+
+function extractReasonValues(reasonCodes: string[], prefix: string): string[] {
+    return normalizeTextList(
+        (Array.isArray(reasonCodes) ? reasonCodes : [])
+            .filter((code: string): boolean => String(code ?? '').startsWith(`${prefix}:`))
+            .map((code: string): string => code.slice(prefix.length + 1)),
+    );
 }

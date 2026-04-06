@@ -117,6 +117,8 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('basic_info'))}</div>
                     ${buildWorldProfilePanelMarkup(snapshot)}
+                    ${buildWorldProfileTestBenchMarkup(state)}
+                    ${buildWorldProfileHistoryMarkup(snapshot)}
                 </div>
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
@@ -298,6 +300,10 @@ function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
     const fieldExtensions = Object.entries(explanation?.fieldExtensions ?? {})
         .map(([schemaId, fields]: [string, string[]]): string => `${schemaId}: ${fields.join(' / ')}`)
         .join('；') || resolvePreviewWorkbenchText('empty_value');
+    const matchedKeywordText = resolveWorldIdentifierList(explanation?.matchedKeywords ?? [], (value: string): string => value);
+    const conflictKeywordText = resolveWorldIdentifierList(explanation?.conflictKeywords ?? [], (value: string): string => value);
+    const sourceTypeText = resolveWorldIdentifierList(explanation?.sourceTypes ?? [], resolveWorldReasonCodeLabel);
+    const suppressedTypeText = resolveWorldIdentifierList(explanation?.suppressedTypes ?? [], (value: string): string => value);
     const capabilityText = explanation
         ? [
             explanation.capabilities.hasMagic ? '魔法' : '',
@@ -322,8 +328,14 @@ function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_schemas'))}</span><strong>${escapeHtml((explanation?.preferredSchemas ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_facets'))}</span><strong>${escapeHtml((explanation?.preferredFacets ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('summary_bias'))}</span><strong>${escapeHtml((explanation?.boostedTypes ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>抑制类型</span><strong>${escapeHtml(suppressedTypeText)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('field_extensions'))}</span><strong>${escapeHtml(fieldExtensions)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('capability_flags'))}</span><strong>${escapeHtml(capabilityText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>命中特征</span><strong>${escapeHtml(matchedKeywordText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>冲突特征</span><strong>${escapeHtml(conflictKeywordText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>最近识别来源</span><strong>${escapeHtml(sourceTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>混合题材候选</span><strong>${escapeHtml(explanation?.mixedProfileCandidate ? resolveWorldProfileLabel(explanation.mixedProfileCandidate) : resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>识别指纹</span><strong>${escapeHtml(explanation?.sourceHash || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('created_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
         </div>
@@ -350,6 +362,76 @@ function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
             <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('source_samples'))}</div>
             <div class="stx-memory-workbench__stack">
                 ${(binding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_source_samples'))}</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildWorldProfileTestBenchMarkup(state: WorkbenchState): string {
+    const result = state.worldProfileTestResult;
+    const fieldExtensions = Object.entries(result?.fieldExtensions ?? {})
+        .map(([schemaId, fields]: [string, string[]]): string => `${schemaId}: ${fields.join(' / ')}`)
+        .join('；') || '暂无';
+    return `
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">世界画像测试台</div>
+            <div class="stx-memory-workbench__stack">
+                <textarea class="stx-memory-workbench__textarea" id="stx-memory-world-profile-test-input" placeholder="输入一段设定、世界书或剧情文本，测试当前识别结果。">${escapeHtml(state.worldProfileTestInput)}</textarea>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-test"${state.worldProfileTestRunning ? ' disabled' : ''}>${state.worldProfileTestRunning ? '测试中…' : '开始测试'}</button>
+                </div>
+                ${result ? `
+                    <div class="stx-memory-workbench__info-list">
+                        <div class="stx-memory-workbench__info-row"><span>主画像</span><strong>${escapeHtml(resolveWorldProfileLabel(result.primaryProfile))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>次画像</span><strong>${escapeHtml(resolveWorldIdentifierList(result.secondaryProfiles, resolveWorldProfileLabel))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>置信度</span><strong>${escapeHtml(String(result.confidence))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>命中特征</span><strong>${escapeHtml(result.matchedKeywords.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>冲突特征</span><strong>${escapeHtml(result.conflictKeywords.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>识别来源</span><strong>${escapeHtml(resolveWorldIdentifierList(result.sourceTypes, resolveWorldReasonCodeLabel))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>混合题材候选</span><strong>${escapeHtml(result.mixedProfileCandidate ? resolveWorldProfileLabel(result.mixedProfileCandidate) : '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>推荐 schema 偏置</span><strong>${escapeHtml(result.preferredSchemas.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>推荐 facet 偏置</span><strong>${escapeHtml(result.preferredFacets.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>抑制类型</span><strong>${escapeHtml(result.suppressedTypes.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>扩展字段</span><strong>${escapeHtml(fieldExtensions)}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>原因码</span><strong>${escapeHtml(resolveWorldIdentifierList(result.reasonCodes, resolveWorldReasonCodeLabel))}</strong></div>
+                    </div>
+                ` : `<div class="stx-memory-workbench__empty">输入文本后可在这里查看识别解释。</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildWorldProfileHistoryMarkup(snapshot: WorkbenchSnapshot): string {
+    const historyRecords = snapshot.mutationHistory
+        .filter((history): boolean => history.action === 'world_profile_bound')
+        .slice(0, 8);
+    return `
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">画像绑定历史</div>
+            <div class="stx-memory-workbench__stack">
+                ${historyRecords.length > 0 ? historyRecords.map((history): string => {
+                    const payload = normalizeRecord(history.payload);
+                    const primaryProfile = String(payload.primaryProfile ?? '').trim();
+                    const previousPrimaryProfile = String(payload.previousPrimaryProfile ?? '').trim();
+                    const source = String(payload.source ?? '').trim() || 'unknown';
+                    const sourceHash = String(payload.sourceHash ?? '').trim();
+                    const secondaryProfiles = Array.isArray(payload.secondaryProfiles)
+                        ? (payload.secondaryProfiles as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+                        : [];
+                    const reasonCodes = Array.isArray(payload.reasonCodes)
+                        ? (payload.reasonCodes as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+                        : [];
+                    return `
+                        <div class="stx-memory-workbench__detail-block">
+                            <div><strong>${escapeHtml(formatTimestamp(history.ts))}</strong>｜${escapeHtml(resolveWorldReasonCodeLabel(`signal:${source}`))}</div>
+                            <div style="margin-top:4px;">当前画像：${escapeHtml(primaryProfile ? resolveWorldProfileLabel(primaryProfile) : '暂无')}</div>
+                            <div style="margin-top:4px;">变更前：${escapeHtml(previousPrimaryProfile ? resolveWorldProfileLabel(previousPrimaryProfile) : '暂无')}</div>
+                            <div style="margin-top:4px;">次画像：${escapeHtml(resolveWorldIdentifierList(secondaryProfiles, resolveWorldProfileLabel))}</div>
+                            <div style="margin-top:4px;">原因：${escapeHtml(resolveWorldIdentifierList(reasonCodes, resolveWorldReasonCodeLabel))}</div>
+                            <div style="margin-top:4px;">指纹：${escapeHtml(sourceHash || '暂无')}</div>
+                        </div>
+                    `;
+                }).join('') : `<div class="stx-memory-workbench__empty">暂无画像绑定历史。</div>`}
             </div>
         </div>
     `;

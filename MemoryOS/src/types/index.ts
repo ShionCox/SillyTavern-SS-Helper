@@ -32,6 +32,8 @@ export type {
 export type {
     MemoryTakeoverMode,
     MemoryTakeoverStatus,
+    MemoryTakeoverBatchErrorKind,
+    MemoryTakeoverBatchFailureState,
     MemoryTakeoverRange,
     TakeoverSourceSegmentKind,
     TakeoverSourceSegment,

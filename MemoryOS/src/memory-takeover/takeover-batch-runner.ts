@@ -36,6 +36,7 @@ import { enhanceMemoryTimeContextWithText, mapBatchToMemoryTimeContext } from '.
 import type { MemoryTimeContext } from '../memory-time/time-types';
 import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { logTimeDebug } from '../memory-time/time-debug';
+import { applyWorldProfileFieldPolicy, type WorldProfileFieldPolicy } from '../services/world-profile-field-policy';
 
 /**
  * 功能：定义旧聊天批处理可复用的分类对象提示。
@@ -855,6 +856,7 @@ export async function runTakeoverBatch(input: {
     previousBatchResults?: MemoryTakeoverBatchResult[];
     existingKnownEntities?: MemoryTakeoverKnownEntities;
     worldStrategyHintText?: string;
+    worldProfileFieldPolicy?: WorldProfileFieldPolicy | null;
 }): Promise<MemoryTakeoverBatchResult> {
     const assembly = await assembleTakeoverBatchPromptAssembly({
         llm: input.llm,
@@ -1010,6 +1012,7 @@ export async function runTakeoverBatch(input: {
         range: input.batch.range,
         result: structured,
         sourceSegments,
+        worldProfileFieldPolicy: input.worldProfileFieldPolicy,
     });
     return runTakeoverRepairService({
         llm: input.llm,
@@ -1025,6 +1028,7 @@ export async function runTakeoverBatch(input: {
             range: input.batch.range,
             result: value,
             sourceSegments,
+            worldProfileFieldPolicy: input.worldProfileFieldPolicy,
         }),
     });
 }
@@ -1373,6 +1377,7 @@ export function normalizeTakeoverBatchResult(input: {
     range: MemoryTakeoverRange;
     result: MemoryTakeoverBatchResult;
     sourceSegments?: MemoryTakeoverBatchResult['sourceSegments'];
+    worldProfileFieldPolicy?: WorldProfileFieldPolicy | null;
 }): MemoryTakeoverBatchResult {
     const userDisplayName = resolveCurrentNarrativeUserName();
     const structured = normalizeTakeoverUserPlaceholder(input.result, userDisplayName);
@@ -1395,5 +1400,130 @@ export function normalizeTakeoverBatchResult(input: {
         sourceSegments: input.sourceSegments ?? structured.sourceSegments ?? [],
         generatedAt: Date.now(),
     };
-    return attachTakeoverBatchTimeMeta(normalizedResult);
+    return attachTakeoverBatchTimeMeta(
+        applyTakeoverWorldProfilePolicy(normalizedResult, input.worldProfileFieldPolicy),
+    );
+}
+
+/**
+ * 功能：把世界画像字段策略应用到接管批次结果。
+ * @param result 批次结果。
+ * @param worldProfileFieldPolicy 世界画像字段策略。
+ * @returns 处理后的批次结果。
+ */
+function applyTakeoverWorldProfilePolicy(
+    result: MemoryTakeoverBatchResult,
+    worldProfileFieldPolicy: WorldProfileFieldPolicy | null | undefined,
+): MemoryTakeoverBatchResult {
+    if (!worldProfileFieldPolicy) {
+        return result;
+    }
+    return {
+        ...result,
+        entityCards: result.entityCards.map((card: MemoryTakeoverEntityCardCandidate): MemoryTakeoverEntityCardCandidate => {
+            const fieldPolicy = applyWorldProfileFieldPolicy({
+                schemaId: card.entityType,
+                fields: toRecord(card.fields),
+                reasonCodes: card.reasonCodes ?? [],
+                policy: worldProfileFieldPolicy,
+            });
+            return {
+                ...card,
+                fields: fieldPolicy.fields as MemoryTakeoverEntityCardCandidate['fields'],
+                reasonCodes: fieldPolicy.reasonCodes,
+            };
+        }),
+        entityTransitions: result.entityTransitions.map((transition: MemoryTakeoverEntityTransition): MemoryTakeoverEntityTransition => {
+            const payload = toRecord(transition.payload);
+            const fieldPolicy = applyWorldProfileFieldPolicy({
+                schemaId: transition.entityType,
+                fields: {
+                    ...toRecord(payload),
+                    ...toRecord(payload.fields),
+                },
+                reasonCodes: transition.reasonCodes ?? [],
+                policy: worldProfileFieldPolicy,
+            });
+            return {
+                ...transition,
+                payload: {
+                    ...payload,
+                    fields: fieldPolicy.fields,
+                },
+                reasonCodes: fieldPolicy.reasonCodes,
+            };
+        }),
+        stableFacts: result.stableFacts.map((fact: MemoryTakeoverStableFact): MemoryTakeoverStableFact => {
+            const fieldPolicy = applyWorldProfileFieldPolicy({
+                schemaId: mapStableFactTypeToSchemaId(fact.type),
+                reasonCodes: fact.reasonCodes ?? [],
+                policy: worldProfileFieldPolicy,
+            });
+            return {
+                ...fact,
+                reasonCodes: fieldPolicy.reasonCodes,
+            };
+        }),
+        taskTransitions: result.taskTransitions.map((task: MemoryTakeoverTaskTransition): MemoryTakeoverTaskTransition => {
+            const fieldPolicy = applyWorldProfileFieldPolicy({
+                schemaId: 'task',
+                fields: {
+                    objective: task.goal,
+                    status: task.status || task.to,
+                },
+                reasonCodes: task.reasonCodes ?? [],
+                policy: worldProfileFieldPolicy,
+            });
+            return {
+                ...task,
+                reasonCodes: fieldPolicy.reasonCodes,
+            };
+        }),
+        worldStateChanges: result.worldStateChanges.map((change: MemoryTakeoverWorldStateChange): MemoryTakeoverWorldStateChange => {
+            const fieldPolicy = applyWorldProfileFieldPolicy({
+                schemaId: 'world_global_state',
+                fields: {
+                    key: change.key,
+                    state: change.value,
+                },
+                reasonCodes: change.reasonCodes ?? [],
+                policy: worldProfileFieldPolicy,
+            });
+            return {
+                ...change,
+                reasonCodes: fieldPolicy.reasonCodes,
+            };
+        }),
+    };
+}
+
+/**
+ * 功能：把接管稳定事实类型映射到世界画像 schemaId。
+ * @param factType 稳定事实类型。
+ * @returns schemaId。
+ */
+function mapStableFactTypeToSchemaId(factType: string): string {
+    const normalized = String(factType ?? '').trim().toLowerCase();
+    if (normalized === 'faction') {
+        return 'organization';
+    }
+    if (normalized === 'artifact') {
+        return 'item';
+    }
+    if (normalized === 'world') {
+        return 'world_core_setting';
+    }
+    return normalized || 'other';
+}
+
+/**
+ * 功能：转成普通对象。
+ * @param value 原始值。
+ * @returns 对象结果。
+ */
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
 }

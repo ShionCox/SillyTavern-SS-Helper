@@ -62,6 +62,29 @@ const IDENTIFIER_TOKEN_LABEL_MAP: Record<string, string> = {
     hidden: '隐秘',
     school: '校园',
     workplace: '职场',
+    scenario: '角色设定',
+    worldbook: '世界书',
+    author: '作者',
+    note: '注记',
+    recent: '近期',
+    event: '事件',
+    query: '查询',
+    system: '系统',
+    prompt: '提示',
+    entry: '条目',
+    summary: '摘要',
+    generic: '通用',
+    style: '风格',
+    theme: '主题',
+    signal: '信号',
+    modern_order: '现代秩序',
+    urban_structure: '都市结构',
+    ancient_order: '古风秩序',
+    lineage_hierarchy: '门第尊卑',
+    magic_order: '魔法法则',
+    epic_elements: '史诗要素',
+    hidden_layers: '表里世界',
+    concealed_supernatural: '隐藏超自然',
     mystery: '悬疑',
     jianghu: '江湖',
     court: '朝堂',
@@ -146,6 +169,21 @@ export function resolveWorldReasonCodeLabel(reasonCode: string): string {
     }
     if (normalized.startsWith('kw:')) {
         return `关键词命中：${resolveIdentifierByDictionary(normalized.slice(3))}`;
+    }
+    if (normalized.startsWith('style:')) {
+        return `风格线索：${resolveIdentifierByDictionary(normalized.slice(6))}`;
+    }
+    if (normalized.startsWith('theme:')) {
+        return `主题群命中：${resolveIdentifierByDictionary(normalized.slice(6))}`;
+    }
+    if (normalized.startsWith('signal:')) {
+        return `识别来源：${resolveIdentifierByDictionary(normalized.slice(7))}`;
+    }
+    if (normalized.startsWith('conflict:')) {
+        return `冲突线索：${resolveIdentifierByDictionary(normalized.slice(9))}`;
+    }
+    if (normalized.startsWith('mixed:')) {
+        return `混合题材候选：${resolveWorldProfileLabel(normalized.slice(6))}`;
     }
     return resolveIdentifierByDictionary(normalized);
 }

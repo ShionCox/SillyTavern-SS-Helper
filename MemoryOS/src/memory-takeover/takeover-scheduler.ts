@@ -34,6 +34,7 @@ import { buildTakeoverBatches, validateTakeoverBatchCoverage } from './takeover-
 import { collectTakeoverSourceBundle, sliceTakeoverMessages } from './takeover-source';
 import { mergeStoryEventAnchors, resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
 import { logTimeDebug } from '../memory-time/time-debug';
+import type { WorldProfileFieldPolicy } from '../services/world-profile-field-policy';
 
 const TAKEOVER_MAX_RETRY_PER_BATCH = 5;
 
@@ -48,6 +49,7 @@ export async function runTakeoverScheduler(input: {
     llm: MemoryLLMApi | null;
     pluginId: string;
     worldStrategyHintText?: string;
+    worldProfileFieldPolicy?: WorldProfileFieldPolicy | null;
     skipInitialWait?: boolean;
     existingKnownEntities?: {
         actors: Array<{ actorKey: string; displayName: string }>;
@@ -218,6 +220,7 @@ export async function runTakeoverScheduler(input: {
                 previousBatchResults,
                 existingKnownEntities: input.existingKnownEntities,
                 worldStrategyHintText: input.worldStrategyHintText,
+                worldProfileFieldPolicy: input.worldProfileFieldPolicy,
             });
             const admission = admitTakeoverBatchResult(result);
             await saveMemoryTakeoverPreview(input.chatKey, 'latest_batch', admission.result, 'runtime');
@@ -437,7 +440,37 @@ export async function runTakeoverScheduler(input: {
         batchResults: Array.from(batchResultMap.values()).sort((left, right) => left.sourceRange.startFloor - right.sourceRange.startFloor),
     });
     await saveMemoryTakeoverPreview(input.chatKey, 'consolidation', consolidation, 'runtime');
-    await input.applyConsolidation(consolidation);
+    try {
+        await input.applyConsolidation(consolidation);
+    } catch (error) {
+        const errorMessage = String((error as Error)?.message ?? error ?? 'takeover_consolidation_apply_failed');
+        plan = {
+            ...plan,
+            status: 'failed',
+            currentBatchIndex: Math.max(0, batches.length - 1),
+            completedBatchIds: Array.from(completedBatchIds),
+            failedBatchIds: Array.from(failedBatchIds),
+            isolatedBatchIds: Array.from(isolatedBatchIds),
+            blockedBatchId: undefined,
+            lastBlockedAt: undefined,
+            requestedRetryBatchId: undefined,
+            lastError: errorMessage,
+            lastCheckpointAt: Date.now(),
+            updatedAt: Date.now(),
+        };
+        await writeMemoryTakeoverPlan(input.chatKey, plan);
+        await appendTakeoverDiagnostics({
+            chatKey: input.chatKey,
+            takeoverId: plan.takeoverId,
+            level: 'error',
+            stage: 'consolidation_apply',
+            message: '旧聊天接管整合结果写入失败。',
+            detail: {
+                error: errorMessage,
+            },
+        });
+        return buildProgressSnapshot(input.chatKey, plan);
+    }
     plan = {
         ...plan,
         status: isolatedBatchIds.size > 0 ? 'degraded' : 'completed',

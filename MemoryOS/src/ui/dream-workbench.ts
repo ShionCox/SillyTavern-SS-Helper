@@ -171,6 +171,7 @@ function renderMaintenanceCard(proposal: DreamMaintenanceProposalRecord, session
             <div class="stx-memory-dream-workbench__meta">
                 ${escapeHtml(resolveDreamWorkbenchText('maintenance_type'))}：<span class="stx-memory-dream-workbench__badge">${escapeHtml(proposal.proposalType)}</span>
                 ${escapeHtml(resolveDreamWorkbenchText('confidence'))}：${Number(proposal.confidence).toFixed(2)}
+                / ${escapeHtml(resolveDreamWorkbenchText('time_label'))}：${escapeHtml(new Date(proposal.createdAt).toLocaleString('zh-CN'))}
                 / ${escapeHtml(resolveDreamWorkbenchText('dream_short'))}：${escapeHtml(proposal.dreamId.split(':').pop() || proposal.dreamId).slice(0, 12)}
             </div>
             <div class="stx-memory-dream-workbench__hint">${escapeHtml(proposal.reason)}</div>

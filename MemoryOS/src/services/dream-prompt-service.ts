@@ -135,6 +135,8 @@ export class DreamPromptService {
             '3. 生成 proposedMutations，只保留高价值、低幻觉风险提案。',
             '4. mutation 与 explain 中只能使用别名引用，不要输出真实内部 ID。',
             '5. explain 必须明确来源 wave、entryRef、nodeRef 与推理链。',
+            '6. payload.fieldsJson 与 payload.detailPayloadJson 必须输出合法 JSON 对象字符串；若无内容请输出 {}。',
+            '7. 严格结构化模式下，payload 中不适用的字符串填空字符串，数组填空数组，数值填 0，布尔填 false。',
             '',
             'Dream Prompt DTO:',
             this.limitText(this.stringifyBlock(input.dto), input.settings.dreamContextMaxChars),

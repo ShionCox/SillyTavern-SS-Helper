@@ -71,6 +71,20 @@ function renderDreamKeyMeta(label: string, value: string | null | undefined): st
     return `<div class="stx-memory-dream-workbench__secondary">${escapeHtml(label)}：${renderDreamMetaId(text, 'stx-memory-dream-workbench__inline-id')}</div>`;
 }
 
+function renderDreamStackedMetaId(label: string, value: string | null | undefined): string {
+    const text = String(value ?? '').trim();
+    if (!text) {
+        return '';
+    }
+    const shortened = truncateText(text, 36);
+    return `
+        <div class="stx-memory-dream-workbench__meta-id-row">
+            <span class="stx-memory-dream-workbench__secondary">${escapeHtml(label)}：</span>
+            <span class="stx-memory-workbench__truncate-id stx-memory-dream-workbench__full-id" title="${escapeAttr(text)}">${escapeHtml(shortened)}</span>
+        </div>
+    `;
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return {};
@@ -110,7 +124,7 @@ function renderDreamLabelBadges(values: string[], limit = 5): string {
         return '';
     }
     const visible = normalized.slice(0, limit).map((item: string): string => {
-        return `<span class="stx-memory-workbench__badge stx-memory-workbench__truncate-id" style="max-width:180px;" title="${escapeAttr(item)}">${escapeHtml(truncateText(item, 18))}</span>`;
+        return `<span class="stx-memory-workbench__badge stx-memory-dream-workbench__stacked-badge" title="${escapeAttr(item)}">${escapeHtml(item)}</span>`;
     }).join('');
     const more = normalized.length > limit ? `<span class="stx-memory-workbench__badge">+${String(normalized.length - limit)}</span>` : '';
     return `${visible}${more}`;
@@ -137,6 +151,25 @@ function countPendingMaintenanceForSession(session: DreamSessionRecord): number 
     return session.maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
         return isDreamMaintenancePending(proposal, session);
     }).length;
+}
+
+function canRollbackDreamSession(session: DreamSessionRecord): boolean {
+    const status = String(session.meta?.status ?? '').trim();
+    return Boolean(session.rollback) && (status === 'approved' || status === 'rolled_back');
+}
+
+function shouldDisplayDreamSession(session: DreamSessionRecord): boolean {
+    const status = String(session.meta?.status ?? '').trim();
+    if (status !== 'failed') {
+        return true;
+    }
+    return Boolean(
+        session.output
+        || session.rollback
+        || session.approval
+        || session.qualityReport
+        || session.maintenanceProposals.length > 0,
+    );
 }
 
 export function buildDreamViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
@@ -230,20 +263,26 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
                     ? renderDreamLabelBadges(display.impactItems, 3)
                     : (display.impactText ? `<span class="stx-memory-workbench__meta">${escapeHtml(truncateText(display.impactText, 72))}</span>` : '');
                 return `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px;">
-                <div class="stx-memory-workbench__panel-title stx-memory-workbench__truncate-line" style="flex:1;">${escapeHtml(display.title)}</div>
+            <div class="stx-memory-dream-workbench__card-head stx-memory-dream-workbench__card-head--compact">
+                <div class="stx-memory-dream-workbench__title-block stx-memory-dream-workbench__title-block--fixed">
+                    <div class="stx-memory-workbench__panel-title stx-memory-dream-workbench__title-clamp-2" title="${escapeHtml(display.title)}">${escapeHtml(display.title)}</div>
+                </div>
                 <span class="stx-memory-workbench__badge ${proposal.status === 'pending' ? 'is-warn' : ''}" style="flex-shrink:0;">${escapeHtml(resolveDreamMaintenanceStatusLabel(proposal.status))}</span>
             </div>
-            <div class="stx-memory-dream-workbench__hint" style="margin-bottom:8px;">${escapeHtml(display.summary)}</div>
+            <div class="stx-memory-dream-workbench__hint stx-memory-dream-workbench__hint--summary">${escapeHtml(display.summary)}</div>
             ${impactMarkup ? `<div class="stx-memory-dream-workbench__meta stx-memory-dream-workbench__meta-grid" style="margin-bottom:8px;"><span class="stx-memory-dream-workbench__secondary">${escapeHtml(display.impactLabel)}：</span>${impactMarkup}</div>` : ''}
             <div class="stx-memory-dream-workbench__meta" style="margin-top:8px;">批准后：${escapeHtml(display.resultHint)}</div>
-            <div class="stx-memory-dream-workbench__action-row">
-                <button type="button" class="stx-memory-workbench__button" data-action="dream-workbench-approve-maintenance" data-proposal-id="${escapeAttr(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('approve_apply'))}</button>
-                <button type="button" class="stx-memory-workbench__ghost-btn stx-btn-danger" data-action="dream-workbench-reject-maintenance" data-proposal-id="${escapeAttr(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('reject'))}</button>
-                <button type="button" class="stx-memory-workbench__ghost-btn" data-action="set-dream-subview" data-subview="workbench" data-dream-target-tab="maintenance">${escapeHtml(resolveDreamWorkbenchText('open_maintenance_tab'))}</button>
-            </div>
-            <div class="stx-memory-dream-workbench__secondary" style="margin-top:8px;">
-                维护类型：${escapeHtml(resolveDreamProposalTypeLabel(proposal.proposalType))} / 系统判断：${escapeHtml(proposal.confidence.toFixed(2))} / ${escapeHtml(resolveDreamWorkbenchText('proposal_key_label'))}：${renderDreamMetaId(proposal.proposalId, 'stx-memory-dream-workbench__inline-id')}
+            <div class="stx-memory-dream-workbench__card-footer">
+                <div class="stx-memory-dream-workbench__card-footer-meta">
+                    <div class="stx-memory-dream-workbench__secondary">维护类型：${escapeHtml(resolveDreamProposalTypeLabel(proposal.proposalType))} / 系统判断：${escapeHtml(proposal.confidence.toFixed(2))} / ${escapeHtml(resolveDreamWorkbenchText('time_label'))}：${escapeHtml(formatTimestamp(proposal.createdAt))}</div>
+                    ${renderDreamStackedMetaId(resolveDreamWorkbenchText('proposal_key_label'), proposal.proposalId)}
+                    ${renderDreamStackedMetaId(resolveDreamWorkbenchText('dream_short'), proposal.dreamId)}
+                </div>
+                <div class="stx-memory-dream-workbench__action-row stx-memory-dream-workbench__action-row--bottom">
+                    <button type="button" class="stx-memory-workbench__button" data-action="dream-workbench-approve-maintenance" data-proposal-id="${escapeAttr(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('approve_apply'))}</button>
+                    <button type="button" class="stx-memory-workbench__ghost-btn stx-btn-danger" data-action="dream-workbench-reject-maintenance" data-proposal-id="${escapeAttr(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('reject'))}</button>
+                    <button type="button" class="stx-memory-workbench__ghost-btn" data-action="set-dream-subview" data-subview="workbench" data-dream-target-tab="maintenance">${escapeHtml(resolveDreamWorkbenchText('open_maintenance_tab'))}</button>
+                </div>
             </div>`;
             })()}
             ${index < arr.length - 1 ? '<hr class="stx-memory-dream__divider">' : ''}
@@ -344,20 +383,21 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
 
 function buildDreamDetailWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const { sessions, maintenanceProposals: proposals, qualityReports: reports, schedulerState } = snapshot.dreamSnapshot;
+    const visibleSessions = sessions.filter((session: DreamSessionRecord): boolean => shouldDisplayDreamSession(session));
     const entryTitleMap = buildDreamEntryTitleMap(snapshot.entries);
     const actorNameMap = buildDreamActorNameMap(snapshot.actors);
     const activeTab = state.dreamWorkbenchTab || 'session';
-    const sessionMap = new Map(sessions.map((session: DreamSessionRecord): [string, DreamSessionRecord] => {
+    const sessionMap = new Map(visibleSessions.map((session: DreamSessionRecord): [string, DreamSessionRecord] => {
         return [String(session.meta?.dreamId ?? ''), session];
     }).filter(([dreamId]: [string, DreamSessionRecord]): boolean => Boolean(dreamId)));
     
-const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'approved').length;
-                    const pendingSessions = sessions.filter((item: DreamSessionRecord): boolean => item.approval?.status === 'pending').length;
+const approvedSessions = visibleSessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'approved').length;
+                    const pendingSessions = visibleSessions.filter((item: DreamSessionRecord): boolean => item.approval?.status === 'pending').length;
                     const pendingMaintenance = proposals.filter((item: DreamMaintenanceProposalRecord): boolean => {
                         return isDreamMaintenancePending(item, sessionMap.get(item.dreamId));
                     }).length;
                     const appliedMaintenance = proposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'applied').length;
-                    const rolledBackSessions = sessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'rolled_back').length;
+                    const rolledBackSessions = visibleSessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'rolled_back').length;
 
                     const tabSessionActive = activeTab === 'session' ? ' is-active' : '';
                     const tabDiagnosticsActive = activeTab === 'diagnostics' ? ' is-active' : '';
@@ -390,7 +430,7 @@ const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => 
                                 <button type="button" class="stx-memory-dream-workbench__tab${tabRollbackActive}" data-action="set-dream-workbench-tab" data-tab="rollback">${escapeHtml(resolveDreamWorkbenchText('rollback_tab'))}</button>
                             </div>
                             <div class="stx-memory-dream-workbench__tab-panel${tabSessionActive}" data-dream-workbench-panel="session">
-                                <div class="stx-memory-dream-workbench__list">${sessions.map((session: DreamSessionRecord): string => renderSessionCard(session)).join('') || `<div class="stx-memory-dream-workbench__hint">${escapeHtml(resolveDreamWorkbenchText('no_dream_session'))}</div>`}</div>
+                                <div class="stx-memory-dream-workbench__list">${visibleSessions.map((session: DreamSessionRecord): string => renderSessionCard(session)).join('') || `<div class="stx-memory-dream-workbench__hint">${escapeHtml(resolveDreamWorkbenchText('no_dream_session'))}</div>`}</div>
                             </div>
                             <div class="stx-memory-dream-workbench__tab-panel${tabDiagnosticsActive}" data-dream-workbench-panel="diagnostics">
                                 <div class="stx-memory-dream-workbench__card">
@@ -410,7 +450,7 @@ const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => 
                             <div class="stx-memory-dream-workbench__tab-panel${tabAppliedActive}" data-dream-workbench-panel="applied">
                                 <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('applied_dream_changes'))} (${String(approvedSessions)})</div>
                                 <div class="stx-memory-dream-workbench__list">
-                                    ${sessions
+                                    ${visibleSessions
                                         .filter((item: DreamSessionRecord): boolean => item.meta?.status === 'approved' && item.rollback != null)
                                         .map((session: DreamSessionRecord): string => {
                                             const m = session.meta!;
@@ -480,7 +520,7 @@ const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => 
                             <div class="stx-memory-dream-workbench__tab-panel${tabRollbackActive}" data-dream-workbench-panel="rollback">
                                 <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('rollbackable_sessions'))} (${String(approvedSessions + rolledBackSessions)})</div>
                                 <div class="stx-memory-dream-workbench__list">
-                                    ${sessions
+                                    ${visibleSessions
                                         .filter((item: DreamSessionRecord): boolean => item.meta?.status === 'approved' || item.meta?.status === 'rolled_back')
                                         .map((session: DreamSessionRecord): string => {
                                             const m = session.meta;
@@ -523,6 +563,7 @@ function renderSessionCard(session: DreamSessionRecord): string {
     const pendingMaintenance = countPendingMaintenanceForSession(session);
     const appliedMaintenance = session.maintenanceProposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'applied').length;
     const status = meta?.status || 'unknown';
+    const canRollback = canRollbackDreamSession(session);
     const explainCoveredCount = (output?.proposedMutations ?? []).filter((mutation) => {
         return mutation.explain && mutation.explain.sourceEntryIds.length > 0 && mutation.explain.explanationSteps.length > 0;
     }).length;
@@ -570,9 +611,11 @@ function renderSessionCard(session: DreamSessionRecord): string {
             <div class="stx-memory-dream-workbench__hint">${escapeHtml(output?.highlights.join('；') || output?.narrative.slice(0, 120) || resolveDreamWorkbenchText('no_output_summary'))}</div>
             ${mutationHtml ? `<div style="margin-top:8px;"><div class="stx-memory-dream-workbench__meta" style="margin-bottom:4px;">${escapeHtml(resolveDreamWorkbenchText('mutations_title'))} (${String((output?.proposedMutations ?? []).length)})：</div>${mutationHtml}</div>` : ''}
             <div class="stx-memory-dream-workbench__action-row">
-                ${status !== 'rolled_back'
+                ${canRollback && status !== 'rolled_back'
                     ? `<button type="button" class="stx-memory-workbench__ghost-btn" data-action="dream-workbench-rollback" data-dream-id="${escapeHtml(meta?.dreamId || '')}">${escapeHtml(resolveDreamWorkbenchText('rollback_whole_dream'))}</button>`
-                    : `<span class="stx-memory-workbench__badge stx-memory-dream-workbench__status-badge">${escapeHtml(resolveDreamWorkbenchText('rolled_back'))}</span>`}
+                    : status === 'rolled_back'
+                        ? `<span class="stx-memory-workbench__badge stx-memory-dream-workbench__status-badge">${escapeHtml(resolveDreamWorkbenchText('rolled_back'))}</span>`
+                        : ''}
             </div>
         </article>
     `;
@@ -615,15 +658,20 @@ function renderMaintenanceCard(
             </div>
             ${impactMarkup ? `<div class="stx-memory-dream-workbench__meta stx-memory-dream-workbench__meta-grid"><span class="stx-memory-dream-workbench__secondary">${escapeHtml(display.impactLabel)}：</span>${impactMarkup}</div>` : ''}
             <div class="stx-memory-dream-workbench__meta">批准后：${escapeHtml(display.resultHint)}</div>
-            ${isPending ? `<div class="stx-memory-dream-workbench__action-row">
-                <button type="button" class="stx-memory-workbench__button" data-action="dream-workbench-approve-maintenance" data-proposal-id="${escapeHtml(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('approve_apply'))}</button>
-                <button type="button" class="stx-memory-workbench__ghost-btn stx-btn-danger" data-action="dream-workbench-reject-maintenance" data-proposal-id="${escapeHtml(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('reject'))}</button>
-            </div>` : ''}
-            <div class="stx-memory-dream-workbench__secondary" style="margin-top:8px;">
-                维护类型：${escapeHtml(resolveDreamProposalTypeLabel(proposal.proposalType))}
-                / 系统判断：${escapeHtml(Number(proposal.confidence).toFixed(2))}
-                / ${escapeHtml(resolveDreamWorkbenchText('proposal_key_label'))}：${renderDreamMetaId(proposal.proposalId, 'stx-memory-dream-workbench__inline-id')}
-                / ${escapeHtml(resolveDreamWorkbenchText('dream_short'))}：${renderDreamMetaId(proposal.dreamId.split(':').pop() || proposal.dreamId, 'stx-memory-dream-workbench__inline-id')}
+            <div class="stx-memory-dream-workbench__card-footer">
+                <div class="stx-memory-dream-workbench__card-footer-meta">
+                    <div class="stx-memory-dream-workbench__secondary">
+                        维护类型：${escapeHtml(resolveDreamProposalTypeLabel(proposal.proposalType))}
+                        / 系统判断：${escapeHtml(Number(proposal.confidence).toFixed(2))}
+                        / ${escapeHtml(resolveDreamWorkbenchText('time_label'))}：${escapeHtml(formatTimestamp(proposal.createdAt))}
+                    </div>
+                    ${renderDreamStackedMetaId(resolveDreamWorkbenchText('proposal_key_label'), proposal.proposalId)}
+                    ${renderDreamStackedMetaId(resolveDreamWorkbenchText('dream_short'), proposal.dreamId)}
+                </div>
+                ${isPending ? `<div class="stx-memory-dream-workbench__action-row stx-memory-dream-workbench__action-row--bottom">
+                    <button type="button" class="stx-memory-workbench__button" data-action="dream-workbench-approve-maintenance" data-proposal-id="${escapeHtml(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('approve_apply'))}</button>
+                    <button type="button" class="stx-memory-workbench__ghost-btn stx-btn-danger" data-action="dream-workbench-reject-maintenance" data-proposal-id="${escapeHtml(proposal.proposalId)}">${escapeHtml(resolveDreamWorkbenchText('reject'))}</button>
+                </div>` : ''}
             </div>
         </article>
     `;
@@ -665,4 +713,3 @@ function renderSchedulerInfo(schedulerState: DreamSchedulerStateRecord | null): 
         ${schedulerState.lastDecision?.blockedBy?.length ? `<div><span>${escapeHtml(resolveDreamWorkbenchText('blocked_reason'))}：</span><strong>${escapeHtml(schedulerState.lastDecision.blockedBy.join('、'))}</strong></div>` : ''}
     </div>`;
 }
-

@@ -1,6 +1,8 @@
 import {
     appendSdkPluginChatRecord,
+    db,
     queryLatestSdkPluginChatRecords,
+    querySdkPluginChatRecords,
     type DBChatPluginRecord,
 } from '../../../SDK/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
@@ -84,6 +86,54 @@ export class DreamSessionRepository {
 
     async saveDreamSchedulerState(record: DreamSchedulerStateRecord): Promise<void> {
         await this.saveRecord('dream_scheduler_state', record.chatKey || 'scheduler', record, record.updatedAt);
+    }
+
+    /**
+     * 功能：删除某个 dreamId 关联的会话记录，避免失败半成品残留。
+     * @param dreamId 梦境会话 ID。
+     * @returns 异步完成。
+     */
+    async deleteDreamSessionArtifacts(dreamId: string): Promise<void> {
+        const normalizedDreamId = String(dreamId ?? '').trim();
+        if (!normalizedDreamId) {
+            return;
+        }
+        const collections: DreamRecordCollection[] = [
+            'dream_session_meta',
+            'dream_session_recall',
+            'dream_session_output',
+            'dream_session_approval',
+            'dream_session_rollback',
+            'dream_session_diagnostics',
+            'dream_session_graph_snapshot',
+            'dream_quality_report',
+            'dream_rollback_metadata',
+            'dream_maintenance_proposal',
+        ];
+        const deleteIds: number[] = [];
+        for (const collection of collections) {
+            const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, this.chatKey, collection, {
+                order: 'desc',
+                limit: 2000,
+            });
+            rows.forEach((row: DBChatPluginRecord): void => {
+                const recordId = String(row.recordId ?? '').trim();
+                const payload = row.payload && typeof row.payload === 'object'
+                    ? row.payload as Record<string, unknown>
+                    : {};
+                const payloadDreamId = String(payload.dreamId ?? '').trim();
+                if (recordId === normalizedDreamId || payloadDreamId === normalizedDreamId) {
+                    const rowId = Number(row.id);
+                    if (Number.isFinite(rowId)) {
+                        deleteIds.push(rowId);
+                    }
+                }
+            });
+        }
+        if (deleteIds.length <= 0) {
+            return;
+        }
+        await db.chat_plugin_records.bulkDelete(Array.from(new Set(deleteIds)));
     }
 
     async getDreamSessionById(dreamId: string): Promise<DreamSessionRecord> {

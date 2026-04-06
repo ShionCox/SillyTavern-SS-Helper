@@ -103,10 +103,14 @@ export class DreamMutationTranslator {
 
     private buildReasonCodes(mutation: DreamMutationProposal): string[] {
         const explain = mutation.explain;
+        const payload = toRecord(mutation.payload);
+        const detailPayload = toRecord(payload.detailPayload);
         return Array.from(new Set([
             'source:dream',
             `wave:${mutation.sourceWave}`,
             mutation.confidence >= 0.75 ? 'risk:low' : 'risk:manual_review_required',
+            ...normalizeStringArray(payload.reasonCodes),
+            ...normalizeStringArray(detailPayload.reasonCodes),
             ...(explain?.bridgeNodeKeys?.length ? ['bridge:present'] : []),
         ]));
     }

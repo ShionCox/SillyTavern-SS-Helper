@@ -20,7 +20,7 @@ export function resolveBootstrapWorldProfile(
             reasonCodes: dedupeStrings(worldProfileDetection.reasonCodes ?? []),
         };
     }
-    return detectWorldProfile({ texts: collectFallbackTexts(sourceBundle) });
+    return detectWorldProfile({ signals: collectFallbackSignals(sourceBundle) });
 }
 
 /**
@@ -49,23 +49,36 @@ function isCompleteWorldProfileDetection(
  * @param sourceBundle 冷启动源数据包。
  * @returns 兜底文本数组。
  */
-function collectFallbackTexts(sourceBundle: ColdStartSourceBundle): string[] {
-    return dedupeStrings([
-        sourceBundle.reason,
-        sourceBundle.characterCard.name,
-        sourceBundle.characterCard.description,
-        sourceBundle.characterCard.personality,
-        sourceBundle.characterCard.scenario,
-        sourceBundle.characterCard.firstMessage,
-        sourceBundle.semantic.systemPrompt,
-        sourceBundle.semantic.authorNote,
-        sourceBundle.semantic.jailbreak,
-        sourceBundle.semantic.instruct,
-        ...sourceBundle.semantic.activeLorebooks,
-        ...sourceBundle.worldbooks.activeBooks,
-        ...sourceBundle.worldbooks.entries.map((entry): string => `${entry.entry} ${entry.content}`),
-        ...sourceBundle.recentEvents,
-    ]);
+function collectFallbackSignals(sourceBundle: ColdStartSourceBundle): Array<{
+    text: string;
+    sourceType: 'scenario' | 'system_prompt' | 'author_note' | 'worldbook' | 'recent_event' | 'generic';
+    weight: number;
+}> {
+    const signals: Array<{
+        text: string;
+        sourceType: 'scenario' | 'system_prompt' | 'author_note' | 'worldbook' | 'recent_event' | 'generic';
+        weight: number;
+    }> = [
+        { text: sourceBundle.reason, sourceType: 'generic', weight: 1.15 },
+        { text: sourceBundle.characterCard.name, sourceType: 'scenario', weight: 1 },
+        { text: sourceBundle.characterCard.description, sourceType: 'scenario', weight: 1.55 },
+        { text: sourceBundle.characterCard.personality, sourceType: 'scenario', weight: 0.75 },
+        { text: sourceBundle.characterCard.scenario, sourceType: 'scenario', weight: 2.25 },
+        { text: sourceBundle.characterCard.firstMessage, sourceType: 'scenario', weight: 1.25 },
+        { text: sourceBundle.semantic.systemPrompt, sourceType: 'system_prompt', weight: 2.4 },
+        { text: sourceBundle.semantic.authorNote, sourceType: 'author_note', weight: 1.8 },
+        { text: sourceBundle.semantic.jailbreak, sourceType: 'system_prompt', weight: 1.2 },
+        { text: sourceBundle.semantic.instruct, sourceType: 'system_prompt', weight: 1.5 },
+        ...sourceBundle.semantic.activeLorebooks.map((text: string) => ({ text, sourceType: 'worldbook' as const, weight: 1.8 })),
+        ...sourceBundle.worldbooks.activeBooks.map((text: string) => ({ text, sourceType: 'worldbook' as const, weight: 1.7 })),
+        ...sourceBundle.worldbooks.entries.map((entry) => ({
+            text: `${entry.entry} ${entry.content}`,
+            sourceType: 'worldbook' as const,
+            weight: 2.1,
+        })),
+        ...sourceBundle.recentEvents.map((text: string) => ({ text, sourceType: 'recent_event' as const, weight: 1.1 })),
+    ];
+    return signals.filter((signal): boolean => Boolean(normalizeText(signal.text)));
 }
 
 /**

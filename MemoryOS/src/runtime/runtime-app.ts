@@ -49,6 +49,9 @@ type MemoryBindingStatus = {
     updatedAt: number;
 };
 
+/** 仅在真实发送后的短时间窗口内执行 prompt_ready 注入 */
+const PROMPT_READY_SEND_WINDOW_MS = 15_000;
+
 /**
  * 功能：归一化字符串数组并去重。
  * @param value 原始值。
@@ -907,6 +910,8 @@ export class MemoryOS {
         const types = initCtx.event_types || {};
         let currentChatKey = '';
         let bindingSerial = 0;
+        let lastUserMessageRenderedAt = 0;
+        let lastUserMessageRenderedId = '';
 
         const rebindChat = async (
             _force: boolean = false,
@@ -1018,6 +1023,18 @@ export class MemoryOS {
             if (!text) {
                 return;
             }
+            if (eventType === 'chat.message.sent') {
+                const payloadRecord = payload && typeof payload === 'object'
+                    ? payload as Record<string, unknown>
+                    : {};
+                lastUserMessageRenderedAt = Date.now();
+                lastUserMessageRenderedId = String(
+                    payloadRecord.mes_id
+                    ?? payloadRecord.message_id
+                    ?? payloadRecord.id
+                    ?? '',
+                ).trim();
+            }
             void memory.events.append(eventType, { text }, {
                 sourcePlugin: 'stx_memory_os',
             }).catch((error: unknown): void => {
@@ -1099,6 +1116,14 @@ export class MemoryOS {
                     ?? '',
                 ).trim() || undefined
                 : undefined;
+            const withinSendWindow = Date.now() - lastUserMessageRenderedAt <= PROMPT_READY_SEND_WINDOW_MS;
+            const messageIdMatched = !sourceMessageId
+                || !lastUserMessageRenderedId
+                || sourceMessageId === lastUserMessageRenderedId;
+            if (!withinSendWindow || !messageIdMatched) {
+                logger.info('[MemoryOS] 已跳过本次 prompt_ready 注入：未命中真实发送窗口。');
+                return;
+            }
 
             await memory.chatState.setPromptReadyCaptureSnapshotForTest({
                 promptFixture: promptMessages.map((row: SdkTavernPromptMessageEvent): Record<string, unknown> => ({

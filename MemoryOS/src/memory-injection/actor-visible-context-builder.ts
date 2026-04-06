@@ -45,6 +45,7 @@ export interface BuildActorVisibleContextInput {
     roleEntries: PromptAssemblyRoleEntry[];
     activeActorKey?: string;
     timelineProfile?: MemoryTimelineProfile | null;
+    injectionStyle?: string;
 }
 
 /**
@@ -66,9 +67,12 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     const worldBaseLines = input.entries
         .filter((entry: MemoryEntry): boolean => isWorldBaseType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => renderWorldStateNarrative(
-            prependPromptTimeHeader(buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'), entry.timeContext, currentMaxFloor),
-        ));
+        .map((entry: MemoryEntry): string => prependPromptTimeHeader(renderWorldStateNarrative({
+            text: buildSemanticEntryLine(entry, entry.summary || entry.detail || '暂无详情'),
+            injectionStyle: input.injectionStyle,
+            entryType: entry.entryType,
+            detailPayload: entry.detailPayload,
+        }), entry.timeContext, currentMaxFloor));
 
     const sceneEntries = input.entries
         .filter((entry: MemoryEntry): boolean => isSceneSharedType(entry.entryType))
@@ -83,7 +87,7 @@ export function buildActorVisibleMemoryContext(input: BuildActorVisibleContextIn
     const entityLines = input.entries
         .filter((entry: MemoryEntry): boolean => isEntityType(entry.entryType))
         .sort((left: MemoryEntry, right: MemoryEntry): number => right.updatedAt - left.updatedAt)
-        .map((entry: MemoryEntry): string => renderEntityLine(entry, currentMaxFloor));
+        .map((entry: MemoryEntry): string => renderEntityLine(entry, currentMaxFloor, input.injectionStyle));
 
     const identityLines = targetRoleEntries
         .filter((entry: PromptAssemblyRoleEntry): boolean => isIdentityType(entry.entryType))
@@ -242,14 +246,20 @@ function isEntityType(entryType: string): boolean {
  * @param entry 记忆条目。
  * @returns 渲染后的文本行。
  */
-function renderEntityLine(entry: MemoryEntry, currentMaxFloor: number): string {
+function renderEntityLine(entry: MemoryEntry, currentMaxFloor: number, injectionStyle?: string): string {
     const typeLabel = resolveEntityTypeLabel(entry.entryType);
     const summary = entry.summary || entry.detail || '暂无详情';
-    const body = `${buildMemorySemanticTag(projectMemorySemanticRecord({
+    const baseBody = `${buildMemorySemanticTag(projectMemorySemanticRecord({
         entryType: entry.entryType,
         ongoing: entry.ongoing,
         detailPayload: entry.detailPayload,
     })) || `[${typeLabel}]`} ${entry.title}：${summary}`;
+    const body = renderWorldStateNarrative({
+        text: baseBody,
+        injectionStyle,
+        entryType: entry.entryType,
+        detailPayload: entry.detailPayload,
+    });
     return prependPromptTimeHeader(body, entry.timeContext, currentMaxFloor);
 }
 
@@ -281,7 +291,7 @@ function resolveEntityTypeLabel(entryType: string): string {
  * @returns 是否属于身份层。
  */
 function isIdentityType(entryType: string): boolean {
-    return false;
+    return resolveTypeGroup(entryType) === 'identity';
 }
 
 /**
@@ -290,7 +300,7 @@ function isIdentityType(entryType: string): boolean {
  * @returns 是否属于关系层。
  */
 function isRelationshipType(entryType: string): boolean {
-    return false;
+    return resolveTypeGroup(entryType) === 'relationship';
 }
 
 /**
@@ -347,6 +357,28 @@ function renderShadowEventNarrative(entry: PromptAssemblyRoleEntry): string {
  */
 function normalizeType(entryType: string): string {
     return String(entryType ?? '').trim().toLowerCase();
+}
+
+/**
+ * 功能：把条目类型归并到统一分组。
+ * @param entryType 原始条目类型。
+ * @returns 类型分组。
+ */
+function resolveTypeGroup(entryType: string): 'identity' | 'relationship' | 'other' {
+    const normalized = normalizeType(entryType);
+    const groupMap: Record<string, 'identity' | 'relationship'> = {
+        identity: 'identity',
+        identity_constraint: 'identity',
+        actor_identity: 'identity',
+        role_identity: 'identity',
+        status_identity: 'identity',
+        relationship: 'relationship',
+        memory_relationship: 'relationship',
+        actor_relation: 'relationship',
+        actor_relationship: 'relationship',
+        social_relationship: 'relationship',
+    };
+    return groupMap[normalized] ?? 'other';
 }
 
 /**

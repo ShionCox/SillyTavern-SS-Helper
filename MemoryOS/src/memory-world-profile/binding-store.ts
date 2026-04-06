@@ -42,8 +42,6 @@ export async function putWorldProfileBinding(input: {
         detectedFrom,
         sourceHash: buildWorldProfileSourceHash({
             chatKey,
-            primaryProfile: input.primaryProfile,
-            secondaryProfiles: input.secondaryProfiles ?? [],
             detectedFrom,
         }),
         bindingMode: input.bindingMode === 'manual' ? 'manual' : 'auto',
@@ -73,14 +71,9 @@ export async function deleteWorldProfileBinding(chatKey: string): Promise<void> 
  */
 export function buildWorldProfileSourceHash(input: {
     chatKey: string;
-    primaryProfile: string;
-    secondaryProfiles: string[];
     detectedFrom: string[];
 }): string {
     const seed = [
-        normalizeText(input.chatKey),
-        normalizeText(input.primaryProfile),
-        dedupeStrings(input.secondaryProfiles).join('|'),
         dedupeStrings(input.detectedFrom).join('|'),
     ].join('::');
     let hash = 5381;

@@ -52,6 +52,7 @@ import type {
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
 } from '../types';
+import { buildWorldProfileFieldPolicy } from './world-profile-field-policy';
 import { buildWorldStrategyHintText, resolveChatWorldStrategy } from './world-strategy-service';
 
 export type TakeoverKnownEntities = MemoryTakeoverKnownEntities;
@@ -395,6 +396,7 @@ export class TakeoverService {
             llm: input.llm ?? readMemoryLLMApi(),
             pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
             worldStrategyHintText: buildWorldStrategyHintText(worldStrategy, 'takeover'),
+            worldProfileFieldPolicy: buildWorldProfileFieldPolicy(worldStrategy.explanation),
         });
     }
 
@@ -417,7 +419,8 @@ export class TakeoverService {
      * @returns 进度快照。
      */
     async buildProgress(plan?: MemoryTakeoverPlan | null): Promise<MemoryTakeoverProgressSnapshot> {
-        return buildProgressSnapshot(this.chatKey, plan ?? null);
+        const normalizedPlan = await this.normalizeTakeoverPlan(plan ?? await readMemoryTakeoverPlan(this.chatKey));
+        return buildProgressSnapshot(this.chatKey, normalizedPlan);
     }
 
     /**
@@ -425,7 +428,7 @@ export class TakeoverService {
      * @returns 当前接管计划。
      */
     async readPlan(): Promise<MemoryTakeoverPlan | null> {
-        return readMemoryTakeoverPlan(this.chatKey);
+        return this.normalizeTakeoverPlan(await readMemoryTakeoverPlan(this.chatKey));
     }
 
     /**
@@ -553,7 +556,21 @@ export class TakeoverService {
             batchResults,
         });
         await saveMemoryTakeoverPreview(this.chatKey, 'consolidation', consolidation, 'runtime');
-        await input.applyConsolidation(consolidation);
+        try {
+            await input.applyConsolidation(consolidation);
+        } catch (error) {
+            const errorMessage = String((error as Error)?.message ?? error ?? 'takeover_consolidation_apply_failed');
+            const failedPlan: MemoryTakeoverPlan = {
+                ...plan,
+                status: 'failed',
+                blockedBatchId: undefined,
+                lastBlockedAt: undefined,
+                lastError: errorMessage,
+                updatedAt: Date.now(),
+            };
+            await writeMemoryTakeoverPlan(this.chatKey, failedPlan);
+            return this.buildProgress(failedPlan);
+        }
         const nextPlan: MemoryTakeoverPlan = {
             ...plan,
             status: plan.isolatedBatchIds.length > 0 ? 'degraded' : 'completed',
@@ -664,6 +681,51 @@ export class TakeoverService {
             detectedFrom: sourceBundle.messages.slice(0, 20).map((message) => `${message.name ?? ''} ${message.content ?? ''}`),
             persistIfMissing: true,
         });
+    }
+
+    /**
+     * 功能：修复历史遗留的旧聊天接管计划状态，使工作台与自动弹窗使用同一套终态判断。
+     * @param plan 原始计划。
+     * @returns 归一化后的计划。
+     */
+    private async normalizeTakeoverPlan(plan: MemoryTakeoverPlan | null): Promise<MemoryTakeoverPlan | null> {
+        if (!plan) {
+            return null;
+        }
+        if (plan.status === 'completed' || plan.status === 'degraded' || plan.status === 'failed' || plan.status === 'paused') {
+            return plan;
+        }
+        const totalBatches = Math.max(0, Math.trunc(Number(plan.totalBatches) || 0));
+        const completedCount = Array.isArray(plan.completedBatchIds) ? plan.completedBatchIds.length : 0;
+        const failedCount = Array.isArray(plan.failedBatchIds) ? plan.failedBatchIds.length : 0;
+        const isolatedCount = Array.isArray(plan.isolatedBatchIds) ? plan.isolatedBatchIds.length : 0;
+        if (failedCount > 0) {
+            const blockedPlan: MemoryTakeoverPlan = {
+                ...plan,
+                status: 'blocked_by_batch',
+                updatedAt: Date.now(),
+            };
+            await writeMemoryTakeoverPlan(this.chatKey, blockedPlan);
+            return blockedPlan;
+        }
+        if (totalBatches > 0 && completedCount >= totalBatches) {
+            const preview = await loadMemoryTakeoverPreview(this.chatKey, 'runtime');
+            if (preview.consolidation) {
+                const completedPlan: MemoryTakeoverPlan = {
+                    ...plan,
+                    status: isolatedCount > 0 ? 'degraded' : 'completed',
+                    blockedBatchId: undefined,
+                    lastBlockedAt: undefined,
+                    degradedReason: isolatedCount > 0 ? 'isolated_batches_present' : undefined,
+                    requestedRetryBatchId: undefined,
+                    completedAt: plan.completedAt ?? Date.now(),
+                    updatedAt: Date.now(),
+                };
+                await writeMemoryTakeoverPlan(this.chatKey, completedPlan);
+                return completedPlan;
+            }
+        }
+        return plan;
     }
 }
 

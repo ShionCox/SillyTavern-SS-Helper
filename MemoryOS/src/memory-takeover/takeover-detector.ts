@@ -14,10 +14,10 @@ export function detectTakeoverNeeded(input: {
     const threshold: number = Math.max(1, Math.trunc(Number(input.threshold) || 1));
     const existingPlan: MemoryTakeoverPlan | null = input.existingPlan ?? null;
 
-    if (existingPlan?.status === 'completed') {
+    if (existingPlan?.status === 'completed' || existingPlan?.status === 'degraded') {
         return {
             needed: false,
-            reason: 'already_completed',
+            reason: existingPlan.status === 'degraded' ? 'already_degraded' : 'already_completed',
             currentFloorCount,
             threshold,
             hasCompletedTakeover: true,
@@ -27,7 +27,6 @@ export function detectTakeoverNeeded(input: {
         existingPlan.status === 'running'
         || existingPlan.status === 'paused'
         || existingPlan.status === 'blocked_by_batch'
-        || existingPlan.status === 'degraded'
         || existingPlan.status === 'failed'
     )) {
         return {

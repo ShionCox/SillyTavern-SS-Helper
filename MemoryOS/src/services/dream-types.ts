@@ -178,6 +178,8 @@ export interface DreamSessionApprovalRecord {
     status: DreamApprovalStatus;
     approvedMutationIds: string[];
     rejectedMutationIds: string[];
+    approvedMaintenanceProposalIds?: string[];
+    rejectedMaintenanceProposalIds?: string[];
     rollbackKey?: string;
     approvedAt?: number;
     createdAt: number;
@@ -219,6 +221,8 @@ export interface DreamReviewDecision {
     decision: 'approved' | 'rejected' | 'deferred';
     approvedMutationIds: string[];
     rejectedMutationIds: string[];
+    approvedMaintenanceProposalIds: string[];
+    rejectedMaintenanceProposalIds: string[];
 }
 
 export interface DreamSessionDiagnosticsRecord {

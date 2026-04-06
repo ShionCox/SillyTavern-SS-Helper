@@ -9,11 +9,13 @@ import { DreamQualityGuardService } from './dream-quality-guard-service';
 import { DreamRecallDiagnosticsService } from './dream-recall-diagnostics-service';
 import { DreamSessionRepository } from './dream-session-repository';
 import { DreamWaveRecallService } from './dream-wave-recall-service';
+import { applyWorldProfileFieldPolicy, buildWorldProfileFieldPolicy, type WorldProfileFieldPolicy } from './world-profile-field-policy';
 import { buildWorldStrategyHintText, resolveChatWorldStrategy } from './world-strategy-service';
 import {
     DREAM_PHASE1_MAX_MUTATION_COUNT,
     type DreamMaintenanceProposalRecord,
     type DreamMutationExplain,
+    type DreamMutationType,
     type DreamMutationProposal,
     type DreamQualityReport,
     type DreamRecallCandidate,
@@ -41,6 +43,8 @@ const WEIGHT_REPETITION_PENALTY = 0.4;
 const AUTO_APPLY_MIN_QUALITY_SCORE = 0.72;
 /** 低风险自动应用的最低 confidence */
 const AUTO_APPLY_MIN_CONFIDENCE = 0.75;
+/** 严格 JSON Schema 下的空对象字符串 */
+const EMPTY_JSON_OBJECT_TEXT = '{}';
 
 type DreamStartResult = {
     ok: boolean;
@@ -70,6 +74,7 @@ export class DreamingService {
         meta: { dreamId: string; triggerReason: string; createdAt: number };
         recall: DreamSessionRecallRecord;
         output: DreamSessionOutputRecord;
+        maintenanceProposals: DreamMaintenanceProposalRecord[];
         diagnostics?: DreamSessionDiagnosticsRecord | null;
         graphSnapshot?: DreamSessionGraphSnapshotRecord | null;
     }) => Promise<DreamReviewDecision>;
@@ -84,6 +89,7 @@ export class DreamingService {
             meta: { dreamId: string; triggerReason: string; createdAt: number };
             recall: DreamSessionRecallRecord;
             output: DreamSessionOutputRecord;
+            maintenanceProposals: DreamMaintenanceProposalRecord[];
             diagnostics?: DreamSessionDiagnosticsRecord | null;
             graphSnapshot?: DreamSessionGraphSnapshotRecord | null;
         }) => Promise<DreamReviewDecision>;
@@ -145,8 +151,8 @@ export class DreamingService {
                 dreamPromptStylePreset: settings.dreamPromptStylePreset,
             },
         };
+        let sessionPersisted = false;
         runningChatKeys.add(this.chatKey);
-        await this.dreamRepository.saveDreamSessionMeta(meta);
         await this.repository.appendMutationHistory({
             action: 'dream_session_started',
             payload: {
@@ -163,7 +169,6 @@ export class DreamingService {
                 dreamId,
                 chatKey: this.chatKey,
             };
-            await this.dreamRepository.saveDreamSessionRecall(recallRecord);
 
             const diagnosticsRecord = settings.dreamDiagnosticsEnabled
                 ? {
@@ -179,8 +184,6 @@ export class DreamingService {
                     chatKey: this.chatKey,
                 }
                 : null;
-            await this.diagnosticsService.saveDiagnostics(diagnosticsRecord);
-            await this.diagnosticsService.saveGraphSnapshot(graphSnapshotRecord);
 
             const output = await this.generateDreamOutput({
                 dreamId,
@@ -212,12 +215,16 @@ export class DreamingService {
             if (qualityReport) {
                 await this.dreamRepository.saveDreamQualityReport(qualityReport);
             }
-            await this.dreamRepository.saveDreamSessionOutput(output);
             await this.dreamRepository.saveDreamSessionMeta({
                 ...meta,
                 status: 'generated',
                 updatedAt: Date.now(),
             });
+            sessionPersisted = true;
+            await this.dreamRepository.saveDreamSessionRecall(recallRecord);
+            await this.diagnosticsService.saveDiagnostics(diagnosticsRecord);
+            await this.diagnosticsService.saveGraphSnapshot(graphSnapshotRecord);
+            await this.dreamRepository.saveDreamSessionOutput(output);
 
             const shouldDeferAutoApproval = reason !== 'manual' && settings.dreamRequireApproval;
 
@@ -228,6 +235,8 @@ export class DreamingService {
                     status: 'pending',
                     approvedMutationIds: [],
                     rejectedMutationIds: qualityReport?.blockedMutationIds ?? [],
+                    approvedMaintenanceProposalIds: [],
+                    rejectedMaintenanceProposalIds: [],
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                 });
@@ -262,6 +271,7 @@ export class DreamingService {
                 },
                 recall: recallRecord,
                 output,
+                maintenanceProposals,
                 diagnostics: diagnosticsRecord,
                 graphSnapshot: graphSnapshotRecord,
             });
@@ -273,6 +283,8 @@ export class DreamingService {
                     status: 'pending',
                     approvedMutationIds: review.approvedMutationIds,
                     rejectedMutationIds: review.rejectedMutationIds,
+                    approvedMaintenanceProposalIds: review.approvedMaintenanceProposalIds,
+                    rejectedMaintenanceProposalIds: review.rejectedMaintenanceProposalIds,
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                 });
@@ -283,7 +295,7 @@ export class DreamingService {
                 return { ok: true, dreamId, status: 'deferred' };
             }
 
-            if (review.decision === 'rejected' || review.approvedMutationIds.length <= 0) {
+            if (review.decision === 'rejected' || (review.approvedMutationIds.length <= 0 && review.approvedMaintenanceProposalIds.length <= 0)) {
                 await this.rejectPendingMaintenanceProposals(maintenanceProposals);
                 await this.dreamRepository.saveDreamSessionApproval({
                     dreamId,
@@ -291,6 +303,8 @@ export class DreamingService {
                     status: 'rejected',
                     approvedMutationIds: [],
                     rejectedMutationIds: output.proposedMutations.map((item: DreamMutationProposal): string => item.mutationId),
+                    approvedMaintenanceProposalIds: [],
+                    rejectedMaintenanceProposalIds: maintenanceProposals.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                 });
@@ -318,19 +332,36 @@ export class DreamingService {
                     qualityReport,
                 })
                 : approvedMutations;
-            const applyResult = await this.mutationApplier.applyDreamMutations({
-                dreamId,
-                mutations: guardedMutations,
+            const applyResult: {
+                rollbackKey?: string;
+                appliedMutationIds: string[];
+                affectedEntryIds: string[];
+                affectedRelationshipIds: string[];
+            } = guardedMutations.length > 0
+                ? await this.mutationApplier.applyDreamMutations({
+                    dreamId,
+                    mutations: guardedMutations,
+                })
+                : {
+                    rollbackKey: '',
+                    appliedMutationIds: [],
+                    affectedEntryIds: [],
+                    affectedRelationshipIds: [],
+                };
+            const selectedMaintenanceProposals = maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+                return review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
             });
-            const autoAppliedMaintenance = await this.maybeAutoApplyLowRiskMaintenance({
-                dreamId,
-                proposals: maintenanceProposals,
-                qualityReport,
-            });
-            if (autoAppliedMaintenance.length > 0) {
+            const appliedMaintenance: DreamMaintenanceProposalRecord[] = [];
+            for (const proposal of selectedMaintenanceProposals) {
+                appliedMaintenance.push(await this.maintenancePlanner.applyDreamMaintenanceProposal(proposal));
+            }
+            await this.rejectPendingMaintenanceProposals(maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+                return proposal.status === 'pending' && !review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
+            }));
+            if (appliedMaintenance.length > 0) {
                 await this.maintenancePlanner.mergeAppliedMaintenanceIntoRollback({
                     dreamId,
-                    appliedProposals: autoAppliedMaintenance,
+                    appliedProposals: appliedMaintenance,
                 });
             }
             await this.dreamRepository.saveDreamSessionApproval({
@@ -341,7 +372,11 @@ export class DreamingService {
                 rejectedMutationIds: output.proposedMutations
                     .map((item: DreamMutationProposal): string => item.mutationId)
                     .filter((mutationId: string): boolean => !applyResult.appliedMutationIds.includes(mutationId)),
-                rollbackKey: applyResult.rollbackKey,
+                approvedMaintenanceProposalIds: appliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
+                rejectedMaintenanceProposalIds: maintenanceProposals
+                    .map((item: DreamMaintenanceProposalRecord): string => item.proposalId)
+                    .filter((proposalId: string): boolean => !review.approvedMaintenanceProposalIds.includes(proposalId)),
+                rollbackKey: applyResult.rollbackKey || undefined,
                 approvedAt: Date.now(),
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
@@ -354,12 +389,16 @@ export class DreamingService {
             return { ok: true, dreamId, status: 'approved' };
         } catch (error) {
             const message = String((error as Error)?.message ?? error).trim() || 'dream_failed';
-            await this.dreamRepository.saveDreamSessionMeta({
-                ...meta,
-                status: 'failed',
-                updatedAt: Date.now(),
-                failureReason: message,
-            });
+            if (sessionPersisted) {
+                await this.dreamRepository.saveDreamSessionMeta({
+                    ...meta,
+                    status: 'failed',
+                    updatedAt: Date.now(),
+                    failureReason: message,
+                });
+            } else {
+                await this.dreamRepository.deleteDreamSessionArtifacts(dreamId);
+            }
             await this.repository.appendMutationHistory({
                 action: 'dream_session_failed',
                 payload: {
@@ -438,6 +477,7 @@ export class DreamingService {
             candidateMap: input.candidateMap,
             worldStrategyHintText: buildWorldStrategyHintText(worldStrategy, 'dream'),
         });
+        const worldProfileFieldPolicy = buildWorldProfileFieldPolicy(worldStrategy.explanation);
         const schema = {
             type: 'object',
             additionalProperties: false,
@@ -520,6 +560,7 @@ export class DreamingService {
             entryRefToEntryId: promptBuildResult.promptContext.entryRefToEntryId,
             nodeRefToNodeKey: promptBuildResult.promptContext.nodeRefToNodeKey,
             candidateByEntryRef: promptBuildResult.promptContext.candidateByEntryRef,
+            worldProfileFieldPolicy,
         });
         this.validateDreamOutput(normalized, settings);
         return {
@@ -538,13 +579,44 @@ export class DreamingService {
         return {
             type: 'object',
             additionalProperties: false,
+            required: [
+                'entryId',
+                'title',
+                'entryType',
+                'summary',
+                'detail',
+                'fieldsJson',
+                'detailPayloadJson',
+                'tags',
+                'reasonCodes',
+                'compareKey',
+                'entityKey',
+                'matchKeys',
+                'actorBindings',
+                'ongoing',
+                'relationshipId',
+                'sourceActorKey',
+                'targetActorKey',
+                'relationTag',
+                'state',
+                'trust',
+                'affection',
+                'tension',
+                'participants',
+            ],
             properties: {
                 entryId: { type: 'string' },
                 title: { type: 'string' },
                 entryType: { type: 'string' },
                 summary: { type: 'string' },
                 detail: { type: 'string' },
+                fieldsJson: { type: 'string' },
+                detailPayloadJson: { type: 'string' },
                 tags: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                reasonCodes: {
                     type: 'array',
                     items: { type: 'string' },
                 },
@@ -586,6 +658,7 @@ export class DreamingService {
             entryRefToEntryId: Map<string, string>;
             nodeRefToNodeKey: Map<string, string>;
             candidateByEntryRef: Map<string, DreamRecallCandidate>;
+            worldProfileFieldPolicy: WorldProfileFieldPolicy | null;
         },
     ): {
         narrative: string;
@@ -608,15 +681,20 @@ export class DreamingService {
                     return null;
                 }
                 const sourceWave = this.normalizeSourceWave(item.sourceWave);
+                const normalizedPayload = this.normalizeDreamMutationPayload(
+                    this.toRecord(item.payload),
+                    mutationType,
+                    promptContext.worldProfileFieldPolicy,
+                );
                 return {
                     mutationId: String(item.mutationId ?? '').trim() || `dream_mutation_${index + 1}`,
                     mutationType,
-                    confidence: this.clampUnitInterval(item.confidence),
+                    confidence: this.normalizeDreamMutationConfidence(item.confidence, normalizedPayload),
                     reason: String(item.reason ?? '').trim() || '模型未提供额外理由。',
                     sourceWave,
                     sourceEntryIds,
                     preview: String(item.preview ?? '').trim() || mutationType,
-                    payload: this.toRecord(item.payload),
+                    payload: normalizedPayload,
                     explain: this.normalizeMutationExplain(item.explain, {
                         sourceWave,
                         sourceEntryIds,
@@ -691,6 +769,128 @@ export class DreamingService {
         };
     }
 
+    /**
+     * 功能：按世界画像策略规范化 dream mutation 载荷。
+     * @param payload 原始载荷。
+     * @param mutationType mutation 类型。
+     * @param worldProfileFieldPolicy 世界画像字段策略。
+     * @returns 归一化后的载荷。
+     */
+    private normalizeDreamMutationPayload(
+        payload: Record<string, unknown>,
+        mutationType: DreamMutationType,
+        worldProfileFieldPolicy: WorldProfileFieldPolicy | null,
+    ): Record<string, unknown> {
+        const normalizedPayload: Record<string, unknown> = {
+            ...payload,
+            fieldsJson: this.normalizeJsonObjectText(payload.fieldsJson),
+            detailPayloadJson: this.normalizeJsonObjectText(payload.detailPayloadJson),
+            fields: {
+                ...this.parseDreamJsonObjectField(payload.fieldsJson),
+                ...this.toRecord(payload.fields),
+            },
+            detailPayload: {
+                ...this.parseDreamJsonObjectField(payload.detailPayloadJson),
+                ...this.toRecord(payload.detailPayload),
+            },
+        };
+        if (mutationType === 'relationship_patch') {
+            return normalizedPayload;
+        }
+        const entryType = this.normalizeText(normalizedPayload.entryType) || 'other';
+        const detailPayload = {
+            ...this.toRecord(normalizedPayload.detailPayload),
+        };
+        const baseFields = {
+            ...this.toRecord(normalizedPayload.fields),
+            ...this.toRecord(detailPayload.fields),
+        };
+        const fieldPolicy = applyWorldProfileFieldPolicy({
+            schemaId: entryType,
+            fields: baseFields,
+            reasonCodes: [
+                ...this.normalizeStringArray(normalizedPayload.reasonCodes),
+                ...this.normalizeStringArray(detailPayload.reasonCodes),
+            ],
+            policy: worldProfileFieldPolicy,
+        });
+        return {
+            ...normalizedPayload,
+            entryType,
+            fields: fieldPolicy.fields,
+            reasonCodes: fieldPolicy.reasonCodes,
+            detailPayload: {
+                ...detailPayload,
+                fields: fieldPolicy.fields,
+                reasonCodes: fieldPolicy.reasonCodes,
+                worldProfileGuard: {
+                    profileId: worldProfileFieldPolicy?.profileId ?? '',
+                    missingFields: fieldPolicy.missingFields,
+                    suppressed: fieldPolicy.suppressed,
+                    preferred: fieldPolicy.preferred,
+                },
+            },
+        };
+    }
+
+    /**
+     * 功能：根据世界画像守卫调整 mutation 置信度。
+     * @param value 原始置信度。
+     * @param payload 归一化后的载荷。
+     * @returns 调整后的置信度。
+     */
+    private normalizeDreamMutationConfidence(value: unknown, payload: Record<string, unknown>): number {
+        const detailPayload = this.toRecord(payload.detailPayload);
+        const worldProfileGuard = this.toRecord(detailPayload.worldProfileGuard);
+        const suppressed = Boolean(worldProfileGuard.suppressed);
+        const normalized = this.clampUnitInterval(value);
+        if (suppressed) {
+            return Math.min(normalized, 0.74);
+        }
+        return normalized;
+    }
+
+    /**
+     * 功能：将梦境输出中的 JSON 字符串字段解析为对象。
+     * @param value 待解析的 JSON 字符串或对象。
+     * @returns 解析后的普通对象；解析失败时返回空对象。
+     */
+    private parseDreamJsonObjectField(value: unknown): Record<string, unknown> {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            return value as Record<string, unknown>;
+        }
+        const text = String(value ?? '').trim();
+        if (!text) {
+            return {};
+        }
+        try {
+            const parsed = JSON.parse(text) as unknown;
+            return this.toRecord(parsed);
+        } catch {
+            return {};
+        }
+    }
+
+    /**
+     * 功能：将任意输入规整为严格 JSON Schema 友好的对象字符串。
+     * @param value 原始值。
+     * @returns JSON 对象字符串；无效时返回空对象字符串。
+     */
+    private normalizeJsonObjectText(value: unknown): string {
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (trimmed) {
+                return trimmed;
+            }
+        }
+        const record = this.parseDreamJsonObjectField(value);
+        const keys = Object.keys(record);
+        if (keys.length <= 0) {
+            return EMPTY_JSON_OBJECT_TEXT;
+        }
+        return JSON.stringify(record);
+    }
+
     private normalizeSourceWave(value: unknown): 'recent' | 'mid' | 'deep' | 'fused' {
         const normalized = String(value ?? '').trim();
         return normalized === 'recent' || normalized === 'mid' || normalized === 'deep' ? normalized : 'fused';
@@ -740,11 +940,32 @@ export class DreamingService {
         return Math.max(0, Math.min(1, Number(numeric.toFixed(3))));
     }
 
+    /**
+     * 功能：归一化普通文本。
+     * @param value 原始值。
+     * @returns 文本结果。
+     */
+    private normalizeText(value: unknown): string {
+        return String(value ?? '').trim();
+    }
+
     private toRecord(value: unknown): Record<string, unknown> {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
             return {};
         }
         return value as Record<string, unknown>;
+    }
+
+    /**
+     * 功能：归一化字符串数组。
+     * @param value 原始值。
+     * @returns 字符串数组。
+     */
+    private normalizeStringArray(value: unknown): string[] {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+        return Array.from(new Set(value.map((item: unknown): string => this.normalizeText(item)).filter(Boolean)));
     }
 
     private validateDreamOutput(

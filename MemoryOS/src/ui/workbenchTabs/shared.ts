@@ -146,6 +146,21 @@ export interface WorkbenchVectorTestProgress {
     progress?: number;
 }
 
+export interface WorkbenchWorldProfileTestResult {
+    primaryProfile: string;
+    secondaryProfiles: string[];
+    confidence: number;
+    reasonCodes: string[];
+    matchedKeywords: string[];
+    conflictKeywords: string[];
+    sourceTypes: string[];
+    mixedProfileCandidate?: string;
+    preferredSchemas: string[];
+    preferredFacets: string[];
+    suppressedTypes: string[];
+    fieldExtensions: Record<string, string[]>;
+}
+
 export interface WorkbenchState {
     currentView: WorkbenchView;
     currentActorTab: ActorSubView;
@@ -156,6 +171,9 @@ export interface WorkbenchState {
     previewQuery: string;
     previewTabLoaded: boolean;
     previewTabLoading: boolean;
+    worldProfileTestInput: string;
+    worldProfileTestRunning: boolean;
+    worldProfileTestResult: WorkbenchWorldProfileTestResult | null;
     bindEntryId: string;
     actorQuery: string;
     actorSortOrder: 'name-asc' | 'name-desc' | 'stat-desc' | 'stat-asc';
