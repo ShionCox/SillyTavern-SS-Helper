@@ -176,12 +176,25 @@ export class DreamRollbackService {
     }
 
     private async markMaintenanceRolledBack(proposals: DreamMaintenanceProposalRecord[]): Promise<void> {
-        for (const proposal of proposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'applied')) {
+        const now = Date.now();
+        for (const proposal of proposals) {
+            if (proposal.status === 'applied') {
+                await this.dreamRepository.saveDreamMaintenanceProposal({
+                    ...proposal,
+                    status: 'rolled_back',
+                    rolledBackAt: proposal.rolledBackAt ?? now,
+                    updatedAt: now,
+                });
+                continue;
+            }
+            if (proposal.status !== 'pending') {
+                continue;
+            }
             await this.dreamRepository.saveDreamMaintenanceProposal({
                 ...proposal,
-                status: 'rolled_back',
-                rolledBackAt: Date.now(),
-                updatedAt: Date.now(),
+                status: 'rejected',
+                rejectedAt: proposal.rejectedAt ?? now,
+                updatedAt: now,
             });
         }
     }

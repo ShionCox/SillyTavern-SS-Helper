@@ -10,6 +10,10 @@ import {
 } from '../workbenchLocale';
 import { escapeAttr } from './shared';
 import type { DreamMaintenanceProposalRecord, DreamQualityReport, DreamSchedulerStateRecord, DreamSessionRecord } from '../../services/dream-types';
+import {
+    isDreamMaintenancePending,
+    resolveDreamMaintenanceEffectiveStatus,
+} from '../../services/dream-maintenance-state';
 import { readMemoryOSSettings } from '../../settings/store';
 import type { ActorMemoryProfile, MemoryEntry } from '../../types';
 
@@ -129,6 +133,12 @@ function resolveDreamActorLabels(actorKeys: unknown, actorNameMap: Map<string, s
         .map((actorKey: string): string => actorNameMap.get(actorKey) || actorKey);
 }
 
+function countPendingMaintenanceForSession(session: DreamSessionRecord): number {
+    return session.maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+        return isDreamMaintenancePending(proposal, session);
+    }).length;
+}
+
 export function buildDreamViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const isDetail = state.dreamSubView === 'workbench';
     const headMarkup = `
@@ -157,7 +167,12 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
     const latestSessionHighlight = latestSession?.output?.highlights.join('；') || latestSession?.output?.narrative.slice(0, 150) || resolveDreamWorkbenchText('no_recent_activity');
     const latestQualityReport = qualityReports[0];
 
-    const pendingMaintenance = maintenanceProposals.filter((p) => p.status === 'pending');
+    const sessionMap = new Map(sessions.map((session: DreamSessionRecord): [string, DreamSessionRecord] => {
+        return [String(session.meta?.dreamId ?? ''), session];
+    }).filter(([dreamId]: [string, DreamSessionRecord]): boolean => Boolean(dreamId)));
+    const pendingMaintenance = maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+        return isDreamMaintenancePending(proposal, sessionMap.get(proposal.dreamId));
+    });
     const queuedSessionCount = sessions.filter((s) => s.meta?.status === 'queued').length;
     const runningSessionCount = sessions.filter((s) => s.meta?.status === 'generated').length;
 
@@ -186,7 +201,7 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
             <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--compact" style="margin-bottom:8px;">
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('quality_score'))}</span><strong>${escapeHtml(session.qualityReport?.qualityScore ? session.qualityReport.qualityScore.toFixed(2) : resolveDreamWorkbenchText('no_data'))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('maintenance_applied'))}</span><strong>${escapeHtml(String(session.maintenanceProposals.filter((p) => p.status === 'applied').length))}</strong></div>
-                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('maintenance_pending'))}</span><strong>${escapeHtml(String(session.maintenanceProposals.filter((p) => p.status === 'pending').length))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('maintenance_pending'))}</span><strong>${escapeHtml(String(countPendingMaintenanceForSession(session)))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('time_label'))}</span><strong>${escapeHtml(formatTimestamp(session.meta?.createdAt))}</strong></div>
             </div>
             <div class="stx-memory-workbench__meta stx-memory-workbench__truncate-line" style="--lines:3;">${escapeHtml(session.output?.highlights.join('；') || session.output?.narrative.slice(0, 150) || resolveDreamWorkbenchText('no_recent_activity'))}</div>
@@ -332,10 +347,15 @@ function buildDreamDetailWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: Wor
     const entryTitleMap = buildDreamEntryTitleMap(snapshot.entries);
     const actorNameMap = buildDreamActorNameMap(snapshot.actors);
     const activeTab = state.dreamWorkbenchTab || 'session';
+    const sessionMap = new Map(sessions.map((session: DreamSessionRecord): [string, DreamSessionRecord] => {
+        return [String(session.meta?.dreamId ?? ''), session];
+    }).filter(([dreamId]: [string, DreamSessionRecord]): boolean => Boolean(dreamId)));
     
 const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'approved').length;
                     const pendingSessions = sessions.filter((item: DreamSessionRecord): boolean => item.approval?.status === 'pending').length;
-                    const pendingMaintenance = proposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'pending').length;
+                    const pendingMaintenance = proposals.filter((item: DreamMaintenanceProposalRecord): boolean => {
+                        return isDreamMaintenancePending(item, sessionMap.get(item.dreamId));
+                    }).length;
                     const appliedMaintenance = proposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'applied').length;
                     const rolledBackSessions = sessions.filter((item: DreamSessionRecord): boolean => item.meta?.status === 'rolled_back').length;
 
@@ -384,7 +404,7 @@ const approvedSessions = sessions.filter((item: DreamSessionRecord): boolean => 
                             </div>
                             <div class="stx-memory-dream-workbench__tab-panel${tabMaintenanceActive}" data-dream-workbench-panel="maintenance">
                                 <div class="stx-memory-dream-workbench__list">
-                                    ${proposals.map((proposal: DreamMaintenanceProposalRecord): string => renderMaintenanceCard(proposal, entryTitleMap, actorNameMap)).join('') || `<div class="stx-memory-dream-workbench__hint">${escapeHtml(resolveDreamWorkbenchText('no_maintenance_proposal'))}</div>`}
+                                    ${proposals.map((proposal: DreamMaintenanceProposalRecord): string => renderMaintenanceCard(proposal, sessionMap.get(proposal.dreamId), entryTitleMap, actorNameMap)).join('') || `<div class="stx-memory-dream-workbench__hint">${escapeHtml(resolveDreamWorkbenchText('no_maintenance_proposal'))}</div>`}
                                 </div>
                             </div>
                             <div class="stx-memory-dream-workbench__tab-panel${tabAppliedActive}" data-dream-workbench-panel="applied">
@@ -500,7 +520,7 @@ function renderSessionCard(session: DreamSessionRecord): string {
     const approval = session.approval;
     const promptInfo = output?.promptInfo;
     const applyResult = session.rollbackMetadata?.applyResult;
-    const pendingMaintenance = session.maintenanceProposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'pending').length;
+    const pendingMaintenance = countPendingMaintenanceForSession(session);
     const appliedMaintenance = session.maintenanceProposals.filter((item: DreamMaintenanceProposalRecord): boolean => item.status === 'applied').length;
     const status = meta?.status || 'unknown';
     const explainCoveredCount = (output?.proposedMutations ?? []).filter((mutation) => {
@@ -558,9 +578,15 @@ function renderSessionCard(session: DreamSessionRecord): string {
     `;
 }
 
-function renderMaintenanceCard(proposal: DreamMaintenanceProposalRecord, entryTitleMap: Map<string, string>, actorNameMap: Map<string, string>): string {
-    const statusClass = statusBadgeClass(proposal.status);
-    const isPending = proposal.status === 'pending';
+function renderMaintenanceCard(
+    proposal: DreamMaintenanceProposalRecord,
+    session: DreamSessionRecord | undefined,
+    entryTitleMap: Map<string, string>,
+    actorNameMap: Map<string, string>,
+): string {
+    const effectiveStatus = resolveDreamMaintenanceEffectiveStatus(proposal, session);
+    const statusClass = statusBadgeClass(effectiveStatus);
+    const isPending = effectiveStatus === 'pending';
     const payload = toRecord(proposal.payload);
     const display = resolveDreamMaintenanceDisplay({
         proposalType: proposal.proposalType,
@@ -585,7 +611,7 @@ function renderMaintenanceCard(proposal: DreamMaintenanceProposalRecord, entryTi
                     <div class="stx-memory-dream-workbench__title stx-memory-dream-workbench__title--truncate" title="${escapeHtml(display.title)}">${escapeHtml(display.title)}</div>
                     <div class="stx-memory-dream-workbench__hint">${escapeHtml(display.summary)}</div>
                 </div>
-                <span class="${statusClass}">${escapeHtml(resolveDreamWorkbenchText(proposal.status) === proposal.status ? proposal.status : resolveDreamWorkbenchText(proposal.status))}</span>
+                <span class="${statusClass}">${escapeHtml(resolveDreamWorkbenchText(effectiveStatus) === effectiveStatus ? effectiveStatus : resolveDreamWorkbenchText(effectiveStatus))}</span>
             </div>
             ${impactMarkup ? `<div class="stx-memory-dream-workbench__meta stx-memory-dream-workbench__meta-grid"><span class="stx-memory-dream-workbench__secondary">${escapeHtml(display.impactLabel)}：</span>${impactMarkup}</div>` : ''}
             <div class="stx-memory-dream-workbench__meta">批准后：${escapeHtml(display.resultHint)}</div>

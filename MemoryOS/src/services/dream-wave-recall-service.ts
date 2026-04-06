@@ -2,6 +2,7 @@ import { activateDreamNeuronGraph, buildDreamNeuronGraph, selectCandidateNodeKey
 import type { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
 import type { MemoryEntry, MemoryRelationshipRecord, SummarySnapshot } from '../types';
+import { resolveChatWorldStrategy } from './world-strategy-service';
 import type {
     DreamFusionResult,
     DreamRecallCandidate,
@@ -60,6 +61,13 @@ export class DreamWaveRecallService {
             .filter(Boolean)
             .join('\n')
             .slice(0, 1600);
+        const worldStrategy = await resolveChatWorldStrategy({
+            repository: this.repository,
+            texts: [
+                sourceQuery,
+                ...entries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
+            ],
+        });
         const memoryPercentMap = new Map<string, number>();
         for (const row of roleMemories) {
             const current = memoryPercentMap.get(row.entryId) ?? 0;
@@ -75,7 +83,15 @@ export class DreamWaveRecallService {
             summaries,
         });
         const candidates = entries.map((entry: MemoryEntry): DreamRecallCandidate => {
-            return this.buildCandidate(entry, summaries, memoryPercentMap, relationshipMap, currentTs, graph.entryNodeMap.get(entry.entryId) ?? []);
+            return this.buildCandidate(
+                entry,
+                summaries,
+                memoryPercentMap,
+                relationshipMap,
+                currentTs,
+                graph.entryNodeMap.get(entry.entryId) ?? [],
+                worldStrategy.profile.mergedPreferredSchemas.includes(entry.entryType),
+            );
         });
         const candidateMap = new Map(candidates.map((candidate: DreamRecallCandidate): [string, DreamRecallCandidate] => [candidate.entryId, candidate]));
         const buckets = this.buildDynamicTimeBuckets(candidates, currentTs);
@@ -324,6 +340,7 @@ export class DreamWaveRecallService {
         relationshipMap: Map<string, string[]>,
         currentTs: number,
         sourceNodeKeys: string[],
+        preferredByWorldStrategy: boolean,
     ): DreamRecallCandidate {
         const summarySignals = this.computeSummarySignals(entry, summaries);
         const memoryPercent = memoryPercentMap.get(entry.entryId) ?? 0;
@@ -332,7 +349,7 @@ export class DreamWaveRecallService {
         const stabilityScore = Math.min(1, ((entry.summary?.length ?? 0) + (entry.detail?.length ?? 0)) / 400);
         const resonanceScore = Math.min(1, (summarySignals + memoryPercent / 100) / 2);
         const actorKeys = this.normalizeTags((entry.detailPayload as { bindings?: { actors?: string[] } })?.bindings?.actors);
-        const baseScore = Number((recencyScore * 0.45 + stabilityScore * 0.2 + resonanceScore * 0.35).toFixed(4));
+        const baseScore = Number((recencyScore * 0.45 + stabilityScore * 0.2 + resonanceScore * 0.35 + (preferredByWorldStrategy ? 0.12 : 0)).toFixed(4));
         return {
             candidateId: `dream_candidate:${entry.entryId}`,
             entryId: entry.entryId,
@@ -351,7 +368,7 @@ export class DreamWaveRecallService {
             finalScore: baseScore,
             sourceNodeKeys,
             bridgeNodeKeys: [],
-            reasonChain: ['基础候选'],
+            reasonChain: preferredByWorldStrategy ? ['世界画像偏置候选', '基础候选'] : ['基础候选'],
         };
     }
 

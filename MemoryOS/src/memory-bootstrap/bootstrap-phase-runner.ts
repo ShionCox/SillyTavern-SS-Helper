@@ -15,6 +15,7 @@ export async function runBootstrapPhase(input: {
     userDisplayName: string;
     phaseName: 'phase1' | 'phase2';
     payload: Record<string, unknown>;
+    extraSystemInstruction?: string;
 }): Promise<{ ok: boolean; reasonCode?: string; data?: unknown }> {
     const promptPack = await loadPromptPackSections();
     const promptSections = resolveBootstrapPromptSections(promptPack, input.phaseName);
@@ -37,7 +38,7 @@ export async function runBootstrapPhase(input: {
             messages: [
                 {
                     role: 'system',
-                    content: `${promptSections.system}\n\n${phaseInstruction}\n\n除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。`,
+                    content: `${promptSections.system}\n\n${phaseInstruction}\n\n${String(input.extraSystemInstruction ?? '').trim()}\n\n除 schemaId、actorKey、sourceActorKey、targetActorKey、reasonCodes 等标识字段外，所有自然语言字段必须使用简体中文。`,
                 },
                 { role: 'user', content: userPayload },
             ],

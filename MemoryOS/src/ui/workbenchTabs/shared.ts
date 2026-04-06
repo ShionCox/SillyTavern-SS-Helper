@@ -61,6 +61,10 @@ export interface WorkbenchRecallExplanation {
     semanticCounts?: Record<string, number>;
     forgettingCounts?: Record<string, number>;
     shadowTriggeredCount?: number;
+    worldProfileId?: string;
+    worldProfileDisplayName?: string;
+    worldBindingMode?: 'auto' | 'manual';
+    worldEffectSummary?: string[];
     traceRecords?: Array<{
         ts: number;
         level: string;

@@ -432,11 +432,11 @@ function buildStoryPrimaryLabel(timeCtx: MemoryTimeContext): string {
     const explicitText = String(storyTime?.absoluteText ?? '').trim();
     const relativeText = String(storyTime?.relativeText ?? '').trim();
     const relativePhaseLabel = String(storyTime?.relativePhaseLabel ?? '').trim();
-    const explicitBase = relativeText || explicitText;
     const inferredBase = buildStoryBaseLabel({
         dayLabel,
         partOfDayLabel,
-        explicitText: explicitBase,
+        explicitText,
+        relativeText,
         relativePhaseLabel,
     });
 
@@ -512,16 +512,23 @@ function buildStoryBaseLabel(input: {
     dayLabel: string;
     partOfDayLabel: string;
     explicitText: string;
+    relativeText: string;
     relativePhaseLabel: string;
 }): string {
-    if (input.dayLabel && input.partOfDayLabel) {
-        return `${input.dayLabel}${input.partOfDayLabel}`;
-    }
     if (input.dayLabel && input.explicitText) {
-        return `${input.dayLabel}${input.explicitText}`;
+        return mergeDayLabelWithTimeText(input.dayLabel, input.explicitText);
     }
     if (input.explicitText) {
         return input.explicitText;
+    }
+    if (input.dayLabel && input.partOfDayLabel) {
+        return `${input.dayLabel}${input.partOfDayLabel}`;
+    }
+    if (input.dayLabel && input.relativeText) {
+        return mergeDayLabelWithTimeText(input.dayLabel, input.relativeText);
+    }
+    if (input.relativeText) {
+        return input.relativeText;
     }
     if (input.relativePhaseLabel) {
         return input.relativePhaseLabel;
@@ -542,6 +549,21 @@ function buildAnchorDisplayLabel(anchorLabel?: string, relation?: string): strin
         return normalizedAnchor;
     }
     return `${normalizedAnchor}${relationLabel}`;
+}
+
+function mergeDayLabelWithTimeText(dayLabel: string, timeText: string): string {
+    const normalizedDay = String(dayLabel ?? '').trim();
+    const normalizedTimeText = String(timeText ?? '').trim();
+    if (!normalizedDay) {
+        return normalizedTimeText;
+    }
+    if (!normalizedTimeText) {
+        return normalizedDay;
+    }
+    if (/第[一二三四五六七八九十百千两零\d]+天/u.test(normalizedTimeText)) {
+        return normalizedTimeText;
+    }
+    return `${normalizedDay}${normalizedTimeText}`;
 }
 
 function resolvePromptTimeConfidenceLabel(confidence: number): string {

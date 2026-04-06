@@ -39,6 +39,7 @@ export {
 // ── 故事时间解析 ──
 export {
     extractTimeSignals,
+    extractPreferredStoryTimeText,
     detectSleepAndWake,
     detectSceneTransitions,
     detectHardCuts,
@@ -60,6 +61,7 @@ export { assessBatchTime } from './batch-time-assessment';
 // ── 兜底引擎 ──
 export {
     mapBatchToMemoryTimeContext,
+    enhanceMemoryTimeContextWithText,
     buildFallbackTimeContext,
     mergeTimeContexts,
 } from './fallback-time-engine';

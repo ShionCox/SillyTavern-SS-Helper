@@ -241,6 +241,7 @@ export interface DBWorldProfileBinding {
     reasonCodes: string[];
     detectedFrom: string[];
     sourceHash: string;
+    bindingMode?: 'auto' | 'manual';
     createdAt: number;
     updatedAt: number;
 }

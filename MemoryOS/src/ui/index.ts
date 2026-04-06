@@ -3,6 +3,8 @@ import { buildSharedCheckboxCard, buildSharedCheckboxStyles } from '../../../_Co
 import { buildSharedButton, buildSharedButtonStyles } from '../../../_Components/sharedButton';
 import { buildSharedInputField, buildSharedInputStyles } from '../../../_Components/sharedInput';
 import { buildThemeVars } from '../../../SDK/theme';
+import manifestJson from '../../manifest.json';
+import changelogData from '../../changelog.json';
 import { logger } from '../runtime/runtime-services';
 import { openUnifiedMemoryWorkbench } from './unifiedMemoryWorkbench';
 import { DEFAULT_MEMORY_OS_SETTINGS, type MemoryOSSettings, readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
@@ -19,10 +21,12 @@ const TAB_GENERAL_ID = 'stx-memoryos-tab-general';
 const TAB_MEMORY_ID = 'stx-memoryos-tab-memory';
 const TAB_INJECTION_ID = 'stx-memoryos-tab-injection';
 const TAB_PIPELINE_ID = 'stx-memoryos-tab-pipeline';
+const TAB_ABOUT_ID = 'stx-memoryos-tab-about';
 const PANEL_GENERAL_ID = 'stx-memoryos-panel-general';
 const PANEL_MEMORY_ID = 'stx-memoryos-panel-memory';
 const PANEL_INJECTION_ID = 'stx-memoryos-panel-injection';
 const PANEL_PIPELINE_ID = 'stx-memoryos-panel-pipeline';
+const PANEL_ABOUT_ID = 'stx-memoryos-panel-about';
 const ENABLED_ID = 'stx-memoryos-enabled';
 const TOOLBAR_QUICK_ACTIONS_ID = 'stx-memoryos-toolbar-quick-actions-enabled';
 const COLD_START_ENABLED_ID = 'stx-memoryos-cold-start-enabled';
@@ -139,7 +143,7 @@ const PIPELINE_MAX_FINALIZER_ITEMS_ID = 'stx-memoryos-pipeline-max-finalizer-ite
 const PIPELINE_STAGING_RETENTION_DAYS_ID = 'stx-memoryos-pipeline-staging-retention-days';
 const PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID = 'stx-memoryos-pipeline-resolve-unresolved-only';
 
-type TabKey = 'general' | 'memory' | 'injection' | 'pipeline';
+type TabKey = 'general' | 'memory' | 'injection' | 'pipeline' | 'about';
 type TabBinding = { key: TabKey; tabId: string; panelId: string };
 
 const TABS: TabBinding[] = [
@@ -147,6 +151,7 @@ const TABS: TabBinding[] = [
     { key: 'memory', tabId: TAB_MEMORY_ID, panelId: PANEL_MEMORY_ID },
     { key: 'injection', tabId: TAB_INJECTION_ID, panelId: PANEL_INJECTION_ID },
     { key: 'pipeline', tabId: TAB_PIPELINE_ID, panelId: PANEL_PIPELINE_ID },
+    { key: 'about', tabId: TAB_ABOUT_ID, panelId: PANEL_ABOUT_ID },
 ];
 
 let isSyncingForm = false;
@@ -159,6 +164,58 @@ let autoSaveTimer: number | null = null;
  */
 function divider(title: string): string {
     return `<div class="stx-ui-divider"><span>${title}</span><span class="stx-ui-divider-line"></span></div>`;
+}
+
+/**
+ * 功能：构建关于页元信息。
+ * @returns HTML。
+ */
+function buildAboutMetaHtml(): string {
+    const manifest = manifestJson as Record<string, unknown>;
+    const version = String(manifest.version ?? '').trim() || '未知';
+    const author = String(manifest.author ?? '').trim() || '未知';
+    const email = String(manifest.email ?? '').trim();
+    const homePage = String(manifest.homePage ?? '').trim();
+    return `
+        <div class="stx-ui-about-meta">
+            <span class="stx-ui-about-meta-item"><i class="fa-solid fa-tag"></i> 版本 ${version}</span>
+            <span class="stx-ui-about-meta-item"><i class="fa-solid fa-user"></i> ${author}</span>
+            ${email ? `<span class="stx-ui-about-meta-item"><i class="fa-solid fa-envelope"></i> ${email}</span>` : ''}
+            ${homePage ? `<span class="stx-ui-about-meta-item"><i class="fa-brands fa-github"></i> <a href="${homePage}" target="_blank" rel="noopener noreferrer">${homePage}</a></span>` : ''}
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建更新日志。
+ * @returns HTML。
+ */
+function buildChangelogHtml(): string {
+    const rows = Array.isArray(changelogData) ? changelogData : [];
+    if (rows.length <= 0) {
+        return '<div class="stx-ui-item-desc">暂无更新日志。</div>';
+    }
+    return rows.map((row: unknown): string => {
+        const record = (row && typeof row === 'object') ? row as Record<string, unknown> : {};
+        const version = String(record.version ?? '').trim() || '未命名版本';
+        const date = String(record.date ?? '').trim();
+        const changes = Array.isArray(record.changes)
+            ? record.changes.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+            : [];
+        return `
+            <div class="stx-ui-changelog-entry">
+                <div class="stx-ui-changelog-head">
+                    <strong>${version}</strong>
+                    ${date ? `<span>${date}</span>` : ''}
+                </div>
+                <div class="stx-ui-changelog-list">
+                    ${changes.length > 0
+                        ? changes.map((item: string): string => `<div class="stx-ui-changelog-item">${item}</div>`).join('')
+                        : '<div class="stx-ui-item-desc">本次版本没有附带详细更新说明。</div>'}
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 /**
@@ -222,6 +279,16 @@ function ensureSettingsStyles(): void {
         #${CARD_ID} .stx-ui-input:focus{border-color:var(--ss-theme-border-strong,rgba(197,160,89,.72));box-shadow:0 0 0 2px var(--ss-theme-focus-ring,rgba(197,160,89,.22));}
         #${CARD_ID} .stx-ui-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:6px;}
         #${CARD_ID} .stx-ui-status{font-size:12px;opacity:.84;}
+        #${CARD_ID} .stx-ui-about-meta{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:6px;}
+        #${CARD_ID} .stx-ui-about-meta-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;opacity:.86;word-break:break-word;}
+        #${CARD_ID} .stx-ui-about-meta-item a{color:var(--ss-theme-accent,var(--SmartThemeQuoteColor,#c5a059));text-decoration:none;word-break:break-all;}
+        #${CARD_ID} .stx-ui-about-meta-item a:hover{text-decoration:underline;}
+        #${CARD_ID} .stx-ui-changelog{display:flex;flex-direction:column;gap:10px;width:100%;}
+        #${CARD_ID} .stx-ui-changelog-entry{border:1px solid var(--ss-theme-border,rgba(255,255,255,.12));border-radius:10px;padding:10px;background:var(--ss-theme-surface-1,rgba(0,0,0,.12));}
+        #${CARD_ID} .stx-ui-changelog-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;font-size:13px;}
+        #${CARD_ID} .stx-ui-changelog-head span{font-size:12px;opacity:.72;}
+        #${CARD_ID} .stx-ui-changelog-list{display:flex;flex-direction:column;gap:6px;}
+        #${CARD_ID} .stx-ui-changelog-item{font-size:12px;line-height:1.5;opacity:.9;word-break:break-word;}
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-copy{display:none;}
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-body{width:auto;}
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-control{min-width:70px;justify-content:center;}
@@ -240,12 +307,14 @@ function buildSettingsContentHtml(): string {
     const retrievalLogLevelSelect = `<select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input"><option value="info">信息级</option><option value="debug">调试级</option></select>`;
     const retrievalRulePackSelect = `<select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input"><option value="hybrid">混合规则包</option><option value="native">原生规则包</option><option value="perocore">PeroCore 兼容包</option></select>`;
     const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
+    const displayName = String((manifestJson as Record<string, unknown>).display_name ?? 'MemoryOS').trim() || 'MemoryOS';
     return `
         <div class="stx-ui-tabs">
-            <button id="${TAB_GENERAL_ID}" type="button" class="stx-ui-tab is-active"><i class="fa-solid fa-sliders"></i><span>通用</span></button>
-            <button id="${TAB_MEMORY_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-brain"></i><span>记忆流程</span></button>
-            <button id="${TAB_INJECTION_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-wand-magic-sparkles"></i><span>注入检索</span></button>
-            <button id="${TAB_PIPELINE_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-diagram-project"></i><span>预算诊断</span></button>
+            <button id="${TAB_GENERAL_ID}" type="button" class="stx-ui-tab is-active"><i class="fa-solid fa-gear"></i><span>基础</span></button>
+            <button id="${TAB_MEMORY_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-route"></i><span>流程</span></button>
+            <button id="${TAB_INJECTION_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-wand-magic-sparkles"></i><span>注入</span></button>
+            <button id="${TAB_PIPELINE_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-layer-group"></i><span>编排</span></button>
+            <button id="${TAB_ABOUT_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-circle-info"></i><span>关于</span></button>
         </div>
         <div id="${PANEL_GENERAL_ID}" class="stx-ui-panel">
             ${divider('通用控制')}
@@ -400,6 +469,21 @@ function buildSettingsContentHtml(): string {
             ${divider('冲突裁决')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅裁决未解决冲突</div><div class="stx-ui-item-desc">开启后只把 unresolved bucket 送入裁决任务，减少重复消耗。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, '仅裁决未解决冲突')}</div></div>
         </div>
+        <div id="${PANEL_ABOUT_ID}" class="stx-ui-panel" hidden>
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">${displayName}</div>
+                    <div class="stx-ui-item-desc">统一记忆主链、注入检索、旧聊天接管与梦境维护的设置入口。</div>
+                </div>
+                ${buildAboutMetaHtml()}
+            </div>
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">更新日志</div>
+                </div>
+                <div class="stx-ui-changelog">${buildChangelogHtml()}</div>
+            </div>
+        </div>
         <div class="stx-ui-actions"><div id="${STATUS_ID}" class="stx-ui-status">已加载当前设置</div><div class="stx-ui-inline">${resetBtn}</div></div>
     `;
 }
@@ -413,7 +497,7 @@ function buildCardTemplateHtml(): string {
         drawerToggleId: DRAWER_TOGGLE_ID,
         drawerContentId: DRAWER_CONTENT_ID,
         drawerIconId: DRAWER_ICON_ID,
-        title: 'MemoryOS 设置',
+        title: 'MemoryOS',
         badgeText: 'Unified',
         contentHtml: buildSettingsContentHtml(),
     });

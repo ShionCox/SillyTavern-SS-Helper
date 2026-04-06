@@ -27,10 +27,10 @@ import { readMemoryOSSettings } from '../settings/store';
 import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
 import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
-import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
+import { enhanceMemoryTimeContextWithText, mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
 import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug';
 import { mergeStoryEventAnchors, resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
-import type { BatchTimeAssessment, MemoryTimelineProfile } from '../memory-time/time-types';
+import type { BatchTimeAssessment, MemoryTimeContext, MemoryTimelineProfile } from '../memory-time/time-types';
 import { SummaryPromptDTOService } from '../services/summary-prompt-dto-service';
 
 /**
@@ -192,7 +192,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             worldProfile: plannerResult.diagnostics.worldProfile,
             user: userPlaceholder,
             userDisplayName: userPlaceholder,
-        })}\n\n${summaryTimeDigestBlock}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
+        })}\n\n${summaryTimeDigestBlock}\n\n${plannerResult.context.worldStrategyHints.join('\n\n')}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${summaryLanguageInstruction}`;
         const lightweightPlannerInput = normalizeNarrativeValueWithUserPlaceholder({
             ...buildLightweightPlannerInput(plannerResult.context),
             userPlaceholder,
@@ -305,7 +305,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         worldProfile: plannerResult.diagnostics.worldProfile,
         user: userPlaceholder,
         userDisplayName: userPlaceholder,
-    })}\n\n${summaryTimeDigestBlock}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
+    })}\n\n${summaryTimeDigestBlock}\n\n${plannerResult.context.worldStrategyHints.join('\n\n')}\n\n所有指代主角、玩家或当前用户的自然语言字段，一律使用 \`${userPlaceholder}\`；不要展开为真实名字，也不要写成“用户”或“主角”。\n\n${patchModeInstruction}\n\n${summaryLanguageInstruction}`;
     const editableFieldMap = buildEditableFieldMap(plannerResult.context.typeSchemas);
     upsertPipelineJobRecord({
         jobId: summaryJobId,
@@ -496,10 +496,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         firstFloor: finalMutationDocument.window.fromTurn,
         lastFloor: finalMutationDocument.window.toTurn,
         source: 'summary_batch',
+        sourceText: `${resumedPlannerContext.window.summaryText}\n${resumedPlannerContext.window.recentContextText ?? ''}`,
     });
     for (const action of finalMutationDocument.actions) {
         if (!action.timeContext) {
-            action.timeContext = summaryTimeCtx;
+            action.timeContext = enhanceSummaryActionTimeContext(summaryTimeCtx, action);
         }
     }
     logTimeDebug('summary_batch_time_assessment', {
@@ -1140,6 +1141,40 @@ function trimMutationDocumentActions(document: SummaryMutationDocument, maxActio
         ...document,
         actions: document.actions.slice(0, maxActions),
     };
+}
+
+function enhanceSummaryActionTimeContext(baseTimeContext: MemoryTimeContext, action: SummaryMutationDocument['actions'][number]): MemoryTimeContext {
+    const payload = toRecord(action.newRecord ?? action.patch ?? action.payload);
+    const fields = toRecord(payload.fields);
+    const fragments = [
+        action.title,
+        action.reason,
+        payload.title,
+        payload.summary,
+        payload.detail,
+        payload.summaryAppend,
+        fields.summary,
+        fields.detail,
+        fields.currentState,
+        fields.outcome,
+    ]
+        .map((item: unknown): string => String(item ?? '').trim())
+        .filter(Boolean);
+    if (fragments.length <= 0) {
+        return baseTimeContext;
+    }
+    return enhanceMemoryTimeContextWithText({
+        timeContext: baseTimeContext,
+        text: fragments.join(' '),
+        sourceFloor: baseTimeContext.sequenceTime.firstFloor,
+    });
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
 }
 
 const NUMBER_FIELD_KEYS: Set<string> = new Set([

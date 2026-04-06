@@ -1,5 +1,5 @@
 import type { MemoryEntry, RoleEntryMemory, SummaryEntryUpsert, WorldProfileBinding } from '../types';
-import { detectWorldProfile, resolveWorldProfile, type WorldProfileDetectionResult } from '../memory-world-profile';
+import type { WorldProfileDetectionResult } from '../memory-world-profile';
 import { detectSummarySignals } from './signal-detector';
 import { resolveCandidateTypes } from './candidate-type-resolver';
 import { resolveSummaryTypeSchemas, type SummaryTypeSchema } from './schema-resolver';
@@ -17,6 +17,7 @@ import type { PlannerFact, PlannerSignal, FragmentRepairMetadata, FragmentRepair
 import { runFragmentRepairPipeline } from './planner-input-assembler';
 import { buildFragmentRepairAuditRecord, formatAuditLog } from './memory-audit-logger';
 import { projectMemorySemanticRecord, resolveSemanticKindLabel } from '../core/memory-semantic';
+import { buildWorldStrategyHintText, resolveChatWorldStrategy } from '../services/world-strategy-service';
 
 /**
  * 功能：总结窗口信息。
@@ -86,6 +87,7 @@ export interface SummaryMutationContext {
         normalizedSummary: NormalizedSummaryDigest;
     }>;
     worldProfileBias: WorldProfileDetectionResult;
+    worldStrategyHints: string[];
     narrativeStyle: ResolvedNarrativeStyle;
     typeSchemas: SummaryTypeSchema[];
     candidateRecords: SummaryCandidateRecord[];
@@ -110,14 +112,18 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
         worldProfile: string;
     };
 }> {
-    const worldProfileDetection = resolveWorldProfileDetection(input);
-    const resolvedWorldProfile = resolveWorldProfile(worldProfileDetection);
-    const currentWindowDetection = detectWorldProfile({
+    const worldStrategy = await resolveChatWorldStrategy({
+        binding: input.worldProfileBinding,
+        texts: input.worldProfileTexts,
+    });
+    const worldProfileDetection = worldStrategy.detection;
+    const resolvedWorldProfile = worldStrategy.profile;
+    const currentWindowDetection = (await resolveChatWorldStrategy({
         texts: dedupeStrings([
             input.window.summaryText,
             ...(input.recentSummaries ?? []).slice(0, 2).map((item) => String(item.content ?? '').trim()),
         ]),
-    });
+    })).detection;
     const narrativeStyle = resolvePlannerNarrativeStyle({
         worldProfileBinding: input.worldProfileBinding,
         worldProfileDetection: currentWindowDetection,
@@ -177,6 +183,7 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
                 }),
             })),
             worldProfileBias: worldProfileDetection,
+            worldStrategyHints: [buildWorldStrategyHintText(worldStrategy, 'summary')],
             narrativeStyle,
             typeSchemas,
             candidateRecords: candidateResolveResult.candidates,
@@ -190,7 +197,7 @@ export async function buildSummaryMutationContext(input: BuildSummaryContextInpu
         diagnostics: {
             retrievalProviderId: candidateResolveResult.providerId,
             matchedEntryIds: candidateResolveResult.matchedEntryIds,
-            worldProfile: resolvedWorldProfile.primary.worldProfileId,
+            worldProfile: worldStrategy.explanation.profileId,
         },
     };
 }
@@ -213,29 +220,6 @@ function buildPlannerHintReasons(candidateTypes: string[], topics: string[]): st
         reasons.push('当前区间以低信息量交流为主，可能无需更新长期记忆。');
     }
     return reasons;
-}
-
-/**
- * 功能：解析总结阶段 world profile 检测结果。
- * @param input 构建输入。
- * @returns 检测结果。
- */
-function resolveWorldProfileDetection(input: BuildSummaryContextInput): WorldProfileDetectionResult {
-    const binding = input.worldProfileBinding;
-    if (binding?.primaryProfile) {
-        return {
-            primaryProfile: binding.primaryProfile,
-            secondaryProfiles: binding.secondaryProfiles ?? [],
-            confidence: binding.confidence ?? 0.7,
-            reasonCodes: dedupeStrings([
-                ...(binding.reasonCodes ?? []),
-                'source:world_profile_binding',
-            ]),
-        };
-    }
-    return detectWorldProfile({
-        texts: input.worldProfileTexts,
-    });
 }
 
 /**

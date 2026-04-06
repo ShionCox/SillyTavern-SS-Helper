@@ -8,7 +8,6 @@ import { getMemoryTrace, recordMemoryDebug } from '../core/debug/memory-retrieva
 import { buildActorVisibleMemoryContext, renderMemoryContextXmlMarkdown } from '../memory-injection';
 import { renderRetentionNarrativePrefix } from '../memory-retention';
 import type { RetrievalCandidate } from '../memory-retrieval';
-import { detectWorldProfile, resolveWorldProfile } from '../memory-world-profile';
 import { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
 import type { ActorMemoryProfile, MemoryEntry, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
@@ -17,6 +16,10 @@ import { getSharedRetrievalService } from '../runtime/vector-runtime';
 import { buildPromptTimeMeta } from '../memory-time/time-ranking';
 import type { PromptTimeMeta } from '../memory-time/time-types';
 import { estimateXmlNarrativeRetrievalMaxChars } from '../memory-injection/xml-markdown-renderer';
+import {
+    resolveChatWorldStrategy,
+    sortEntriesByWorldStrategy,
+} from './world-strategy-service';
 
 /**
  * 功能：统一承接 Prompt 检索、记忆保留阶段计算与注入文本组装。
@@ -48,11 +51,10 @@ export class PromptAssemblyService {
             .join('\n')
             .toLowerCase();
 
-        const [typeMap, entries, actorProfiles, worldBinding, roleMemories, compareKeyIndex, timelineProfile] = await Promise.all([
+        const [typeMap, entries, actorProfiles, roleMemories, compareKeyIndex, timelineProfile] = await Promise.all([
             this.repository.listEntryTypes().then((items) => new Map(items.map((item): [string, typeof item] => [item.key, item]))),
             this.repository.listEntries(),
             this.repository.listActorProfiles(),
-            this.repository.getWorldProfileBinding(),
             this.repository.listRoleMemories(),
             this.repository.listCompareKeyIndexRecords(),
             this.repository.getTimelineProfile(),
@@ -61,8 +63,21 @@ export class PromptAssemblyService {
             return Math.max(max, entry.timeContext?.sequenceTime?.lastFloor ?? 0);
         }, 0);
 
-        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex, currentMaxFloor);
         const retrievalQueryText = query || promptText || '当前对话';
+        const worldStrategy = await resolveChatWorldStrategy({
+            repository: this.repository,
+            texts: [
+                retrievalQueryText,
+                promptText,
+                ...entries.slice(0, 80).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
+            ],
+            detectedFrom: [
+                retrievalQueryText,
+                ...entries.slice(0, 12).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
+            ],
+            persistIfMissing: true,
+        });
+        const retrievalCandidates = this.buildPromptRetrievalCandidates(entries, roleMemories, actorProfiles, compareKeyIndex, currentMaxFloor);
         const retrievalResult = await getSharedRetrievalService().searchForPrompt({
             query: retrievalQueryText,
             chatKey: this.chatKey,
@@ -88,12 +103,13 @@ export class PromptAssemblyService {
                 displayName: profile.displayName,
                 aliases: [],
             })),
+            worldStrategy,
         });
 
         const matchedEntryIdSet = new Set(retrievalResult.items.map((item) => item.candidate.entryId));
-        const selectedEntries = matchedEntryIdSet.size > 0
+        const selectedEntries = sortEntriesByWorldStrategy(matchedEntryIdSet.size > 0
             ? entries.filter((entry: MemoryEntry): boolean => matchedEntryIdSet.has(entry.entryId))
-            : entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true).slice(0, 8);
+            : entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true).slice(0, 8), worldStrategy);
         const matchedActorKeys = this.resolvePromptMatchedActorKeys(
             retrievalResult.contextRoute?.entityAnchors.actorKeys ?? [],
             retrievalResult.items.map((item) => item.candidate),
@@ -104,21 +120,6 @@ export class PromptAssemblyService {
         const entryMap = new Map(entries.map((entry: MemoryEntry): [string, MemoryEntry] => [entry.entryId, entry]));
         const roleEntries = this.buildRoleEntries(roleMemories, matchedActorKeys, matchedEntryIdSet, entryMap, actorMap, currentMaxFloor);
 
-        const worldDetection = worldBinding?.primaryProfile
-            ? {
-                primaryProfile: worldBinding.primaryProfile,
-                secondaryProfiles: worldBinding.secondaryProfiles,
-                confidence: worldBinding.confidence,
-                reasonCodes: worldBinding.reasonCodes,
-            }
-            : detectWorldProfile({
-                texts: [
-                    retrievalQueryText,
-                    promptText,
-                    ...selectedEntries.slice(0, 40).map((entry: MemoryEntry): string => `${entry.title} ${entry.summary}`),
-                ],
-            });
-        const worldProfile = resolveWorldProfile(worldDetection);
         const visibleContext = buildActorVisibleMemoryContext({
             entries: selectedEntries,
             roleEntries,
@@ -140,7 +141,7 @@ export class PromptAssemblyService {
 
         const xmlNarrative = renderMemoryContextXmlMarkdown(
             visibleContext,
-            worldProfile.primary.injectionStyle,
+            worldStrategy.profile.primary.injectionStyle,
             settings.injectionCustomBudgetEnabled ? {
                 timelineMaxItems: settings.timelineMaxItems,
                 worldBaseMaxItems: settings.worldBaseMaxItems,
@@ -171,7 +172,7 @@ export class PromptAssemblyService {
             reasonCodes: [
                 'prompt:unified_memory',
                 'prompt:xml_markdown_renderer',
-                `world_profile:${worldProfile.primary.worldProfileId}`,
+                `world_profile:${worldStrategy.profile.primary.worldProfileId}`,
                 `retrieval_provider:${retrievalResult.providerId || 'none'}`,
                 `retrieval_mode:${retrievalResult.retrievalMode}`,
                 `retrieval_rule_pack:${settings.retrievalRulePack}`,
@@ -194,19 +195,25 @@ export class PromptAssemblyService {
                 compareKeySchemaVersion: 'v2',
                 timeInjectedCount: visibleContext.diagnostics.timeInjectedCount,
                 timeSourceCounts: visibleContext.diagnostics.timeSourceCounts,
+                worldProfileId: worldStrategy.explanation.profileId,
+                worldProfileDisplayName: worldStrategy.explanation.displayName,
+                worldBindingMode: worldStrategy.explanation.bindingMode,
+                worldEffectSummary: worldStrategy.explanation.effectSummary,
             },
         };
 
         await this.repository.appendMutationHistory({
             action: 'injection_context_built',
             payload: {
-                worldProfile: worldProfile.primary.worldProfileId,
+                worldProfile: worldStrategy.profile.primary.worldProfileId,
                 actorKey: effectiveActorKey,
                 matchedEntryCount: snapshot.matchedEntryIds.length,
                 retrievalProviderId: retrievalResult.providerId,
                 retrievalRulePack: settings.retrievalRulePack,
                 timeInjectedCount: visibleContext.diagnostics.timeInjectedCount,
                 timeSourceCounts: visibleContext.diagnostics.timeSourceCounts,
+                worldBindingMode: worldStrategy.explanation.bindingMode,
+                worldEffectSummary: worldStrategy.explanation.effectSummary,
                 reasonCodes: snapshot.reasonCodes,
             },
         });

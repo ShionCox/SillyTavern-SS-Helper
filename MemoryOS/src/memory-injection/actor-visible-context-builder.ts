@@ -468,6 +468,9 @@ function toRecord(value: unknown): Record<string, unknown> {
 }
 
 function resolveScenePrimaryLabelOverride(entry: MemoryEntry, summary: string): string | undefined {
+    if (hasRenderableStoryTime(entry.timeContext)) {
+        return undefined;
+    }
     const partLabel = resolveSceneSemanticPartLabel(`${entry.title} ${summary}`);
     if (!partLabel) {
         return undefined;
@@ -495,4 +498,19 @@ function resolveSceneSemanticPartLabel(text: string): string | undefined {
         { pattern: /深夜|半夜/u, label: '深夜' },
     ];
     return orderedMatchers.find((item) => item.pattern.test(normalized))?.label;
+}
+
+function hasRenderableStoryTime(timeContext?: MemoryEntry['timeContext']): boolean {
+    const storyTime = timeContext?.storyTime;
+    if (!storyTime) {
+        return false;
+    }
+    return Boolean(
+        String(storyTime.absoluteText ?? '').trim()
+        || String(storyTime.relativeText ?? '').trim()
+        || String(storyTime.anchorEventLabel ?? '').trim()
+        || String(storyTime.relativePhaseLabel ?? '').trim()
+        || storyTime.storyDayIndex
+        || storyTime.normalized?.partOfDay,
+    );
 }

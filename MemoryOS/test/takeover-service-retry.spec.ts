@@ -86,6 +86,22 @@ vi.mock('../src/memory-summary', () => {
 import { TakeoverService } from '../src/services/takeover-service';
 import type { MemoryTakeoverPlan } from '../src/types';
 
+const repositoryStub = {
+    getWorldProfileBinding: vi.fn(async () => null),
+    putWorldProfileBinding: vi.fn(async (input) => ({
+        chatKey: 'chat-1',
+        primaryProfile: input.primaryProfile,
+        secondaryProfiles: input.secondaryProfiles,
+        confidence: input.confidence,
+        reasonCodes: input.reasonCodes,
+        detectedFrom: input.detectedFrom,
+        sourceHash: 'wp:test',
+        bindingMode: input.bindingMode ?? 'auto',
+        createdAt: 1,
+        updatedAt: 1,
+    })),
+};
+
 function createPlan(): MemoryTakeoverPlan {
     return {
         chatKey: 'chat-1',
@@ -121,7 +137,7 @@ describe('TakeoverService retry flow', () => {
     });
 
     it('retryFailedBatch 不应把计划状态写回 idle，而应保持 blocked_by_batch 并标记目标批次', async () => {
-        const service = new TakeoverService('chat-1');
+        const service = new TakeoverService('chat-1', repositoryStub as never);
 
         await service.retryFailedBatch({
             batchId: 'takeover-1:history:0002',

@@ -27,6 +27,7 @@ export async function putWorldProfileBinding(input: {
     confidence?: number;
     reasonCodes?: string[];
     detectedFrom?: string[];
+    bindingMode?: 'auto' | 'manual';
 }): Promise<WorldProfileBinding> {
     const chatKey = normalizeText(input.chatKey);
     const existing = chatKey ? await db.world_profile_bindings.get(chatKey) : null;
@@ -45,6 +46,7 @@ export async function putWorldProfileBinding(input: {
             secondaryProfiles: input.secondaryProfiles ?? [],
             detectedFrom,
         }),
+        bindingMode: input.bindingMode === 'manual' ? 'manual' : 'auto',
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
     };
@@ -102,6 +104,7 @@ function mapBinding(row: DBWorldProfileBinding): WorldProfileBinding {
         reasonCodes: dedupeStrings(row.reasonCodes ?? []),
         detectedFrom: dedupeStrings(row.detectedFrom ?? []),
         sourceHash: normalizeText(row.sourceHash),
+        bindingMode: row.bindingMode === 'manual' ? 'manual' : 'auto',
         createdAt: Math.max(0, Number(row.createdAt ?? 0) || 0),
         updatedAt: Math.max(0, Number(row.updatedAt ?? 0) || 0),
     };

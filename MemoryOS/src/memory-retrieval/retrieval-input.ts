@@ -2,6 +2,7 @@ import type { RecallConfig } from './recall-config';
 import type { PayloadFilter } from './payload-filter';
 import type { RetrievalCandidate, RetrievalRulePackMode } from './types';
 import type { ActorProfileForDictionary, RecentContextBias } from './context-router';
+import type { ResolvedChatWorldStrategy } from '../services/world-strategy-service';
 
 /**
  * 功能：定义检索执行过程中的进度提示。
@@ -38,6 +39,8 @@ export interface MemoryRetrievalInput {
     recentContext?: RecentContextBias;
     /** 最大字符预算 */
     maxChars?: number;
+    /** 世界策略偏置 */
+    worldStrategy?: ResolvedChatWorldStrategy | null;
     /** 进度回调 */
     onProgress?: (progress: MemoryRetrievalProgress) => void;
 }
@@ -64,6 +67,8 @@ export interface PromptRecallInput {
     recentContext?: RecentContextBias;
     /** 候选预过滤 */
     payloadFilter?: PayloadFilter;
+    /** 世界策略偏置 */
+    worldStrategy?: ResolvedChatWorldStrategy | null;
 }
 
 /**
@@ -80,6 +85,8 @@ export interface TakeoverRecallInput {
     maxCandidates?: number;
     /** 候选预过滤 */
     payloadFilter?: PayloadFilter;
+    /** 世界策略偏置 */
+    worldStrategy?: ResolvedChatWorldStrategy | null;
 }
 
 /**
@@ -96,4 +103,6 @@ export interface WorkbenchRecallInput {
     maxCandidates?: number;
     /** 候选预过滤 */
     payloadFilter?: PayloadFilter;
+    /** 世界策略偏置 */
+    worldStrategy?: ResolvedChatWorldStrategy | null;
 }

@@ -394,6 +394,7 @@ export interface WorldProfileBinding {
     reasonCodes: string[];
     detectedFrom: string[];
     sourceHash: string;
+    bindingMode?: 'auto' | 'manual';
     createdAt: number;
     updatedAt: number;
 }
@@ -443,6 +444,10 @@ export interface PromptAssemblyDiagnostics {
     bindingMatchModeCounts?: Record<string, number>;
     timeInjectedCount?: number;
     timeSourceCounts?: Record<string, number>;
+    worldProfileId?: string;
+    worldProfileDisplayName?: string;
+    worldBindingMode?: 'auto' | 'manual';
+    worldEffectSummary?: string[];
 }
 
 export interface PromptAssemblySnapshot {

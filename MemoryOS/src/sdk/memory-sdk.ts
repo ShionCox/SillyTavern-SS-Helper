@@ -57,7 +57,6 @@ import {
     writeMemoryOSChatState,
 } from '../db/db';
 import { readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
-import { detectWorldProfile } from '../memory-world-profile';
 import { normalizeUserNarrativeText, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
@@ -102,12 +101,18 @@ import type {
     MemoryRelationshipRecord,
     RoleEntryMemory,
     SummarySnapshot,
+    WorldProfileBinding,
 } from '../types';
 import type { RetrievalResultItem } from '../memory-retrieval/types';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { RetrievalOutputDiagnostics } from '../memory-retrieval/retrieval-output';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
 import { openDreamReviewDialog } from '../ui/dream-review-dialog';
+import {
+    applyManualWorldStrategyOverride,
+    resetChatWorldStrategyToAuto,
+    resolveChatWorldStrategy,
+} from '../services/world-strategy-service';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
@@ -441,6 +446,8 @@ export class MemorySDKImpl {
         };
          diagnostics: {
              getWorldProfileBinding: () => ReturnType<EntryRepository['getWorldProfileBinding']>;
+             setWorldProfileBinding: (input: { primaryProfile: string; secondaryProfiles?: string[] }) => Promise<WorldProfileBinding>;
+             resetWorldProfileBinding: () => Promise<WorldProfileBinding | null>;
              listMutationHistory: (limit?: number) => ReturnType<EntryRepository['listMutationHistory']>;
              listEntryAuditRecords: (limit?: number) => ReturnType<EntryRepository['listEntryAuditRecords']>;
              getVectorRuntimeStatus: () => Promise<MemoryVectorRuntimeStatus>;
@@ -479,7 +486,7 @@ export class MemorySDKImpl {
         this.entryRepository = new EntryRepository(this.chatKey_, this.compareKeyService);
         this.promptAssemblyService = new PromptAssemblyService(this.chatKey_, this.entryRepository, this.compareKeyService);
         this.summaryService = new SummaryService(this.chatKey_, this.entryRepository);
-        this.takeoverService = new TakeoverService(this.chatKey_);
+        this.takeoverService = new TakeoverService(this.chatKey_, this.entryRepository);
         this.dreamingService = new DreamingService({
             chatKey: this.chatKey_,
             repository: this.entryRepository,
@@ -1112,6 +1119,46 @@ export class MemorySDKImpl {
             },
             diagnostics: {
                 getWorldProfileBinding: async () => this.entryRepository.getWorldProfileBinding(),
+                setWorldProfileBinding: async (input): Promise<WorldProfileBinding> => {
+                    const strategy = await applyManualWorldStrategyOverride({
+                        repository: this.entryRepository,
+                        primaryProfile: input.primaryProfile,
+                        secondaryProfiles: input.secondaryProfiles,
+                        detectedFrom: ['workbench_manual_override'],
+                    });
+                    await this.entryRepository.appendMutationHistory({
+                        action: 'world_profile_bound',
+                        payload: {
+                            source: 'workbench_manual_override',
+                            primaryProfile: strategy.explanation.profileId,
+                            secondaryProfiles: strategy.detection.secondaryProfiles,
+                            confidence: strategy.explanation.confidence,
+                            reasonCodes: strategy.explanation.reasonCodes,
+                            bindingMode: strategy.explanation.bindingMode,
+                        },
+                    });
+                    return strategy.binding as WorldProfileBinding;
+                },
+                resetWorldProfileBinding: async (): Promise<WorldProfileBinding | null> => {
+                    const entries = await this.entryRepository.listEntries();
+                    const strategy = await resetChatWorldStrategyToAuto({
+                        repository: this.entryRepository,
+                        texts: entries.slice(0, 80).map((entry) => `${entry.title} ${entry.summary}`),
+                        detectedFrom: entries.slice(0, 20).map((entry) => `${entry.title} ${entry.summary}`),
+                    });
+                    await this.entryRepository.appendMutationHistory({
+                        action: 'world_profile_bound',
+                        payload: {
+                            source: 'workbench_reset_auto',
+                            primaryProfile: strategy.explanation.profileId,
+                            secondaryProfiles: strategy.detection.secondaryProfiles,
+                            confidence: strategy.explanation.confidence,
+                            reasonCodes: strategy.explanation.reasonCodes,
+                            bindingMode: strategy.explanation.bindingMode,
+                        },
+                    });
+                    return strategy.binding;
+                },
                 listMutationHistory: async (limit?: number) => this.entryRepository.listMutationHistory(limit),
                 listEntryAuditRecords: async (limit?: number) => this.entryRepository.listEntryAuditRecords(limit),
                 getVectorRuntimeStatus: async (): Promise<MemoryVectorRuntimeStatus> => this.readVectorRuntimeStatus(),
@@ -1251,6 +1298,10 @@ export class MemorySDKImpl {
             forgettingCounts,
             shadowTriggeredCount,
             traceRecords: snapshot.diagnostics?.traceRecords ?? [],
+            worldProfileId: snapshot.diagnostics?.worldProfileId,
+            worldProfileDisplayName: snapshot.diagnostics?.worldProfileDisplayName,
+            worldBindingMode: snapshot.diagnostics?.worldBindingMode,
+            worldEffectSummary: snapshot.diagnostics?.worldEffectSummary ?? [],
         };
     }
 
@@ -3249,25 +3300,24 @@ export class MemorySDKImpl {
 
     private async bindWorldProfileFromTakeover(result: MemoryTakeoverConsolidationResult): Promise<void> {
         const detectedFrom = this.collectTakeoverWorldProfileTexts(result).slice(0, 24);
-        const detection = detectWorldProfile({
+        const existingBinding = await this.entryRepository.getWorldProfileBinding();
+        const strategy = await resolveChatWorldStrategy({
+            repository: this.entryRepository,
             texts: detectedFrom,
-        });
-        await this.entryRepository.putWorldProfileBinding({
-            primaryProfile: detection.primaryProfile,
-            secondaryProfiles: detection.secondaryProfiles,
-            confidence: detection.confidence,
-            reasonCodes: detection.reasonCodes,
             detectedFrom,
+            persistIfMissing: true,
+            forceRedetect: existingBinding?.bindingMode !== 'manual',
         });
         await this.entryRepository.appendMutationHistory({
             action: 'world_profile_bound',
             payload: {
                 source: 'old_chat_takeover',
                 takeoverId: result.takeoverId,
-                primaryProfile: detection.primaryProfile,
-                secondaryProfiles: detection.secondaryProfiles,
-                confidence: detection.confidence,
-                reasonCodes: detection.reasonCodes,
+                primaryProfile: strategy.explanation.profileId,
+                secondaryProfiles: strategy.detection.secondaryProfiles,
+                confidence: strategy.explanation.confidence,
+                reasonCodes: strategy.explanation.reasonCodes,
+                bindingMode: strategy.explanation.bindingMode,
             },
         });
     }

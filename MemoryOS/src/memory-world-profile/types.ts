@@ -52,9 +52,9 @@ export interface WorldProfileDetectionResult {
 export interface ResolvedWorldProfile {
     primary: WorldProfileDefinition;
     secondary: WorldProfileDefinition[];
+    mergedCapabilities: WorldProfileCapabilities;
     mergedPreferredSchemas: string[];
     mergedPreferredFacets: string[];
     mergedFieldExtensions: Record<string, string[]>;
     mergedSummaryBias: WorldProfileSummaryBias;
 }
-

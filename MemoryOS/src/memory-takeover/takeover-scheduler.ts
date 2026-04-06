@@ -47,6 +47,7 @@ export async function runTakeoverScheduler(input: {
     plan: MemoryTakeoverPlan;
     llm: MemoryLLMApi | null;
     pluginId: string;
+    worldStrategyHintText?: string;
     skipInitialWait?: boolean;
     existingKnownEntities?: {
         actors: Array<{ actorKey: string; displayName: string }>;
@@ -216,6 +217,7 @@ export async function runTakeoverScheduler(input: {
                 messages,
                 previousBatchResults,
                 existingKnownEntities: input.existingKnownEntities,
+                worldStrategyHintText: input.worldStrategyHintText,
             });
             const admission = admitTakeoverBatchResult(result);
             await saveMemoryTakeoverPreview(input.chatKey, 'latest_batch', admission.result, 'runtime');

@@ -32,7 +32,7 @@ import {
     buildWorldStateCompareKey,
 } from '../core/compare-key';
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
-import { mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
+import { enhanceMemoryTimeContextWithText, mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
 import type { MemoryTimeContext } from '../memory-time/time-types';
 import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { logTimeDebug } from '../memory-time/time-debug';
@@ -854,6 +854,7 @@ export async function runTakeoverBatch(input: {
     messages: MemoryTakeoverMessageSlice[];
     previousBatchResults?: MemoryTakeoverBatchResult[];
     existingKnownEntities?: MemoryTakeoverKnownEntities;
+    worldStrategyHintText?: string;
 }): Promise<MemoryTakeoverBatchResult> {
     const assembly = await assembleTakeoverBatchPromptAssembly({
         llm: input.llm,
@@ -971,6 +972,7 @@ export async function runTakeoverBatch(input: {
             hintContext: channels.hintText || undefined,
         },
         extraSystemInstruction: [
+            String(input.worldStrategyHintText ?? '').trim(),
             '如果输入里提供了 knownContext，请把它视为当前批次可复用的分类对象提示。',
             '你输出的是故事世界内部可读的记忆文本，不是系统日志、不是批处理说明、不是分析报告。',
             '所有自然语言字段中，凡是指代主角、玩家或当前用户，一律使用 `{{user}}`，禁止使用“用户”“主角”“你”“主人公”“对方”等写法。',
@@ -997,7 +999,7 @@ export async function runTakeoverBatch(input: {
             '每条 relationTransitions 都要尽量填写 relationTag 和 targetType。relationTag 只能从 亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人 中选择；targetType 只能填写 actor、organization、city、nation、location、unknown。',
             '如果关系对象不是人物，不要把它塞进 actorCards；请保留在 relationTransitions，并正确填写对应的 targetType。',
             '如果对象已经出现在 knownContext.knownEntities 对应分类中，请优先按“更新已有对象”处理，而不是重复新增。',
-        ].join(''),
+        ].filter(Boolean).join(''),
     });
     if (!structured) {
         return fallback;
@@ -1290,10 +1292,15 @@ function attachTakeoverRecordTime<T extends Record<string, unknown>>(
 ): T {
     const existingTimeContext = record.timeContext as MemoryTimeContext | undefined;
     const resolvedTimeContext = existingTimeContext ?? timeContext;
-    const timeMeta = buildTimeMetaByEntryType(entryType, resolvedTimeContext);
+    const enhancedTimeContext = enhanceMemoryTimeContextWithText({
+        timeContext: resolvedTimeContext,
+        text: buildTakeoverRecordTimeSeedText(record),
+        sourceFloor: resolvedTimeContext.sequenceTime.firstFloor,
+    });
+    const timeMeta = buildTimeMetaByEntryType(entryType, enhancedTimeContext);
     return {
         ...record,
-        timeContext: resolvedTimeContext,
+        timeContext: enhancedTimeContext,
         ...timeMeta,
     };
 }
@@ -1313,6 +1320,7 @@ function attachTakeoverBatchTimeMeta(result: MemoryTakeoverBatchResult): MemoryT
         firstFloor: result.sourceRange.startFloor,
         lastFloor: result.sourceRange.endFloor,
         source: 'takeover_batch',
+        sourceText: `${result.summary ?? ''}\n${(result.sourceSegments ?? []).map((segment: TakeoverSourceSegment): string => String(segment.text ?? '').trim()).filter(Boolean).join('\n')}`,
     });
     return {
         ...result,
@@ -1338,6 +1346,20 @@ function attachTakeoverBatchTimeMeta(result: MemoryTakeoverBatchResult): MemoryT
             attachTakeoverRecordTime('world_global_state', change as unknown as Record<string, unknown>, batchTimeContext) as unknown as MemoryTakeoverWorldStateChange
         )),
     };
+}
+
+function buildTakeoverRecordTimeSeedText(record: Record<string, unknown>): string {
+    return [
+        record.title,
+        record.summary,
+        record.detail,
+        record.description,
+        record.state,
+        record.value,
+    ]
+        .map((item: unknown): string => String(item ?? '').trim())
+        .filter(Boolean)
+        .join(' ');
 }
 
 /**

@@ -16,6 +16,7 @@ export function resolveWorldProfile(detection: WorldProfileDetectionResult): Res
     return {
         primary,
         secondary,
+        mergedCapabilities: mergeCapabilities(allProfiles),
         mergedPreferredSchemas: uniqueFlatten(allProfiles.map((item): string[] => item.preferredSchemas)),
         mergedPreferredFacets: uniqueFlatten(allProfiles.map((item): string[] => item.preferredFacets)),
         mergedFieldExtensions: mergeFieldExtensions(allProfiles),
@@ -50,6 +51,22 @@ function mergeFieldExtensions(profiles: WorldProfileDefinition[]): Record<string
 }
 
 /**
+ * 功能：合并能力开关，任一画像启用则视为启用。
+ * @param profiles 模板列表。
+ * @returns 合并后的能力对象。
+ */
+function mergeCapabilities(profiles: WorldProfileDefinition[]): ResolvedWorldProfile['mergedCapabilities'] {
+    return {
+        hasMagic: profiles.some((item): boolean => item.capabilities.hasMagic),
+        hasCultivation: profiles.some((item): boolean => item.capabilities.hasCultivation),
+        hasFantasyRace: profiles.some((item): boolean => item.capabilities.hasFantasyRace),
+        hasModernTechnology: profiles.some((item): boolean => item.capabilities.hasModernTechnology),
+        hasFormalPoliticalOrder: profiles.some((item): boolean => item.capabilities.hasFormalPoliticalOrder),
+        hasSupernatural: profiles.some((item): boolean => item.capabilities.hasSupernatural),
+    };
+}
+
+/**
  * 功能：对二维字符串数组扁平化并去重。
  * @param values 二维数组。
  * @returns 去重后的数组。
@@ -66,4 +83,3 @@ function uniqueFlatten(values: string[][]): string[] {
     }
     return merged;
 }
-

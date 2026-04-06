@@ -1,5 +1,6 @@
 import { escapeHtml } from '../editorShared';
 import { getWorldProfileById } from '../../memory-world-profile';
+import { buildWorldStrategyExplanationFromBinding, listSelectableWorldProfiles } from '../../services/world-strategy-service';
 import {
     resolveEntryActionTypeLabel,
     resolveEntryTypeLabel,
@@ -267,9 +268,22 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
 function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
     const binding = snapshot.worldProfileBinding;
     if (!binding) {
-        return `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_world_profile'))}</div>`;
+        const options = listSelectableWorldProfiles().map((item) => `<option value="${escapeAttr(item.profileId)}">${escapeHtml(item.displayName)}</option>`).join('');
+        return `
+            <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_world_profile'))}</div>
+            <div class="stx-memory-workbench__stack" style="margin-top:12px;">
+                <div class="stx-memory-workbench__field">
+                    <label>${escapeHtml(resolvePreviewWorkbenchText('manual_profile_select'))}</label>
+                    <select class="stx-memory-workbench__select" id="stx-memory-world-profile-select">${options}</select>
+                </div>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-apply">${escapeHtml(resolvePreviewWorkbenchText('apply_manual_profile'))}</button>
+                </div>
+            </div>
+        `;
     }
     const primaryProfile = getWorldProfileById(binding.primaryProfile);
+    const explanation = buildWorldStrategyExplanationFromBinding(binding);
     const primaryProfileLabel = resolveWorldProfileLabel(binding.primaryProfile);
     const secondaryProfileText = resolveWorldIdentifierList(binding.secondaryProfiles, resolveWorldProfileLabel);
     const worldType = resolveWorldTypeLabel(binding.primaryProfile);
@@ -277,17 +291,60 @@ function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
         ? resolveWorldIdentifierList(primaryProfile.subGenres, resolveWorldSubTypeLabel)
         : resolvePreviewWorkbenchText('empty_value');
     const reasonCodeText = resolveWorldIdentifierList(binding.reasonCodes, resolveWorldReasonCodeLabel);
+    const options = listSelectableWorldProfiles().map((item) => {
+        const selected = item.profileId === binding.primaryProfile ? ' selected' : '';
+        return `<option value="${escapeAttr(item.profileId)}"${selected}>${escapeHtml(item.displayName)}</option>`;
+    }).join('');
+    const fieldExtensions = Object.entries(explanation?.fieldExtensions ?? {})
+        .map(([schemaId, fields]: [string, string[]]): string => `${schemaId}: ${fields.join(' / ')}`)
+        .join('；') || resolvePreviewWorkbenchText('empty_value');
+    const capabilityText = explanation
+        ? [
+            explanation.capabilities.hasMagic ? '魔法' : '',
+            explanation.capabilities.hasCultivation ? '修行' : '',
+            explanation.capabilities.hasFantasyRace ? '幻想种族' : '',
+            explanation.capabilities.hasModernTechnology ? '现代科技' : '',
+            explanation.capabilities.hasFormalPoliticalOrder ? '正式秩序' : '',
+            explanation.capabilities.hasSupernatural ? '超自然' : '',
+        ].filter(Boolean).join('、') || resolvePreviewWorkbenchText('empty_value')
+        : resolvePreviewWorkbenchText('empty_value');
 
     return `
         <div class="stx-memory-workbench__info-list">
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_chat_profile'))}</span><strong>${escapeHtml(primaryProfile?.displayName || primaryProfileLabel)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('binding_mode'))}</span><strong>${escapeHtml(binding.bindingMode === 'manual' ? resolvePreviewWorkbenchText('binding_mode_manual') : resolvePreviewWorkbenchText('binding_mode_auto'))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_type'))}</span><strong>${escapeHtml(worldType)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_sub_type'))}</span><strong>${escapeHtml(subTypeText)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('secondary_profile'))}</span><strong>${escapeHtml(secondaryProfileText)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('confidence'))}</span><strong>${escapeHtml(String(binding.confidence))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_basis'))}</span><strong>${escapeHtml(reasonCodeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injection_style'))}</span><strong>${escapeHtml(explanation?.injectionStyle || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_schemas'))}</span><strong>${escapeHtml((explanation?.preferredSchemas ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_facets'))}</span><strong>${escapeHtml((explanation?.preferredFacets ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('summary_bias'))}</span><strong>${escapeHtml((explanation?.boostedTypes ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('field_extensions'))}</span><strong>${escapeHtml(fieldExtensions)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('capability_flags'))}</span><strong>${escapeHtml(capabilityText)}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('created_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
             <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('world_effects'))}</div>
+            <div class="stx-memory-workbench__stack">
+                ${(explanation?.effectSummary ?? []).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(item)}</div>`).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('empty_value'))}</div>`}
+            </div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('manual_override_panel'))}</div>
+            <div class="stx-memory-workbench__stack">
+                <div class="stx-memory-workbench__field">
+                    <label>${escapeHtml(resolvePreviewWorkbenchText('manual_profile_select'))}</label>
+                    <select class="stx-memory-workbench__select" id="stx-memory-world-profile-select">${options}</select>
+                </div>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-apply">${escapeHtml(resolvePreviewWorkbenchText('apply_manual_profile'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="world-profile-reset">${escapeHtml(resolvePreviewWorkbenchText('reset_profile_auto'))}</button>
+                </div>
+            </div>
         </div>
         <div class="stx-memory-workbench__card" style="margin-top:12px;">
             <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('source_samples'))}</div>

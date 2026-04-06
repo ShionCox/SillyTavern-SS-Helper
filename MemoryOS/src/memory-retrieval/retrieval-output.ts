@@ -80,6 +80,10 @@ export interface RetrievalOutputDiagnostics {
     timeBiasedCount?: number;
     /** 查询时间意图 */
     queryTimeIntent?: QueryTimeIntent;
+    /** 当前世界画像 ID */
+    worldProfileId?: string;
+    /** 受世界画像偏置影响的条目数 */
+    worldBiasedCount?: number;
 }
 
 /**

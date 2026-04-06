@@ -9,6 +9,7 @@ import { DreamQualityGuardService } from './dream-quality-guard-service';
 import { DreamRecallDiagnosticsService } from './dream-recall-diagnostics-service';
 import { DreamSessionRepository } from './dream-session-repository';
 import { DreamWaveRecallService } from './dream-wave-recall-service';
+import { buildWorldStrategyHintText, resolveChatWorldStrategy } from './world-strategy-service';
 import {
     DREAM_PHASE1_MAX_MUTATION_COUNT,
     type DreamMaintenanceProposalRecord,
@@ -283,6 +284,7 @@ export class DreamingService {
             }
 
             if (review.decision === 'rejected' || review.approvedMutationIds.length <= 0) {
+                await this.rejectPendingMaintenanceProposals(maintenanceProposals);
                 await this.dreamRepository.saveDreamSessionApproval({
                     dreamId,
                     chatKey: this.chatKey,
@@ -377,6 +379,22 @@ export class DreamingService {
         }
     }
 
+    private async rejectPendingMaintenanceProposals(proposals: DreamMaintenanceProposalRecord[]): Promise<void> {
+        const pendingProposals = proposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => proposal.status === 'pending');
+        if (pendingProposals.length <= 0) {
+            return;
+        }
+        const now = Date.now();
+        await Promise.all(pendingProposals.map((proposal: DreamMaintenanceProposalRecord): Promise<void> => {
+            return this.dreamRepository.saveDreamMaintenanceProposal({
+                ...proposal,
+                status: 'rejected',
+                rejectedAt: proposal.rejectedAt ?? now,
+                updatedAt: now,
+            });
+        }));
+    }
+
     private async generateDreamOutput(input: {
         dreamId: string;
         meta: DreamSessionMetaRecord;
@@ -390,6 +408,13 @@ export class DreamingService {
             throw new Error('当前未连接可用的 LLMHub 服务，无法执行梦境生成。');
         }
         const settings = readMemoryOSSettings();
+        const worldStrategy = await resolveChatWorldStrategy({
+            repository: this.repository,
+            texts: [
+                ...input.recall.fusedHits.slice(0, 10).map((item) => `${item.title} ${item.summary}`),
+                ...input.recall.recentHits.slice(0, 6).map((item) => `${item.title} ${item.summary}`),
+            ],
+        });
         const promptBuildResult = this.promptService.buildDreamPrompt({
             meta: input.meta,
             recall: {
@@ -411,6 +436,7 @@ export class DreamingService {
                 : null,
             settings,
             candidateMap: input.candidateMap,
+            worldStrategyHintText: buildWorldStrategyHintText(worldStrategy, 'dream'),
         });
         const schema = {
             type: 'object',

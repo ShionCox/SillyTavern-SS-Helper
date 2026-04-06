@@ -11,6 +11,7 @@ import {
     runTakeoverScheduler,
     assembleTakeoverBatchPromptAssembly,
 } from '../memory-takeover';
+import type { EntryRepository } from '../repository/entry-repository';
 import type { MemoryTakeoverKnownEntities } from '../memory-takeover/takeover-batch-runner';
 import {
     clearMemoryTakeoverPreview,
@@ -51,6 +52,7 @@ import type {
     MemoryTakeoverPreviewEstimate,
     MemoryTakeoverProgressSnapshot,
 } from '../types';
+import { buildWorldStrategyHintText, resolveChatWorldStrategy } from './world-strategy-service';
 
 export type TakeoverKnownEntities = MemoryTakeoverKnownEntities;
 
@@ -109,9 +111,11 @@ export interface ContentLabRangePreviewInput {
  */
 export class TakeoverService {
     private readonly chatKey: string;
+    private readonly repository: EntryRepository;
 
-    constructor(chatKey: string) {
+    constructor(chatKey: string, repository: EntryRepository) {
         this.chatKey = String(chatKey ?? '').trim();
+        this.repository = repository;
     }
 
     /**
@@ -379,10 +383,18 @@ export class TakeoverService {
      * @returns 接管进度快照。
      */
     async runScheduler(input: Parameters<typeof runTakeoverScheduler>[0]): Promise<MemoryTakeoverProgressSnapshot> {
+        const sourceBundle = collectTakeoverSourceBundle();
+        const worldStrategy = await resolveChatWorldStrategy({
+            repository: this.repository,
+            texts: [
+                ...sourceBundle.messages.slice(0, 80).map((message) => `${message.name ?? ''} ${message.content ?? ''}`),
+            ],
+        });
         return runTakeoverScheduler({
             ...input,
             llm: input.llm ?? readMemoryLLMApi(),
             pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
+            worldStrategyHintText: buildWorldStrategyHintText(worldStrategy, 'takeover'),
         });
     }
 
@@ -437,6 +449,7 @@ export class TakeoverService {
      */
     async startTakeover(input: TakeoverSchedulerExecutionInput): Promise<MemoryTakeoverProgressSnapshot> {
         await this.readContentLabSettings();
+        await this.ensureTakeoverWorldBinding();
         await clearMemoryTakeoverPreview(this.chatKey);
         const existingPlan = await this.readPlan();
         if (existingPlan && (!input.takeoverId || existingPlan.takeoverId === input.takeoverId)) {
@@ -475,6 +488,7 @@ export class TakeoverService {
      */
     async resumeTakeover(input: Omit<TakeoverSchedulerExecutionInput, 'takeoverId' | 'currentFloorCount'>): Promise<MemoryTakeoverProgressSnapshot | null> {
         await this.readContentLabSettings();
+        await this.ensureTakeoverWorldBinding();
         const plan = await this.readPlan();
         if (!plan) {
             return null;
@@ -496,6 +510,7 @@ export class TakeoverService {
      */
     async retryFailedBatch(input: TakeoverRetryExecutionInput): Promise<MemoryTakeoverProgressSnapshot | null> {
         await this.readContentLabSettings();
+        await this.ensureTakeoverWorldBinding();
         const plan = await this.readPlan();
         if (!plan) {
             return null;
@@ -630,6 +645,24 @@ export class TakeoverService {
             skipInitialWait: input.skipInitialWait,
             existingKnownEntities: input.existingKnownEntities,
             applyConsolidation: input.applyConsolidation,
+        });
+    }
+
+    /**
+     * 功能：在接管链路启动前确保当前聊天已有稳定世界画像绑定。
+     * @returns 异步完成。
+     */
+    private async ensureTakeoverWorldBinding(): Promise<void> {
+        const sourceBundle = collectTakeoverSourceBundle();
+        await resolveChatWorldStrategy({
+            repository: this.repository,
+            texts: [
+                ...sourceBundle.messages.slice(0, 80).map((message) => `${message.name ?? ''} ${message.content ?? ''}`),
+                JSON.stringify(sourceBundle.characterCard ?? {}),
+                JSON.stringify(sourceBundle.semanticSnapshot ?? {}),
+            ],
+            detectedFrom: sourceBundle.messages.slice(0, 20).map((message) => `${message.name ?? ''} ${message.content ?? ''}`),
+            persistIfMissing: true,
         });
     }
 }

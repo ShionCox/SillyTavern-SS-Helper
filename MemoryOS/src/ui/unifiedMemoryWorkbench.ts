@@ -772,6 +772,33 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 void refreshPreviewSnapshot();
                 return;
             }
+            if (action === 'world-profile-apply') {
+                const primaryProfile = readInputValue(root, '#stx-memory-world-profile-select');
+                if (!primaryProfile) {
+                    toast.info('请先选择一个世界画像。');
+                    return;
+                }
+                await memory.unifiedMemory.diagnostics.setWorldProfileBinding({
+                    primaryProfile,
+                });
+                invalidatePreviewSnapshot();
+                toast.success('当前聊天的世界画像已切换为手动覆盖。');
+                await render();
+                if (state.currentView === 'preview') {
+                    void refreshPreviewSnapshot();
+                }
+                return;
+            }
+            if (action === 'world-profile-reset') {
+                await memory.unifiedMemory.diagnostics.resetWorldProfileBinding();
+                invalidatePreviewSnapshot();
+                toast.success('当前聊天的世界画像已恢复自动识别。');
+                await render();
+                if (state.currentView === 'preview') {
+                    void refreshPreviewSnapshot();
+                }
+                return;
+            }
             if (action === 'capture-summary') {
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
                 invalidatePreviewSnapshot();

@@ -21,6 +21,7 @@ import { readMemoryOSSettings, resolveRetrievalEnableQueryContextBuilder } from 
 import { HybridRetrievalService } from './hybrid-retrieval-service';
 import { buildQueryContextBundle } from './query-context-builder';
 import { estimateXmlNarrativeRetrievalMaxChars } from '../memory-injection/xml-markdown-renderer';
+import { applyWorldStrategyToResultItems, applyWorldStrategyToRetrievalCandidates } from './world-strategy-service';
 
 /**
  * 功能：全系统统一检索入口服务。
@@ -72,10 +73,10 @@ export class MemoryRetrievalService {
             config.payloadFilter = config.payloadFilter ?? {};
         }
 
-        const filteredCandidates = this.applyForgettingAwareRecallPolicy(
+        const filteredCandidates = applyWorldStrategyToRetrievalCandidates(this.applyForgettingAwareRecallPolicy(
             input.query,
             applyPayloadFilter(input.candidates, config.payloadFilter),
-        );
+        ), input.worldStrategy);
 
         // 先通过 orchestrator 跑基础管线（种子 -> 图扩展 -> 补召回 -> 多样性裁剪）
         const lexicalMode: RetrievalMode = config.retrievalMode === 'lexical_only' ? 'lexical_only' : 'hybrid';
@@ -165,7 +166,7 @@ export class MemoryRetrievalService {
                 onProgress: input.onProgress,
             });
 
-            finalItems = hybridResult.items;
+            finalItems = applyWorldStrategyToResultItems(hybridResult.items, input.worldStrategy);
             finalItems = this.applyShadowFinalCap(finalItems, settings.retentionShadowMaxFinalItems);
             finalProviderId = hybridResult.finalProviderId;
             strategyDecision = hybridResult.strategyDecision;
@@ -210,7 +211,10 @@ export class MemoryRetrievalService {
             });
             timeBiasedCount = finalItems.filter((item) => (item.breakdown.timeBoost ?? 0) > 0).length;
         } else {
-            finalItems = this.applyShadowFinalCap(finalItems, settings.retentionShadowMaxFinalItems);
+            finalItems = this.applyShadowFinalCap(
+                applyWorldStrategyToResultItems(finalItems, input.worldStrategy),
+                settings.retentionShadowMaxFinalItems,
+            );
             resultSourceLabels = result.items.map((item) => ({
                 candidateId: item.candidate.candidateId,
                 source: (item.breakdown.graphBoost ?? 0) > 0 && item.breakdown.bm25 === 0
@@ -266,6 +270,12 @@ export class MemoryRetrievalService {
             rankingChanges,
             timeBiasedCount,
             queryTimeIntent,
+            worldProfileId: input.worldStrategy?.explanation.profileId,
+            worldBiasedCount: finalItems.filter((item) => {
+                return input.worldStrategy
+                    ? input.worldStrategy.profile.mergedPreferredSchemas.includes(item.candidate.schemaId)
+                    : false;
+            }).length,
         };
 
         return {
@@ -291,6 +301,7 @@ export class MemoryRetrievalService {
             actorProfiles: input.actorProfiles,
             recentContext: input.recentContext,
             maxChars: input.maxChars,
+            worldStrategy: input.worldStrategy,
             recallConfig: {
                 topK: input.maxCandidates,
                 payloadFilter: input.payloadFilter,
@@ -308,6 +319,7 @@ export class MemoryRetrievalService {
             query: input.query,
             chatKey: input.chatKey,
             candidates: input.candidates,
+            worldStrategy: input.worldStrategy,
             recallConfig: {
                 topK: input.maxCandidates,
                 payloadFilter: input.payloadFilter,
@@ -326,6 +338,7 @@ export class MemoryRetrievalService {
             query: input.query,
             chatKey: input.chatKey,
             candidates: input.candidates,
+            worldStrategy: input.worldStrategy,
             recallConfig: {
                 topK: input.maxCandidates,
                 payloadFilter: input.payloadFilter,

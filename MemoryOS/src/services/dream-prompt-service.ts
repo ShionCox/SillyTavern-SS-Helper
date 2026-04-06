@@ -41,6 +41,7 @@ export class DreamPromptService {
         graphSnapshot?: DreamSessionGraphSnapshotRecord | null;
         settings?: MemoryOSSettings;
         candidateMap?: Map<string, DreamRecallCandidate>;
+        worldStrategyHintText?: string;
     }): {
         messages: Array<{ role: 'system' | 'user'; content: string }>;
         promptText: string;
@@ -66,6 +67,7 @@ export class DreamPromptService {
         const systemPrompt = [
             systemBaseText.trim(),
             this.resolveStyleLayer(stylePreset),
+            String(input.worldStrategyHintText ?? '').trim(),
             safetyRulesText.trim(),
             outputSchemaText.trim(),
             this.buildRuntimeRuleText(settings),

@@ -25,7 +25,9 @@ import { resolveTimelineProfileEvolution } from '../memory-time/timeline-profile
 import { buildSequenceTime } from '../memory-time/sequence-time';
 import { logTimeDebug } from '../memory-time/time-debug';
 import type { MemoryTimeContext, MemoryTimelineProfile } from '../memory-time/time-types';
-import { extractStoryTimeDescriptor } from '../memory-time/story-time-parser';
+import { enhanceMemoryTimeContextWithText } from '../memory-time/fallback-time-engine';
+import { extractPreferredStoryTimeText, extractStoryTimeDescriptor } from '../memory-time/story-time-parser';
+import { buildWorldStrategyHintText, resolveChatWorldStrategy } from '../services/world-strategy-service';
 
 /**
  * 功能：定义冷启动编排依赖。
@@ -96,6 +98,10 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
     const settings = readMemoryOSSettings();
     const userDisplayName = resolveCurrentNarrativeUserName(input.sourceBundle.user.userName);
     const sourceTexts = collectBundleSourceTexts(input.sourceBundle);
+    const bootstrapWorldStrategy = await resolveChatWorldStrategy({
+        texts: sourceTexts,
+    });
+    const bootstrapWorldHintText = buildWorldStrategyHintText(bootstrapWorldStrategy, 'bootstrap');
     const runId = String(input.runId ?? '').trim() || `bootstrap:${Date.now()}`;
     const existingSnapshot = await loadBootstrapStagingSnapshot(runId);
     const isResuming = Boolean(existingSnapshot && existingSnapshot.status !== 'completed');
@@ -173,6 +179,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
                 actorKeyHints,
                 userPlaceholder: '{{user}}',
             },
+            extraSystemInstruction: bootstrapWorldHintText,
         });
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
@@ -202,6 +209,7 @@ export async function runBootstrapOrchestrator(input: RunBootstrapOrchestratorIn
                 actorKeyHints,
                 userPlaceholder: '{{user}}',
             },
+            extraSystemInstruction: bootstrapWorldHintText,
         });
     await input.dependencies.appendMutationHistory({
         action: 'cold_start_phase_completed',
@@ -515,22 +523,25 @@ function buildColdStartCandidateTimeContext(
     timelineProfile: MemoryTimelineProfile,
 ): MemoryTimeContext {
     const anchorText = resolveColdStartCandidateAnchorText(candidate);
+    const sourceText = anchorText || `${candidate.title || ''} ${candidate.summary || ''}`;
     const descriptor = extractStoryTimeDescriptor({
-        text: anchorText || `${candidate.title || ''} ${candidate.summary || ''}`,
+        text: sourceText,
         fallbackStoryDayIndex: timelineProfile.currentStoryDayIndex,
     });
-    const hasExplicitAnchor = Boolean(anchorText && timelineProfile.mode === 'explicit_world_time');
-    const hasInferredAnchor = Boolean(anchorText && timelineProfile.mode === 'implicit_world_time');
-    return {
+    const preferredText = extractPreferredStoryTimeText(sourceText);
+    const hasExplicitAnchor = Boolean(preferredText.absoluteText || (anchorText && timelineProfile.mode === 'explicit_world_time'));
+    const hasInferredAnchor = Boolean(preferredText.relativeText || (anchorText && timelineProfile.mode === 'implicit_world_time'));
+    const baseContext: MemoryTimeContext = {
         mode: hasExplicitAnchor
             ? 'story_explicit'
             : hasInferredAnchor
                 ? 'story_inferred'
                 : 'sequence_fallback',
-        storyTime: anchorText ? {
+        storyTime: sourceText ? {
             calendarKind: timelineProfile.calendarKind,
             normalized: descriptor.partOfDay ? { partOfDay: descriptor.partOfDay } : undefined,
-            ...(hasExplicitAnchor ? { absoluteText: anchorText } : { relativeText: anchorText }),
+            ...(preferredText.absoluteText ? { absoluteText: preferredText.absoluteText } : {}),
+            ...(preferredText.relativeText ? { relativeText: preferredText.relativeText } : {}),
             storyDayIndex: descriptor.storyDayIndex ?? timelineProfile.currentStoryDayIndex,
             anchorEventId: descriptor.eventAnchors[0]?.eventId,
             anchorEventLabel: descriptor.anchorEventLabel,
@@ -541,6 +552,10 @@ function buildColdStartCandidateTimeContext(
         source: 'cold_start',
         confidence: Math.max(0.3, Math.min(0.95, Number(candidate.confidence) || timelineProfile.confidence || 0.3)),
     };
+    return enhanceMemoryTimeContextWithText({
+        timeContext: baseContext,
+        text: sourceText,
+    });
 }
 
 /**

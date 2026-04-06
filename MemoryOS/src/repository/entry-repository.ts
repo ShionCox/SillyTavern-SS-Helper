@@ -866,6 +866,7 @@ export class EntryRepository {
         confidence: number;
         reasonCodes: string[];
         detectedFrom: string[];
+        bindingMode?: 'auto' | 'manual';
     }): Promise<WorldProfileBinding> {
         return putWorldProfileBinding({
             chatKey: this.chatKey,
@@ -874,6 +875,7 @@ export class EntryRepository {
             confidence: input.confidence,
             reasonCodes: input.reasonCodes,
             detectedFrom: input.detectedFrom,
+            bindingMode: input.bindingMode,
         });
     }
 

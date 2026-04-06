@@ -59,6 +59,13 @@ const RELATIVE_PHASE_PATTERNS: Array<{ re: RegExp; label: string }> = [
     { re: /(当晚稍后|夜深后)/g, label: '当晚稍后' },
     { re: /(回家后不久)/g, label: '回家后不久' },
 ];
+const TIME_PHASE_TEXT = '(?:清晨|黎明|拂晓|破晓|凌晨|早上|早晨|上午|中午|正午|午后|下午|傍晚|黄昏|入夜|夜晚|夜里|晚上|深夜|午夜|半夜|白日|白天)';
+const STORY_DAY_WITH_PHASE_RANGE_RE = new RegExp(`(第[一二三四五六七八九十百千两零\\d]+天${TIME_PHASE_TEXT}(?:到|至)${TIME_PHASE_TEXT})`, 'u');
+const STORY_DAY_WITH_PHASE_RE = new RegExp(`(第[一二三四五六七八九十百千两零\\d]+天${TIME_PHASE_TEXT})`, 'u');
+const RELATIVE_DAY_WITH_PHASE_RANGE_RE = new RegExp(`((?:当天|今天|今夜|今晚|当夜|当晚|次日|翌日|第二天|第三天)${TIME_PHASE_TEXT}(?:到|至)${TIME_PHASE_TEXT})`, 'u');
+const RELATIVE_DAY_WITH_PHASE_RE = new RegExp(`((?:当天|今天|今夜|今晚|当夜|当晚|次日|翌日|第二天|第三天)${TIME_PHASE_TEXT})`, 'u');
+const PHASE_RANGE_RE = new RegExp(`(${TIME_PHASE_TEXT}(?:到|至)${TIME_PHASE_TEXT})`, 'u');
+const PHASE_POINT_RE = new RegExp(`(${TIME_PHASE_TEXT})`, 'u');
 
 /**
  * 功能：从文本中提取所有时间信号。
@@ -294,6 +301,64 @@ export function detectRelativePhaseLabel(text: string): string | undefined {
     return undefined;
 }
 
+/**
+ * 功能：提取更适合展示的故事时间文本，尽量保留“上午到中午”这类丰富表达。
+ * @param text 输入文本。
+ * @returns 适合写入 storyTime 的显式/相对时间文本。
+ */
+export function extractPreferredStoryTimeText(text: string): {
+    absoluteText?: string;
+    relativeText?: string;
+} {
+    const raw = String(text ?? '').trim();
+    if (!raw) {
+        return {};
+    }
+
+    const explicitCandidates = [
+        raw.match(STORY_DAY_WITH_PHASE_RANGE_RE)?.[1],
+        raw.match(STORY_DAY_WITH_PHASE_RE)?.[1],
+    ].map((item: string | undefined): string => String(item ?? '').trim()).filter(Boolean);
+    if (explicitCandidates.length > 0) {
+        return { absoluteText: pickLongestText(explicitCandidates) };
+    }
+
+    const relativeCandidates = [
+        raw.match(RELATIVE_DAY_WITH_PHASE_RANGE_RE)?.[1],
+        raw.match(RELATIVE_DAY_WITH_PHASE_RE)?.[1],
+    ].map((item: string | undefined): string => String(item ?? '').trim()).filter(Boolean);
+    if (relativeCandidates.length > 0) {
+        return { relativeText: pickLongestText(relativeCandidates) };
+    }
+
+    const signals = extractTimeSignals(raw);
+    const explicitSignals = signals
+        .filter((signal: TimelineSignal): boolean => signal.kind === 'explicit_date' || signal.kind === 'calendar_hint' || signal.kind === 'schedule_hint')
+        .map((signal: TimelineSignal): string => signal.text);
+    if (explicitSignals.length > 0) {
+        return { absoluteText: pickLongestText(explicitSignals) };
+    }
+
+    const relativeSignals = signals
+        .filter((signal: TimelineSignal): boolean => signal.kind === 'relative_time')
+        .map((signal: TimelineSignal): string => signal.text);
+    if (relativeSignals.length > 0) {
+        return { relativeText: pickLongestText(relativeSignals) };
+    }
+
+    const phaseRange = String(raw.match(PHASE_RANGE_RE)?.[1] ?? '').trim();
+    if (phaseRange) {
+        return { absoluteText: phaseRange };
+    }
+
+    const phasePoint = String(raw.match(PHASE_POINT_RE)?.[1] ?? '').trim();
+    if (phasePoint) {
+        return { absoluteText: phasePoint };
+    }
+
+    return {};
+}
+
 export function extractStoryEventAnchors(input: {
     text: string;
     sourceFloor?: number;
@@ -370,4 +435,11 @@ function parseChineseNumber(text: string): number {
         return (map[text[0]] ?? 1) * 10;
     }
     return map[text[0]] ?? 0;
+}
+
+function pickLongestText(values: string[]): string {
+    return [...values]
+        .map((item: string): string => String(item ?? '').trim())
+        .filter(Boolean)
+        .sort((left: string, right: string): number => right.length - left.length)[0] ?? '';
 }
