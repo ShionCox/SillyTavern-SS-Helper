@@ -16,6 +16,7 @@ import {
 } from '../../services/dream-maintenance-state';
 import { readMemoryOSSettings } from '../../settings/store';
 import type { ActorMemoryProfile, MemoryEntry } from '../../types';
+import { buildDreamRuntimeStatusMarkup, buildDreamPendingInboxMarkup, buildDreamRecentResultsMarkup } from './tabDreamStateOverview';
 
 export function resolveDreamTriggerReasonLabel(triggerReason: string | null | undefined): string {
     if (triggerReason === 'generation_ended') {
@@ -291,6 +292,9 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
 
     return `
         <div class="stx-memory-dream" style="margin-top:14px;">
+            ${buildDreamRuntimeStatusMarkup(snapshot)}
+            ${buildDreamPendingInboxMarkup(snapshot)}
+            ${buildDreamRecentResultsMarkup(snapshot)}
             <div class="stx-memory-workbench__card stx-memory-dream__hero">
                     <div class="stx-memory-workbench__split-head">
                         <div>

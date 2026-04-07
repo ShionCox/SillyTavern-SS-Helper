@@ -31,4 +31,10 @@ describe('normalizeMemoryOSSettings', () => {
         expect(resolveRetrievalEnableQueryContextBuilder('hybrid')).toBe(true);
         expect(resolveRetrievalEnableQueryContextBuilder('vector_only')).toBe(true);
     });
+
+    it('会归一化梦境执行模式预留字段', () => {
+        expect(normalizeMemoryOSSettings({ dreamExecutionMode: 'silent' }).dreamExecutionMode).toBe('silent');
+        expect(normalizeMemoryOSSettings({ dreamExecutionMode: 'manual_review' }).dreamExecutionMode).toBe('manual_review');
+        expect(normalizeMemoryOSSettings({ dreamExecutionMode: 'unknown' as any }).dreamExecutionMode).toBe('manual_review');
+    });
 });

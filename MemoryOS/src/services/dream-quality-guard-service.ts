@@ -5,6 +5,7 @@ import type {
     DreamQualityReport,
     DreamSessionOutputRecord,
 } from './dream-types';
+import type { ResolvedDreamExecutionPlan } from './dream-execution-mode';
 import type { UnifiedMemoryMutation } from '../types/unified-mutation';
 
 /** explain 缺失时的质量分数惩罚 */
@@ -43,6 +44,7 @@ export class DreamQualityGuardService {
         dreamId: string;
         output: DreamSessionOutputRecord;
         maintenanceProposals: DreamMaintenanceProposalRecord[];
+        plan?: ResolvedDreamExecutionPlan;
     }): Promise<DreamQualityReport> {
         const recentOutputs = await this.repository.listDreamSessionOutputs(8);
         const warnings: string[] = [];
@@ -67,6 +69,9 @@ export class DreamQualityGuardService {
             if (!explain || explain.sourceEntryIds.length <= 0 || explain.explanationSteps.length <= 0) {
                 explainMissingCount += 1;
                 forcedReviewMutationIds.add(mutation.mutationId);
+                if (input.plan?.runProfile === 'auto_light') {
+                    blockedMutationIds.add(mutation.mutationId);
+                }
             }
             const fingerprint = this.buildMutationFingerprint(mutation);
             if (recentFingerprints.has(fingerprint)) {
@@ -78,6 +83,9 @@ export class DreamQualityGuardService {
                 hardFactRiskCount += 1;
                 warnings.push(`提案 ${mutation.preview} 触及高风险硬事实，必须人工复核。`);
                 forcedReviewMutationIds.add(mutation.mutationId);
+                if (input.plan?.allowHighRiskMutationOutput === false) {
+                    blockedMutationIds.add(mutation.mutationId);
+                }
             }
             if (mutation.sourceEntryIds.length <= 1 && Number(mutation.confidence ?? 0) >= 0.8) {
                 hallucinationRiskCount += 1;
@@ -86,7 +94,7 @@ export class DreamQualityGuardService {
             }
         }
 
-        if (input.maintenanceProposals.length <= 0) {
+        if (input.plan?.allowMaintenance !== false && input.maintenanceProposals.length <= 0) {
             warnings.push('本轮梦境未生成 maintenance proposal，长期维护价值偏弱。');
         }
 

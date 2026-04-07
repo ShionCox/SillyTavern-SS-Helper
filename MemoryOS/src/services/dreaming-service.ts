@@ -2,6 +2,7 @@ import type { EntryRepository } from '../repository/entry-repository';
 import type { MemoryLLMApi } from '../memory-summary';
 import { readMemoryOSSettings } from '../settings/store';
 import { DreamMaintenancePlanner } from './dream-maintenance-planner';
+import { resolveDreamExecutionPlan, type ResolvedDreamExecutionPlan } from './dream-execution-mode';
 import { DreamMutationApplier } from './dream-mutation-applier';
 import { DreamPromptService } from './dream-prompt-service';
 import { DreamPostProcessingService } from './dream-post-processing-service';
@@ -27,6 +28,7 @@ import {
     type DreamSessionOutputRecord,
     type DreamSessionRecallRecord,
     type DreamTriggerReason,
+    type DreamExecutionMode,
 } from './dream-types';
 
 const runningChatKeys = new Set<string>();
@@ -52,6 +54,13 @@ type DreamStartResult = {
     status?: 'generated' | 'approved' | 'rejected' | 'deferred' | 'failed';
     reasonCode?: string;
     errorMessage?: string;
+};
+
+export type DreamExecutionContext = {
+    holderId?: string;
+    executionMode?: DreamExecutionMode;
+    resolvedPlan?: ResolvedDreamExecutionPlan;
+    triggerSource?: DreamTriggerReason;
 };
 
 /**
@@ -119,8 +128,13 @@ export class DreamingService {
         this.openReviewDialog = input.openReviewDialog;
     }
 
-    async startDreamSession(reason: DreamTriggerReason): Promise<DreamStartResult> {
+    async startDreamSession(reason: DreamTriggerReason, executionContext?: DreamExecutionContext): Promise<DreamStartResult> {
         const settings = readMemoryOSSettings();
+        const plan = executionContext?.resolvedPlan ?? resolveDreamExecutionPlan({
+            triggerReason: reason,
+            settings,
+            executionMode: executionContext?.executionMode,
+        });
         if (!settings.dreamEnabled) {
             return {
                 ok: false,
@@ -150,6 +164,8 @@ export class DreamingService {
                 dreamPromptVersion: settings.dreamPromptVersion,
                 dreamPromptStylePreset: settings.dreamPromptStylePreset,
             },
+            executionMode: plan.executionMode,
+            runProfile: plan.runProfile,
         };
         let sessionPersisted = false;
         runningChatKeys.add(this.chatKey);
@@ -159,6 +175,10 @@ export class DreamingService {
                 dreamId,
                 chatKey: this.chatKey,
                 triggerReason: reason,
+                holderId: executionContext?.holderId,
+                executionMode: plan.executionMode,
+                runProfile: plan.runProfile,
+                contextTriggerSource: executionContext?.triggerSource,
             },
         });
 
@@ -192,8 +212,9 @@ export class DreamingService {
                 diagnostics: recallBundle.diagnostics,
                 graphSnapshot: graphSnapshotRecord,
                 candidateMap: recallBundle.candidateMap,
+                plan,
             });
-            const maintenanceProposals = settings.dreamMaintenanceEnabled
+            const maintenanceProposals = settings.dreamMaintenanceEnabled && plan.allowMaintenance
                 ? await this.postProcessingService.buildDreamMaintenanceProposals({
                     dreamId,
                     recall: recallBundle.recall,
@@ -210,6 +231,7 @@ export class DreamingService {
                     dreamId,
                     output,
                     maintenanceProposals,
+                    plan,
                 })
                 : null;
             if (qualityReport) {
@@ -226,9 +248,7 @@ export class DreamingService {
             await this.diagnosticsService.saveGraphSnapshot(graphSnapshotRecord);
             await this.dreamRepository.saveDreamSessionOutput(output);
 
-            const shouldDeferAutoApproval = reason !== 'manual' && settings.dreamRequireApproval;
-
-            if (shouldDeferAutoApproval) {
+            if (plan.runProfile === 'auto_review') {
                 await this.dreamRepository.saveDreamSessionApproval({
                     dreamId,
                     chatKey: this.chatKey,
@@ -237,13 +257,30 @@ export class DreamingService {
                     rejectedMutationIds: qualityReport?.blockedMutationIds ?? [],
                     approvedMaintenanceProposalIds: [],
                     rejectedMaintenanceProposalIds: [],
+                    approvalMode: 'deferred',
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                 });
+                await this.repository.appendMutationHistory({
+                    action: 'dream_session_auto_generated',
+                    payload: {
+                        dreamId,
+                        triggerReason: reason,
+                        executionMode: plan.executionMode,
+                        runProfile: plan.runProfile,
+                        maintenanceProposalCount: maintenanceProposals.length,
+                        autoAppliedMaintenanceIds: [],
+                    },
+                });
+                return { ok: true, dreamId, status: 'deferred' };
+            }
+
+            if (plan.runProfile === 'auto_light') {
                 const autoAppliedMaintenance = await this.maybeAutoApplyLowRiskMaintenance({
                     dreamId,
                     proposals: maintenanceProposals,
                     qualityReport,
+                    plan,
                 });
                 if (autoAppliedMaintenance.length > 0) {
                     await this.maintenancePlanner.mergeAppliedMaintenanceIntoRollback({
@@ -251,19 +288,39 @@ export class DreamingService {
                         appliedProposals: autoAppliedMaintenance,
                     });
                 }
+                await this.rejectPendingMaintenanceProposals(maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+                    return !autoAppliedMaintenance.some((applied: DreamMaintenanceProposalRecord): boolean => applied.proposalId === proposal.proposalId);
+                }));
+                await this.dreamRepository.saveDreamSessionApproval({
+                    dreamId,
+                    chatKey: this.chatKey,
+                    status: 'approved',
+                    approvedMutationIds: [],
+                    rejectedMutationIds: output.proposedMutations.map((item: DreamMutationProposal): string => item.mutationId),
+                    approvedMaintenanceProposalIds: autoAppliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
+                    rejectedMaintenanceProposalIds: maintenanceProposals
+                        .map((item: DreamMaintenanceProposalRecord): string => item.proposalId)
+                        .filter((proposalId: string): boolean => !autoAppliedMaintenance.some((item: DreamMaintenanceProposalRecord): boolean => item.proposalId === proposalId)),
+                    approvalMode: 'auto_silent',
+                    approvedAt: autoAppliedMaintenance.length > 0 ? Date.now() : undefined,
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                });
                 await this.repository.appendMutationHistory({
-                    action: 'dream_session_auto_generated',
+                    action: 'dream_session_auto_light_generated',
                     payload: {
                         dreamId,
                         triggerReason: reason,
+                        executionMode: plan.executionMode,
+                        runProfile: plan.runProfile,
                         maintenanceProposalCount: maintenanceProposals.length,
                         autoAppliedMaintenanceIds: autoAppliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
                     },
                 });
-                return { ok: true, dreamId, status: 'deferred' };
+                return { ok: true, dreamId, status: 'generated' };
             }
 
-            const review = await this.openReviewDialog({
+            const reviewResult = await this.openReviewDialog({
                 meta: {
                     dreamId,
                     triggerReason: reason,
@@ -275,6 +332,13 @@ export class DreamingService {
                 diagnostics: diagnosticsRecord,
                 graphSnapshot: graphSnapshotRecord,
             });
+            const review: DreamReviewDecision = {
+                decision: reviewResult.decision,
+                approvedMutationIds: Array.isArray(reviewResult.approvedMutationIds) ? reviewResult.approvedMutationIds : [],
+                rejectedMutationIds: Array.isArray(reviewResult.rejectedMutationIds) ? reviewResult.rejectedMutationIds : [],
+                approvedMaintenanceProposalIds: Array.isArray(reviewResult.approvedMaintenanceProposalIds) ? reviewResult.approvedMaintenanceProposalIds : [],
+                rejectedMaintenanceProposalIds: Array.isArray(reviewResult.rejectedMaintenanceProposalIds) ? reviewResult.rejectedMaintenanceProposalIds : [],
+            };
 
             if (review.decision === 'deferred') {
                 await this.dreamRepository.saveDreamSessionApproval({
@@ -376,8 +440,9 @@ export class DreamingService {
                 rejectedMaintenanceProposalIds: maintenanceProposals
                     .map((item: DreamMaintenanceProposalRecord): string => item.proposalId)
                     .filter((proposalId: string): boolean => !review.approvedMaintenanceProposalIds.includes(proposalId)),
-                rollbackKey: applyResult.rollbackKey || undefined,
-                approvedAt: Date.now(),
+                    rollbackKey: applyResult.rollbackKey || undefined,
+                    approvalMode: 'interactive',
+                    approvedAt: Date.now(),
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
             });
@@ -396,7 +461,7 @@ export class DreamingService {
                     updatedAt: Date.now(),
                     failureReason: message,
                 });
-            } else {
+            } else if (typeof this.dreamRepository.deleteDreamSessionArtifacts === 'function') {
                 await this.dreamRepository.deleteDreamSessionArtifacts(dreamId);
             }
             await this.repository.appendMutationHistory({
@@ -441,6 +506,7 @@ export class DreamingService {
         diagnostics: Omit<DreamSessionDiagnosticsRecord, 'dreamId' | 'chatKey'>;
         graphSnapshot?: DreamSessionGraphSnapshotRecord | null;
         candidateMap: Map<string, DreamRecallCandidate>;
+        plan: ResolvedDreamExecutionPlan;
     }): Promise<DreamSessionOutputRecord> {
         const llm = this.getLLM();
         if (!llm) {
@@ -476,6 +542,7 @@ export class DreamingService {
             settings,
             candidateMap: input.candidateMap,
             worldStrategyHintText: buildWorldStrategyHintText(worldStrategy, 'dream'),
+            plan: input.plan,
         });
         const worldProfileFieldPolicy = buildWorldProfileFieldPolicy(worldStrategy.explanation);
         const schema = {
@@ -562,14 +629,22 @@ export class DreamingService {
             candidateByEntryRef: promptBuildResult.promptContext.candidateByEntryRef,
             worldProfileFieldPolicy,
         });
-        this.validateDreamOutput(normalized, settings);
+        const plannedOutput = {
+            ...normalized,
+            highlights: normalized.highlights.slice(0, input.plan.maxHighlights),
+            proposedMutations: input.plan.allowMutations
+                ? normalized.proposedMutations.slice(0, input.plan.maxMutations)
+                : [],
+        };
+        this.validateDreamOutput(plannedOutput, settings, input.plan);
         return {
             dreamId: input.dreamId,
             chatKey: this.chatKey,
             promptInfo: promptBuildResult.promptInfo,
-            narrative: normalized.narrative,
-            highlights: normalized.highlights,
-            proposedMutations: normalized.proposedMutations,
+            narrative: plannedOutput.narrative,
+            highlights: plannedOutput.highlights,
+            proposedMutations: plannedOutput.proposedMutations,
+            outputKind: input.plan.outputKind,
             createdAt: Date.now(),
             updatedAt: Date.now(),
         };
@@ -975,6 +1050,7 @@ export class DreamingService {
             proposedMutations: DreamMutationProposal[];
         },
         settings: ReturnType<typeof readMemoryOSSettings>,
+        plan?: ResolvedDreamExecutionPlan,
     ): void {
         if (!String(output.narrative ?? '').trim()) {
             throw new Error('invalid_dream_output:narrative_missing');
@@ -985,10 +1061,12 @@ export class DreamingService {
         if (!Array.isArray(output.proposedMutations)) {
             throw new Error('invalid_dream_output:mutations_invalid');
         }
-        if (output.highlights.length > settings.dreamPromptMaxHighlights) {
+        const maxHighlights = plan?.maxHighlights ?? settings.dreamPromptMaxHighlights;
+        const maxMutations = plan?.maxMutations ?? settings.dreamPromptMaxMutations;
+        if (output.highlights.length > maxHighlights) {
             throw new Error('invalid_dream_output:too_many_highlights');
         }
-        if (output.proposedMutations.length > settings.dreamPromptMaxMutations) {
+        if (output.proposedMutations.length > maxMutations) {
             throw new Error('invalid_dream_output:too_many_mutations');
         }
         for (const mutation of output.proposedMutations) {
@@ -1010,17 +1088,21 @@ export class DreamingService {
         dreamId: string;
         proposals: DreamMaintenanceProposalRecord[];
         qualityReport: DreamQualityReport | null;
+        plan?: ResolvedDreamExecutionPlan;
     }): Promise<DreamMaintenanceProposalRecord[]> {
         const settings = readMemoryOSSettings();
-        if (!settings.dreamMaintenanceEnabled || !settings.dreamAutoApplyLowRiskMaintenance) {
+        const allowAutoApply = input.plan?.allowAutoApplyLowRiskMaintenance ?? settings.dreamAutoApplyLowRiskMaintenance;
+        if (!settings.dreamMaintenanceEnabled || !allowAutoApply) {
             return [];
         }
         if (input.qualityReport && input.qualityReport.qualityScore < AUTO_APPLY_MIN_QUALITY_SCORE) {
             return [];
         }
         const lowRisk = input.proposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
-            return proposal.confidence >= AUTO_APPLY_MIN_CONFIDENCE
-                && proposal.proposalType !== 'memory_compression';
+            return this.maintenancePlanner.canAutoApplyProposal(proposal, {
+                plan: input.plan,
+                minConfidence: AUTO_APPLY_MIN_CONFIDENCE,
+            });
         });
         const applied: DreamMaintenanceProposalRecord[] = [];
         for (const proposal of lowRisk) {

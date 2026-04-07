@@ -33,6 +33,7 @@ const COLD_START_ENABLED_ID = 'stx-memoryos-cold-start-enabled';
 const TAKEOVER_ENABLED_ID = 'stx-memoryos-takeover-enabled';
 const DREAM_ENABLED_ID = 'stx-memoryos-dream-enabled';
 const DREAM_AUTO_TRIGGER_ID = 'stx-memoryos-dream-auto-trigger-enabled';
+const DREAM_EXECUTION_MODE_ID = 'stx-memoryos-dream-execution-mode';
 const DREAM_REQUIRE_APPROVAL_ID = 'stx-memoryos-dream-require-approval';
 const DREAM_PROMPT_ENABLED_ID = 'stx-memoryos-dream-prompt-enabled';
 const DREAM_PROMPT_VERSION_ID = 'stx-memoryos-dream-prompt-version';
@@ -328,8 +329,9 @@ function buildSettingsContentHtml(): string {
         <div id="${PANEL_MEMORY_ID}" class="stx-ui-panel" hidden>
             ${divider('梦境系统')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境系统</div><div class="stx-ui-item-desc">开启后可在工具栏手动触发一次梦境会话，生成待审批的梦境提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ENABLED_ID, '启用梦境系统')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保留自动触发开关</div><div class="stx-ui-item-desc">第一阶段默认关闭，仅保留配置位，暂不接入自动触发链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_TRIGGER_ID, '保留自动触发开关')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">第二阶段仍然通过审批弹窗落地，explain 与 diagnostics 也会在这里展示。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动触发</div><div class="stx-ui-item-desc">允许回复结束或空闲时进入自动梦境调度；实际行为由下方执行模式决定。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_TRIGGER_ID, '启用自动触发')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境执行模式</div><div class="stx-ui-item-desc">手动审批模式：自动梦境生成完整提案但等待你审核后写回。静默模式：自动梦境以后台轻整理和低风险维护为主，不主动弹出审批；手动触发仍走完整深梦境。</div></div><select id="${DREAM_EXECUTION_MODE_ID}" class="stx-ui-input"><option value="manual_review">手动审批模式</option><option value="silent">静默模式</option></select></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">保留为旧行为兼容位；第二阶段实际自动/静默分流优先由“梦境执行模式”控制。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境提示词管线</div><div class="stx-ui-item-desc">启用后使用独立提示词模板、版本信息和风格预设来构建梦境生成输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ENABLED_ID, '启用梦境提示词管线')}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境召回参数</div><div class="stx-ui-item-desc">控制梦境近层 / 中层 / 深层三段召回，以及送模上下文裁剪。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_CONTEXT_MAX_CHARS_ID}">梦境上下文最大字符数</label>${numberField(DREAM_CONTEXT_MAX_CHARS_ID,1000,30000,200)}</div>
@@ -541,6 +543,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [TAKEOVER_ENABLED_ID, settings.takeoverEnabled],
         [DREAM_ENABLED_ID, settings.dreamEnabled],
         [DREAM_AUTO_TRIGGER_ID, settings.dreamAutoTriggerEnabled],
+        [DREAM_EXECUTION_MODE_ID, settings.dreamExecutionMode],
         [DREAM_REQUIRE_APPROVAL_ID, settings.dreamRequireApproval],
         [DREAM_PROMPT_ENABLED_ID, settings.dreamPromptEnabled],
         [DREAM_PROMPT_VERSION_ID, settings.dreamPromptVersion],
@@ -681,6 +684,9 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         takeoverEnabled: checked(TAKEOVER_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverEnabled),
         dreamEnabled: checked(DREAM_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamEnabled),
         dreamAutoTriggerEnabled: checked(DREAM_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamAutoTriggerEnabled),
+        dreamExecutionMode: text(DREAM_EXECUTION_MODE_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamExecutionMode) === 'silent'
+            ? 'silent'
+            : 'manual_review',
         dreamRequireApproval: checked(DREAM_REQUIRE_APPROVAL_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRequireApproval),
         dreamPromptEnabled: checked(DREAM_PROMPT_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptEnabled),
         dreamPromptVersion: text(DREAM_PROMPT_VERSION_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion),

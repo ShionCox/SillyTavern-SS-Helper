@@ -1,6 +1,7 @@
 import { createSdkPluginSettingsStore } from '../../../SDK/settings';
 import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { normalizeRetrievalMode } from '../memory-retrieval/retrieval-mode';
+import type { DreamExecutionMode } from '../services/dream-types';
 
 export type MemoryOSSettings = {
     enabled: boolean;
@@ -9,6 +10,7 @@ export type MemoryOSSettings = {
     toolbarQuickActionsEnabled: boolean;
     dreamEnabled: boolean;
     dreamAutoTriggerEnabled: boolean;
+    dreamExecutionMode: DreamExecutionMode;
     dreamPromptEnabled: boolean;
     dreamPromptVersion: string;
     dreamPromptStylePreset: string;
@@ -164,6 +166,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     toolbarQuickActionsEnabled: true,
     dreamEnabled: true,
     dreamAutoTriggerEnabled: false,
+    dreamExecutionMode: 'manual_review',
     dreamPromptEnabled: true,
     dreamPromptVersion: 'v1.0.0',
     dreamPromptStylePreset: 'reflective',
@@ -502,6 +505,9 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         Math.min(100, Math.trunc(Number(candidate.summaryMaxActionsPerMutationBatch) || DEFAULT_MEMORY_OS_SETTINGS.summaryMaxActionsPerMutationBatch)),
     );
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
+    const dreamExecutionMode: DreamExecutionMode = candidate.dreamExecutionMode === 'silent'
+        ? 'silent'
+        : DEFAULT_MEMORY_OS_SETTINGS.dreamExecutionMode;
     const retrievalRulePack = candidate.retrievalRulePack === 'native'
         || candidate.retrievalRulePack === 'perocore'
         || candidate.retrievalRulePack === 'hybrid'
@@ -583,6 +589,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,
         dreamEnabled: candidate.dreamEnabled !== false,
         dreamAutoTriggerEnabled: candidate.dreamAutoTriggerEnabled === true,
+        dreamExecutionMode,
         dreamPromptEnabled: candidate.dreamPromptEnabled !== false,
         dreamPromptVersion: String(candidate.dreamPromptVersion ?? DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion,
         dreamPromptStylePreset: String(candidate.dreamPromptStylePreset ?? candidate.dreamStylePreset ?? DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset).trim() || DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset,

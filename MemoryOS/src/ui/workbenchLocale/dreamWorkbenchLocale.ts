@@ -169,6 +169,67 @@ const DREAM_WORKBENCH_TEXT_MAP: Record<string, string> = {
     review_wave_recent: '近期波',
     review_wave_mid: '中期波',
     review_wave_deep: '深层波',
+
+    // ── 第三阶段：状态 phase 文案 ──
+    phase_queued: '梦境排队中',
+    phase_running: '梦境运行中',
+    phase_recalling: '正在回溯记忆',
+    phase_generating: '正在生成梦境结果',
+    phase_post_processing: '正在整理维护提案',
+    phase_waiting_approval: '等待你审核',
+    phase_auto_applying: '正在自动应用低风险维护',
+    phase_completed: '梦境已完成',
+    phase_failed: '梦境执行失败',
+    phase_rolled_back: '梦境已回滚',
+
+    // ── 第三阶段：execution mode 文案 ──
+    mode_manual_review: '手动审批模式',
+    mode_silent: '静默模式',
+
+    // ── 第三阶段：run profile 文案 ──
+    profile_auto_light: '自动轻梦境',
+    profile_auto_review: '自动待审批梦境',
+    profile_manual_deep: '手动深梦境',
+
+    // ── 第三阶段：运行态概览区 ──
+    runtime_status_title: '当前梦境状态',
+    runtime_status_idle_hint: '当前无梦境任务运行',
+    runtime_trigger_label: '触发方式',
+    runtime_mode_label: '模式',
+    runtime_profile_label: '档位',
+    runtime_started_at_label: '开始时间',
+    runtime_phase_label: '当前阶段',
+
+    // ── 第三阶段：待审批入口 ──
+    pending_inbox_title: '待审批梦境',
+    pending_inbox_empty: '当前无待审批梦境',
+    pending_open_review: '打开审核',
+    pending_later: '稍后处理',
+    pending_dismiss: '忽略本次',
+    pending_highlights_count: '亮点数',
+    pending_mutations_count: '提案数',
+    pending_maintenance_count: '维护数',
+
+    // ── 第三阶段：最近结果 ──
+    recent_results_title: '最近梦境结果',
+    recent_completed: '最近完成',
+    recent_failed: '最近失败',
+    recent_rolled_back: '最近回滚',
+    recent_silent_summary: '静默自动应用摘要',
+    no_recent_activity: '近期无梦境活动',
+
+    // ── 第三阶段：通知与反馈 ──
+    dream_record: '梦境记录',
+    silent_completed: '梦境已完成：未发现可落地更新，仅完成后台整理',
+    silent_applied: '梦境已完成：自动应用了 {count} 条低风险维护',
+    silent_highlights: '梦境已完成：整理了 {count} 条记忆联想',
+    silent_no_proposal: '梦境已完成：本轮未形成稳定提案',
+
+    // ── 第三阶段：状态区辅助 ──
+    eligible: '符合触发条件',
+    no_block: '无阻塞',
+    view_detail: '查看详情',
+    open_review_from_pending: '进入审核',
 };
 
 function readText(value: unknown): string {

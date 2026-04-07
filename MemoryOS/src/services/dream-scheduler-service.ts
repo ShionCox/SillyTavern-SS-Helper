@@ -1,6 +1,8 @@
 import { readMemoryOSSettings } from '../settings/store';
+import { DEFAULT_DREAM_LOCK_TTL_MS, DreamLockService } from './dream-lock-service';
 import { DreamSessionRepository } from './dream-session-repository';
 import type {
+    DreamExecutionMode,
     DreamScheduleDecision,
     DreamSchedulerStateRecord,
     DreamTriggerReason,
@@ -10,12 +12,17 @@ type DreamSchedulerJob = {
     chatKey: string;
     triggerSource: Exclude<DreamTriggerReason, 'manual'>;
     blockedBy?: string[];
-    execute: () => Promise<{ ok: boolean; status?: string; reasonCode?: string }>;
+    execute: (context: {
+        holderId: string;
+        executionMode: DreamExecutionMode;
+        triggerSource: Exclude<DreamTriggerReason, 'manual'>;
+    }) => Promise<{ ok: boolean; status?: string; reasonCode?: string }>;
 };
 
 const globalQueue: DreamSchedulerJob[] = [];
 const queuedChatKeys = new Set<string>();
 let activeChatKey = '';
+const DREAM_HEAVY_SCAN_THROTTLE_MS = 10 * 60 * 1000;
 
 function buildDateKey(ts: number): string {
     const date = new Date(ts);
@@ -25,16 +32,23 @@ function buildDateKey(ts: number): string {
     return `${y}-${m}-${d}`;
 }
 
+function createDreamSchedulerHolderId(): string {
+    const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return `dream_scheduler:${randomId}`;
+}
+
 /**
  * 功能：第三阶段 dream scheduler。
  */
 export class DreamSchedulerService {
     private readonly chatKey: string;
     private readonly repository: DreamSessionRepository;
+    private readonly holderId: string;
 
-    constructor(chatKey: string) {
+    constructor(chatKey: string, holderId = createDreamSchedulerHolderId()) {
         this.chatKey = String(chatKey ?? '').trim();
         this.repository = new DreamSessionRepository(this.chatKey);
+        this.holderId = String(holderId ?? '').trim() || createDreamSchedulerHolderId();
     }
 
     async checkDreamTriggerEligibility(input: {
@@ -43,7 +57,7 @@ export class DreamSchedulerService {
     }): Promise<DreamScheduleDecision> {
         const settings = readMemoryOSSettings();
         const blockedBy = [...(input.blockedBy ?? [])];
-        if (!settings.dreamEnabled || !settings.dreamSchedulerEnabled) {
+        if (!settings.enabled || !settings.dreamEnabled || !settings.dreamAutoTriggerEnabled || !settings.dreamSchedulerEnabled) {
             blockedBy.push('scheduler_disabled');
         }
         if (input.triggerSource === 'generation_ended' && !settings.dreamSchedulerAllowGenerationEndedTrigger) {
@@ -68,6 +82,18 @@ export class DreamSchedulerService {
         if (queuedChatKeys.has(this.chatKey)) {
             blockedBy.push('already_queued');
         }
+        const lockService = new DreamLockService({ chatKey: this.chatKey, holderId: this.holderId });
+        const activeLock = await lockService.getActiveLock();
+        if (activeLock) {
+            blockedBy.push('lock_active');
+        }
+        if (
+            blockedBy.length <= 0
+            && currentState.lastEligibilityHeavyScanAt
+            && now - currentState.lastEligibilityHeavyScanAt < DREAM_HEAVY_SCAN_THROTTLE_MS
+        ) {
+            blockedBy.push('heavy_scan_throttled');
+        }
 
         const decision: DreamScheduleDecision = {
             shouldTrigger: blockedBy.length <= 0,
@@ -79,6 +105,9 @@ export class DreamSchedulerService {
         await this.saveState({
             ...currentState,
             lastDecision: decision,
+            lastBlockedByLockAt: blockedBy.includes('lock_active') ? now : currentState.lastBlockedByLockAt,
+            lastBlockedReasonCodes: blockedBy.length > 0 ? blockedBy : currentState.lastBlockedReasonCodes,
+            lastEligibilityHeavyScanAt: blockedBy.length <= 0 ? now : currentState.lastEligibilityHeavyScanAt,
             queuedJobCount: queuedChatKeys.has(this.chatKey) ? 1 : 0,
             active: activeChatKey === this.chatKey,
             updatedAt: Date.now(),
@@ -122,30 +151,104 @@ export class DreamSchedulerService {
         queuedChatKeys.delete(job.chatKey);
         activeChatKey = job.chatKey;
         const repo = new DreamSessionRepository(job.chatKey);
-        const state = await repo.getDreamSchedulerState() ?? this.createDefaultState();
+        const state = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
+        const lockService = new DreamLockService({ chatKey: job.chatKey, holderId: this.holderId });
+        const lockResult = await lockService.tryAcquireLock({
+            triggerSource: job.triggerSource,
+            dreamId: `dream_run:${job.chatKey}:${Date.now()}`,
+            ttlMs: DEFAULT_DREAM_LOCK_TTL_MS,
+        });
+        const lockDecision: DreamScheduleDecision = {
+            shouldTrigger: lockResult.ok,
+            reasonCodes: lockResult.ok
+                ? [lockResult.recoveredStaleLock ? 'lock_stale_recovered' : 'lock_acquired']
+                : [],
+            triggerSource: job.triggerSource,
+            blockedBy: lockResult.ok ? undefined : [lockResult.reasonCode ?? 'lock_active'],
+        };
+        if (!lockResult.ok) {
+            const now = Date.now();
+            await repo.saveDreamSchedulerState({
+                ...state,
+                active: false,
+                queuedJobCount: queuedChatKeys.has(job.chatKey) ? 1 : 0,
+                lastDecision: lockDecision,
+                lastBlockedByLockAt: now,
+                lastBlockedReasonCodes: lockDecision.blockedBy,
+                activeDreamId: undefined,
+                activeHolderId: undefined,
+                updatedAt: now,
+            });
+            activeChatKey = '';
+            if (globalQueue.length > 0) {
+                void this.processQueue();
+            }
+            return;
+        }
+        const activeDreamId = lockResult.record?.dreamId;
+        const executionMode = readMemoryOSSettings().dreamExecutionMode;
+        const startedAt = Date.now();
         await repo.saveDreamSchedulerState({
             ...state,
             active: true,
             queuedJobCount: queuedChatKeys.has(job.chatKey) ? 1 : 0,
-            lastTriggeredAt: Date.now(),
+            lastTriggeredAt: startedAt,
             lastTriggerSource: job.triggerSource,
-            updatedAt: Date.now(),
+            lastAttemptAt: startedAt,
+            lastLockAcquireAt: startedAt,
+            activeDreamId,
+            activeHolderId: this.holderId,
+            lastDecision: lockDecision,
+            updatedAt: startedAt,
         });
         try {
-            const result = await job.execute();
+            const result = await job.execute({
+                holderId: this.holderId,
+                executionMode,
+                triggerSource: job.triggerSource,
+            });
             const now = Date.now();
             const dateKey = buildDateKey(now);
-            const nextState = await repo.getDreamSchedulerState() ?? this.createDefaultState();
+            const nextState = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
             await repo.saveDreamSchedulerState({
                 ...nextState,
                 active: false,
                 queuedJobCount: queuedChatKeys.has(job.chatKey) ? 1 : 0,
                 lastCompletedAt: now,
+                lastSuccessAt: result.ok ? now : nextState.lastSuccessAt,
+                lastFailedAt: result.ok ? nextState.lastFailedAt : now,
                 dailyDateKey: nextState.dailyDateKey === dateKey ? dateKey : dateKey,
                 dailyRunCount: nextState.dailyDateKey === dateKey ? nextState.dailyRunCount + (result.ok ? 1 : 0) : (result.ok ? 1 : 0),
+                activeDreamId: undefined,
+                activeHolderId: undefined,
+                updatedAt: now,
+            });
+        } catch {
+            const now = Date.now();
+            const nextState = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
+            await repo.saveDreamSchedulerState({
+                ...nextState,
+                active: false,
+                queuedJobCount: queuedChatKeys.has(job.chatKey) ? 1 : 0,
+                lastCompletedAt: now,
+                lastFailedAt: now,
+                activeDreamId: undefined,
+                activeHolderId: undefined,
                 updatedAt: now,
             });
         } finally {
+            await lockService.releaseLock();
+            const releaseAt = Date.now();
+            const nextState = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
+            await repo.saveDreamSchedulerState({
+                ...nextState,
+                active: false,
+                queuedJobCount: queuedChatKeys.has(job.chatKey) ? 1 : 0,
+                activeDreamId: undefined,
+                activeHolderId: undefined,
+                lastLockReleaseAt: releaseAt,
+                updatedAt: releaseAt,
+            });
             activeChatKey = '';
             if (globalQueue.length > 0) {
                 void this.processQueue();
@@ -161,9 +264,9 @@ export class DreamSchedulerService {
         await this.repository.saveDreamSchedulerState(record);
     }
 
-    private createDefaultState(): DreamSchedulerStateRecord {
+    private createDefaultState(chatKey = this.chatKey): DreamSchedulerStateRecord {
         return {
-            chatKey: this.chatKey,
+            chatKey,
             dailyRunCount: 0,
             dailyDateKey: buildDateKey(Date.now()),
             queuedJobCount: 0,

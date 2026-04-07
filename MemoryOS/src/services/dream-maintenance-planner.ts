@@ -4,6 +4,7 @@ import type {
     DreamMaintenanceProposalRecord,
     DreamRollbackMetadataRecord,
 } from './dream-types';
+import type { ResolvedDreamExecutionPlan } from './dream-execution-mode';
 import type { MemoryEntry, MemoryRelationshipRecord } from '../types';
 
 type ApplyDreamMaintenanceResult = {
@@ -76,6 +77,27 @@ export class DreamMaintenancePlanner {
         };
         await this.dreamRepository.saveDreamMaintenanceProposal(nextRecord);
         return nextRecord;
+    }
+
+    canAutoApplyProposal(proposal: DreamMaintenanceProposalRecord, input?: {
+        plan?: ResolvedDreamExecutionPlan;
+        minConfidence?: number;
+    }): boolean {
+        const minConfidence = input?.minConfidence ?? 0.75;
+        if (input?.plan && !input.plan.allowAutoApplyLowRiskMaintenance) {
+            return false;
+        }
+        if (proposal.confidence < minConfidence) {
+            return false;
+        }
+        if (proposal.proposalType === 'memory_compression') {
+            return false;
+        }
+        if (proposal.proposalType === 'summary_candidate_promotion') {
+            return proposal.confidence >= Math.max(minConfidence, 0.8);
+        }
+        return proposal.proposalType === 'shadow_adjustment'
+            || proposal.proposalType === 'relationship_reinforcement';
     }
 
     async mergeAppliedMaintenanceIntoRollback(input: {

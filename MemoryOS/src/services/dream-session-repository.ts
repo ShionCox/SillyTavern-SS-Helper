@@ -21,6 +21,7 @@ import type {
     DreamSessionRecallRecord,
     DreamSessionRecord,
 } from './dream-types';
+import type { DreamLockRecord } from './dream-lock-types';
 
 type DreamRecordCollection =
     | 'dream_session_meta'
@@ -33,7 +34,8 @@ type DreamRecordCollection =
     | 'dream_maintenance_proposal'
     | 'dream_quality_report'
     | 'dream_rollback_metadata'
-    | 'dream_scheduler_state';
+    | 'dream_scheduler_state'
+    | 'dream_lock_state';
 
 /**
  * 功能：统一管理 dream session 在 chat_plugin_records 中的持久化。
@@ -87,6 +89,33 @@ export class DreamSessionRepository {
 
     async saveDreamSchedulerState(record: DreamSchedulerStateRecord): Promise<void> {
         await this.saveRecord('dream_scheduler_state', record.chatKey || 'scheduler', record, record.updatedAt);
+    }
+
+    async saveDreamLockState(record: DreamLockRecord): Promise<void> {
+        await this.saveRecord('dream_lock_state', record.lockKey, record, record.updatedAt);
+    }
+
+    async getDreamLockState(lockKey: string): Promise<DreamLockRecord | null> {
+        return this.getSingleRecord<DreamLockRecord>('dream_lock_state', String(lockKey ?? '').trim());
+    }
+
+    async deleteDreamLockState(lockKey: string): Promise<void> {
+        const normalizedLockKey = String(lockKey ?? '').trim();
+        if (!normalizedLockKey) {
+            return;
+        }
+        const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, this.chatKey, 'dream_lock_state', {
+            order: 'desc',
+            limit: 2000,
+        });
+        const deleteIds = rows
+            .filter((row: DBChatPluginRecord): boolean => String(row.recordId ?? '').trim() === normalizedLockKey)
+            .map((row: DBChatPluginRecord): number => Number(row.id))
+            .filter((rowId: number): boolean => Number.isFinite(rowId));
+        if (deleteIds.length <= 0) {
+            return;
+        }
+        await db.chat_plugin_records.bulkDelete(Array.from(new Set(deleteIds)));
     }
 
     /**
@@ -154,6 +183,7 @@ export class DreamSessionRepository {
             'dream_quality_report',
             'dream_rollback_metadata',
             'dream_scheduler_state',
+            'dream_lock_state',
         ];
         let deletedCount = 0;
         for (const collection of collections) {
@@ -214,6 +244,61 @@ export class DreamSessionRepository {
 
     async getDreamSchedulerState(): Promise<DreamSchedulerStateRecord | null> {
         return this.getSingleRecord<DreamSchedulerStateRecord>('dream_scheduler_state', this.chatKey);
+    }
+
+    /**
+     * 功能：列出所有 approval 状态为 pending 的梦境会话。
+     * @param limit 最大返回数。
+     * @returns 待审批的梦境会话列表。
+     */
+    async listPendingDreamSessions(limit = 20): Promise<DreamSessionRecord[]> {
+        const approvals = await this.listRecords<DreamSessionApprovalRecord>('dream_session_approval', 200);
+        const pendingApprovals = approvals.filter(
+            (item: DreamSessionApprovalRecord): boolean => item.status === 'pending',
+        );
+        const results: DreamSessionRecord[] = [];
+        for (const approval of pendingApprovals.slice(0, limit)) {
+            const session = await this.getDreamSessionById(approval.dreamId);
+            if (session.meta) {
+                results.push(session);
+            }
+        }
+        return results;
+    }
+
+    /**
+     * 功能：获取最近完成（approved 或 generated 且非 pending）的梦境会话。
+     * @returns 最近完成的会话，不存在返回 null。
+     */
+    async getLatestCompletedSession(): Promise<DreamSessionRecord | null> {
+        const metas = await this.listDreamSessionMetas(20);
+        const completedMeta = metas.find((m: DreamSessionMetaRecord): boolean =>
+            m.status === 'approved' || m.status === 'generated',
+        );
+        if (!completedMeta) return null;
+        return this.getDreamSessionById(completedMeta.dreamId);
+    }
+
+    /**
+     * 功能：获取最近失败的梦境会话。
+     * @returns 最近失败的会话，不存在返回 null。
+     */
+    async getLatestFailedSession(): Promise<DreamSessionRecord | null> {
+        const metas = await this.listDreamSessionMetas(20);
+        const failedMeta = metas.find((m: DreamSessionMetaRecord): boolean => m.status === 'failed');
+        if (!failedMeta) return null;
+        return this.getDreamSessionById(failedMeta.dreamId);
+    }
+
+    /**
+     * 功能：获取最近回滚的梦境会话。
+     * @returns 最近回滚的会话，不存在返回 null。
+     */
+    async getLatestRolledBackSession(): Promise<DreamSessionRecord | null> {
+        const metas = await this.listDreamSessionMetas(20);
+        const rolledBackMeta = metas.find((m: DreamSessionMetaRecord): boolean => m.status === 'rolled_back');
+        if (!rolledBackMeta) return null;
+        return this.getDreamSessionById(rolledBackMeta.dreamId);
     }
 
     private async saveRecord<T extends object>(

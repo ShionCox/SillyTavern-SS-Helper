@@ -62,7 +62,7 @@ import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
-import { DreamingService } from '../services/dreaming-service';
+import { DreamingService, type DreamExecutionContext } from '../services/dreaming-service';
 import { DreamRollbackService } from '../services/dream-rollback-service';
 import type {
     DreamMaintenanceProposalRecord,
@@ -400,7 +400,7 @@ export class MemorySDKImpl {
             options?: { targetChatKey?: string; skipClear?: boolean },
         ) => Promise<ImportMemoryPromptTestBundleResult>;
         rebuildLogicalChatView: () => Promise<void>;
-        startDreamSession: (reason: DreamTriggerReason) => Promise<MemoryDreamExecutionResult>;
+        startDreamSession: (reason: DreamTriggerReason, executionContext?: DreamExecutionContext) => Promise<MemoryDreamExecutionResult>;
         primeColdStartPrompt: (
             _reason?: string,
             selection?: MemoryColdStartWorldbookSelection,
@@ -870,9 +870,9 @@ export class MemorySDKImpl {
             rebuildLogicalChatView: async (): Promise<void> => {
                 return;
             },
-            startDreamSession: async (reason: DreamTriggerReason): Promise<MemoryDreamExecutionResult> => {
+            startDreamSession: async (reason: DreamTriggerReason, executionContext?: DreamExecutionContext): Promise<MemoryDreamExecutionResult> => {
                 this.tryRegisterLLMTasks();
-                const result = await this.dreamingService.startDreamSession(reason);
+                const result = await this.dreamingService.startDreamSession(reason, executionContext);
                 if (result.ok && result.status === 'approved') {
                     await this.refreshVectorIndexAfterPipeline('梦境审批写回');
                 }

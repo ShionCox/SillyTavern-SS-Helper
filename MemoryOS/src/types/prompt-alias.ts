@@ -52,6 +52,9 @@ export interface DreamPromptDTO {
         chatRef: string;
         dreamRef: string;
         triggerReason: string;
+        executionMode?: 'manual_review' | 'silent';
+        runProfile?: 'auto_light' | 'auto_review' | 'manual_deep';
+        outputKind?: 'full' | 'light';
         promptInfo: {
             promptVersion: string;
             stylePreset: string;
@@ -62,6 +65,8 @@ export interface DreamPromptDTO {
             maxMutations: number;
             weakInferenceOnly: boolean;
             requireExplain: boolean;
+            allowMutationOutput?: boolean;
+            allowHighRiskMutationOutput?: boolean;
         };
     };
     recall: {

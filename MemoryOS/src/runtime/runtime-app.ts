@@ -32,6 +32,9 @@ import {
 import { ensureSdkFloatingToolbar, removeSdkFloatingToolbarGroup, SDK_FLOATING_TOOLBAR_ID } from '../../../SDK/toolbar';
 import { initVectorRuntime } from './vector-runtime';
 import { DreamSchedulerService, initializeDreamScheduler } from '../services/dream-scheduler-service';
+import { DreamUiStateService } from '../ui/dream-ui-state-service';
+import { DreamNotificationService } from '../ui/dream-notification-service';
+import { updateDreamTaskPill, getDreamTaskPillElement, hideDreamTaskPill } from '../ui/dream-task-pill';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -236,6 +239,9 @@ export class MemoryOS {
     private dreamScheduler: DreamSchedulerService | null;
     private dreamIdleTimerHandle: number | null;
     private dreamIdleActivityHandler: (() => void) | null;
+    private dreamUiStateService: DreamUiStateService | null;
+    private dreamNotificationService: DreamNotificationService;
+    private dreamUiPollHandle: number | null;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -255,6 +261,9 @@ export class MemoryOS {
         this.dreamScheduler = null;
         this.dreamIdleTimerHandle = null;
         this.dreamIdleActivityHandler = null;
+        this.dreamUiStateService = null;
+        this.dreamNotificationService = new DreamNotificationService();
+        this.dreamUiPollHandle = null;
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -329,6 +338,133 @@ export class MemoryOS {
     private syncAuxiliaryUi(): void {
         this.refreshToolbarShortcuts();
         void this.refreshSummaryProgressUi();
+        this.ensureDreamUiPoll();
+    }
+
+    /**
+     * 功能：统一刷新工具栏和总结进度悬浮框。
+     */
+    private syncAuxiliaryUi(): void {
+        this.refreshToolbarShortcuts();
+        void this.refreshSummaryProgressUi();
+        this.ensureDreamUiPoll();
+    }
+
+    /**
+     * 功能：启动梦境 UI 状态轮询。
+     */
+    private ensureDreamUiPoll(): void {
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.dreamEnabled) {
+            this.stopDreamUiPoll();
+            return;
+        }
+        if (this.dreamUiPollHandle != null) return;
+        this.dreamUiPollHandle = window.setInterval((): void => {
+            void this.refreshDreamUiState();
+        }, 8000);
+        // 立即执行一次
+        void this.refreshDreamUiState();
+    }
+
+    /**
+     * 功能：停止梦境 UI 状态轮询。
+     */
+    private stopDreamUiPoll(): void {
+        if (this.dreamUiPollHandle != null) {
+            window.clearInterval(this.dreamUiPollHandle);
+            this.dreamUiPollHandle = null;
+        }
+        hideDreamTaskPill();
+    }
+
+    /**
+     * 功能：刷新梦境 UI 状态（pill + 通知）。
+     */
+    private async refreshDreamUiState(): Promise<void> {
+        try {
+            const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+            if (!memory) return;
+            const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+            if (!chatKey) return;
+            // 更新或创建 state service
+            if (!this.dreamUiStateService || (this.dreamUiStateService as unknown as { chatKey: string }).chatKey !== chatKey) {
+                this.dreamUiStateService = new DreamUiStateService(chatKey);
+                this.dreamNotificationService.reset();
+            }
+            const snapshot = await this.dreamUiStateService.getSnapshot();
+            // 更新 pill
+            updateDreamTaskPill(snapshot, (): void => {
+                if (snapshot.inbox.pendingApprovalCount > 0) {
+                    this.openPendingDreamReview(snapshot.inbox.pendingDreamIds[0]);
+                } else {
+                    openUnifiedMemoryWorkbench({ initialView: 'dream' });
+                }
+            });
+            // 挂载 pill 到 toolbar（如果还没挂）
+            this.mountDreamPillToToolbar();
+            // 通知
+            this.dreamNotificationService.evaluate(snapshot);
+        } catch (error) {
+            logger.debug('[DreamUiPoll] 刷新失败', error);
+        }
+    }
+
+    /**
+     * 功能：把 pill 挂载到工具栏附近。
+     */
+    private mountDreamPillToToolbar(): void {
+        const pill = getDreamTaskPillElement();
+        if (pill.parentElement) return;
+        const toolbarHost = document.querySelector('.stx-sdk-toolbar-group-memoryos');
+        if (toolbarHost) {
+            toolbarHost.insertAdjacentElement('afterend', pill);
+        }
+    }
+
+    /**
+     * 功能：打开指定 dreamId 的待审批 review dialog。
+     */
+    private openPendingDreamReview(dreamId?: string): void {
+        if (!dreamId) {
+            openUnifiedMemoryWorkbench({ initialView: 'dream' });
+            return;
+        }
+        const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+        if (!memory) {
+            toast.info('当前聊天未连接记忆主链。');
+            return;
+        }
+        void (async (): Promise<void> => {
+            try {
+                const session = await memory.unifiedMemory.diagnostics.getDreamSessionById(dreamId);
+                if (!session?.meta || !session.output || !session.recall) {
+                    toast.info('未找到该待审批梦境会话。');
+                    return;
+                }
+                const { openDreamReviewDialog } = await import('../ui/dream-review-dialog');
+                const result = await openDreamReviewDialog({
+                    meta: {
+                        dreamId: session.meta.dreamId,
+                        triggerReason: session.meta.triggerReason,
+                        createdAt: session.meta.createdAt,
+                    },
+                    recall: session.recall,
+                    output: session.output,
+                    maintenanceProposals: session.maintenanceProposals,
+                    diagnostics: session.diagnostics,
+                    graphSnapshot: session.graphSnapshot,
+                });
+                if (result.decision === 'approved' || result.decision === 'rejected') {
+                    toast.success(result.decision === 'approved' ? '梦境提案已审批。' : '已拒绝本轮梦境提案。');
+                    this.dreamUiStateService?.invalidateCache();
+                    void this.refreshDreamUiState();
+                }
+            } catch (error) {
+                logger.error('[DreamReview] 打开待审批失败', error);
+                toast.error('打开梦境审核失败。');
+            }
+        })();
     }
 
     /**
@@ -1272,8 +1408,8 @@ export class MemoryOS {
             chatKey,
             triggerSource: 'generation_ended',
             blockedBy,
-            execute: async (): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
-                const result = await memory.chatState.startDreamSession('generation_ended');
+            execute: async (context): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+                const result = await memory.chatState.startDreamSession('generation_ended', context);
                 return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
             },
         });
@@ -1313,8 +1449,8 @@ export class MemoryOS {
             chatKey,
             triggerSource: 'idle',
             blockedBy,
-            execute: async (): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
-                const result = await memory.chatState.startDreamSession('idle');
+            execute: async (context): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+                const result = await memory.chatState.startDreamSession('idle', context);
                 return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
             },
         });

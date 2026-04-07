@@ -975,6 +975,39 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await render();
                 return;
             }
+            if (action === 'dream-open-pending-review') {
+                const dreamId = String(button.dataset.dreamId ?? '').trim();
+                if (!dreamId) {
+                    toast.info('缺少待审批梦境标识。');
+                    return;
+                }
+                const session = await memory.unifiedMemory.diagnostics.getDreamSessionById(dreamId);
+                if (!session?.meta || !session.output || !session.recall) {
+                    toast.info('未找到该待审批梦境会话数据。');
+                    return;
+                }
+                const { openDreamReviewDialog } = await import('./dream-review-dialog');
+                const reviewResult = await openDreamReviewDialog({
+                    meta: {
+                        dreamId: session.meta.dreamId,
+                        triggerReason: session.meta.triggerReason,
+                        createdAt: session.meta.createdAt,
+                    },
+                    recall: session.recall,
+                    output: session.output,
+                    maintenanceProposals: session.maintenanceProposals,
+                    diagnostics: session.diagnostics,
+                    graphSnapshot: session.graphSnapshot,
+                });
+                if (reviewResult.decision === 'approved') {
+                    toast.success('梦境提案已审批。');
+                } else if (reviewResult.decision === 'rejected') {
+                    toast.info('已拒绝本轮梦境提案。');
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
             if (action === 'export-chat-database') {
                 const databaseSnapshot = await memory.chatState.exportCurrentChatDatabaseSnapshotForTest();
                 const fileName = buildChatDatabaseExportFileName(memory.getChatKey());

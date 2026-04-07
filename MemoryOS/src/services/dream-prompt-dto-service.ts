@@ -2,6 +2,7 @@ import type { MemoryOSSettings } from '../settings/store';
 import type {
     DreamPromptInfo,
 } from './dream-prompt-service';
+import type { ResolvedDreamExecutionPlan } from './dream-execution-mode';
 import type {
     DreamNeuronNode,
     DreamRecallCandidate,
@@ -60,6 +61,7 @@ export class DreamPromptDTOService {
         settings: MemoryOSSettings;
         promptInfo: DreamPromptInfo;
         candidateMap?: Map<string, DreamRecallCandidate>;
+        plan?: ResolvedDreamExecutionPlan;
     }): DreamPromptDTOBuildResult {
         const references = new PromptReferenceService();
         const entryRefToEntryId = new Map<string, string>();
@@ -138,16 +140,21 @@ export class DreamPromptDTOService {
                 chatRef: references.encode('chat', input.meta.chatKey),
                 dreamRef: references.encode('dream', input.meta.dreamId),
                 triggerReason: normalizeText(input.meta.triggerReason) || 'manual',
+                executionMode: input.plan?.executionMode ?? input.meta.executionMode ?? input.settings.dreamExecutionMode,
+                runProfile: input.plan?.runProfile ?? input.meta.runProfile ?? 'manual_deep',
+                outputKind: input.plan?.outputKind ?? 'full',
                 promptInfo: {
                     promptVersion: input.promptInfo.promptVersion,
                     stylePreset: input.promptInfo.stylePreset,
                     schemaVersion: input.promptInfo.schemaVersion,
                 },
                 qualityConstraints: {
-                    maxHighlights: input.settings.dreamPromptMaxHighlights,
-                    maxMutations: input.settings.dreamPromptMaxMutations,
+                    maxHighlights: input.plan?.maxHighlights ?? input.settings.dreamPromptMaxHighlights,
+                    maxMutations: input.plan?.maxMutations ?? input.settings.dreamPromptMaxMutations,
                     weakInferenceOnly: input.settings.dreamPromptWeakInferenceOnly,
                     requireExplain: input.settings.dreamPromptRequireExplain,
+                    allowMutationOutput: input.plan?.allowMutations !== false,
+                    allowHighRiskMutationOutput: input.plan?.allowHighRiskMutationOutput !== false,
                 },
             },
             recall: {

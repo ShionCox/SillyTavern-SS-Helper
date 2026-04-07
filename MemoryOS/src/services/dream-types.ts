@@ -6,6 +6,10 @@ export const DREAM_PHASE1_MAX_MUTATION_COUNT = 8;
 export type DreamSessionStatus = 'queued' | 'running' | 'generated' | 'approved' | 'rejected' | 'failed' | 'rolled_back';
 export type DreamApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type DreamTriggerReason = 'manual' | 'generation_ended' | 'idle';
+export type DreamExecutionMode = 'manual_review' | 'silent';
+export type DreamRunProfile = 'auto_light' | 'auto_review' | 'manual_deep';
+export type DreamSessionOutputKind = 'full' | 'light';
+export type DreamApprovalMode = 'interactive' | 'deferred' | 'auto_silent';
 export type DreamRecallSource = 'recent' | 'mid' | 'deep' | 'fused';
 export type DreamMutationType = 'entry_create' | 'entry_patch' | 'relationship_patch';
 export type DreamMaintenanceProposalType =
@@ -45,6 +49,8 @@ export interface DreamSessionMetaRecord {
     updatedAt: number;
     settingsSnapshot: DreamSettingsSnapshot;
     failureReason?: string;
+    executionMode?: DreamExecutionMode;
+    runProfile?: DreamRunProfile;
 }
 
 export interface DreamRecallHit {
@@ -168,6 +174,7 @@ export interface DreamSessionOutputRecord {
     narrative: string;
     highlights: string[];
     proposedMutations: DreamMutationProposal[];
+    outputKind?: DreamSessionOutputKind;
     createdAt: number;
     updatedAt: number;
 }
@@ -181,6 +188,7 @@ export interface DreamSessionApprovalRecord {
     approvedMaintenanceProposalIds?: string[];
     rejectedMaintenanceProposalIds?: string[];
     rollbackKey?: string;
+    approvalMode?: DreamApprovalMode;
     approvedAt?: number;
     createdAt: number;
     updatedAt: number;
@@ -310,6 +318,16 @@ export interface DreamSchedulerStateRecord {
     lastTriggeredAt?: number;
     lastTriggerSource?: DreamTriggerReason;
     lastCompletedAt?: number;
+    lastSuccessAt?: number;
+    lastFailedAt?: number;
+    lastAttemptAt?: number;
+    lastEligibilityHeavyScanAt?: number;
+    lastLockAcquireAt?: number;
+    lastLockReleaseAt?: number;
+    activeDreamId?: string;
+    activeHolderId?: string;
+    lastBlockedByLockAt?: number;
+    lastBlockedReasonCodes?: string[];
     dailyRunCount: number;
     dailyDateKey: string;
     queuedJobCount: number;
