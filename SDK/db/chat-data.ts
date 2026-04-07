@@ -380,6 +380,88 @@ export async function querySdkPluginChatRecords(
     return results;
 }
 
+/**
+ * 功能：按 recordId 对插件聊天记录去重，只保留每个标识的最新一条。
+ * @param rows 原始记录列表。
+ * @param order 结果排序方向。
+ * @returns 去重后的记录列表。
+ */
+function dedupeSdkPluginChatRecordsByRecordId(
+    rows: DBChatPluginRecord[],
+    order: 'asc' | 'desc' = 'asc',
+): DBChatPluginRecord[] {
+    const latestByRecordId = new Map<string, DBChatPluginRecord>();
+    for (const row of rows) {
+        const recordId = String(row.recordId ?? '').trim();
+        if (!recordId) {
+            continue;
+        }
+        const existing = latestByRecordId.get(recordId);
+        if (!existing) {
+            latestByRecordId.set(recordId, row);
+            continue;
+        }
+        const existingSortKey = Math.max(Number(existing.ts ?? 0), Number(existing.updatedAt ?? 0));
+        const nextSortKey = Math.max(Number(row.ts ?? 0), Number(row.updatedAt ?? 0));
+        if (nextSortKey >= existingSortKey) {
+            latestByRecordId.set(recordId, row);
+        }
+    }
+    const dedupedRows = Array.from(latestByRecordId.values());
+    dedupedRows.sort((left: DBChatPluginRecord, right: DBChatPluginRecord): number => {
+        const leftSortKey = Math.max(Number(left.ts ?? 0), Number(left.updatedAt ?? 0));
+        const rightSortKey = Math.max(Number(right.ts ?? 0), Number(right.updatedAt ?? 0));
+        return order === 'desc' ? rightSortKey - leftSortKey : leftSortKey - rightSortKey;
+    });
+    return dedupedRows;
+}
+
+/**
+ * 功能：查询指定聊天下按 recordId 去重后的插件记录。
+ * @param pluginId 插件 ID。
+ * @param chatKey 聊天键。
+ * @param collection 集合名。
+ * @param opts 查询选项。
+ * @returns 去重后的记录列表。
+ */
+export async function queryLatestSdkPluginChatRecords(
+    pluginId: string,
+    chatKey: string,
+    collection: string,
+    opts?: QuerySdkPluginChatRecordsOptions,
+): Promise<DBChatPluginRecord[]> {
+    const order = opts?.order ?? 'desc';
+    const rawRows = await querySdkPluginChatRecords(pluginId, chatKey, collection, {
+        ...opts,
+        offset: 0,
+        limit: 0,
+    });
+    let results = dedupeSdkPluginChatRecordsByRecordId(rawRows, order);
+    if (opts?.offset && opts.offset > 0) {
+        results = results.slice(opts.offset);
+    }
+    if (opts?.limit && opts.limit > 0) {
+        results = results.slice(0, opts.limit);
+    }
+    logger.info('[ChatRecords][QueryLatestByChat]', {
+        pluginId,
+        chatKey,
+        collection,
+        count: results.length,
+        order,
+        fromTs: Number(opts?.fromTs ?? 0),
+        toTs: Number(opts?.toTs ?? Infinity),
+        offset: Number(opts?.offset || 0),
+        limit: Number(opts?.limit || 0),
+        sample: results.slice(0, 5).map((row: DBChatPluginRecord) => ({
+            id: row.id,
+            recordId: row.recordId,
+            ts: row.ts,
+        })),
+    });
+    return results;
+}
+
 export async function queryAllSdkPluginChatRecords(
     pluginId: string,
     collection: string,

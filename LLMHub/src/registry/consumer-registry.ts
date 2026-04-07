@@ -184,8 +184,8 @@ export class ConsumerRegistry {
     }
 
     /** 获取某插件某任务的描述 */
-    getTaskDescriptor(pluginId: string, taskId: string): TaskDescriptor | undefined {
-        return this.persistent.get(pluginId)?.tasks.find(t => t.taskId === taskId);
+    getTaskDescriptor(pluginId: string, taskKey: string): TaskDescriptor | undefined {
+        return this.persistent.get(pluginId)?.tasks.find(t => t.taskKey === taskKey);
     }
 
     /** 获取某插件的路由绑定 */
@@ -234,7 +234,7 @@ export class ConsumerRegistry {
                 if (persistent && !persistent.staleReason) {
                     persistent.staleReason = 'plugin_inactive';
                     const staleEntries: StaleBindingSnapshot[] = persistent.tasks.map(task => ({
-                        taskId: task.taskId,
+                        taskKey: task.taskKey,
                         taskKind: task.taskKind,
                         registrationVersion: persistent.registrationVersion,
                         lastSeenAt: session.seenAt,
@@ -301,49 +301,49 @@ export class ConsumerRegistry {
         incoming: ConsumerRegistration,
     ): StaleBindingSnapshot[] {
         const stale: StaleBindingSnapshot[] = [];
-        const incomingTaskIds = new Set(incoming.tasks.map(t => t.taskId));
-        const incomingTaskMap = new Map(incoming.tasks.map(t => [t.taskId, t]));
+        const incomingTaskIds = new Set(incoming.tasks.map(t => t.taskKey));
+        const incomingTaskMap = new Map(incoming.tasks.map(t => [t.taskKey, t]));
 
         for (const oldTask of existing.tasks) {
             // 任务被删除
-            if (!incomingTaskIds.has(oldTask.taskId)) {
+            if (!incomingTaskIds.has(oldTask.taskKey)) {
                 stale.push({
-                    taskId: oldTask.taskId,
+                    taskKey: oldTask.taskKey,
                     taskKind: oldTask.taskKind,
                     registrationVersion: existing.registrationVersion,
                     lastSeenAt: Date.now(),
                     source: 'task_removed',
                     isStale: true,
-                    staleReason: `任务 ${oldTask.taskId} 在新版本 (v${incoming.registrationVersion}) 中被移除`,
+                    staleReason: `任务 ${oldTask.taskKey} 在新版本 (v${incoming.registrationVersion}) 中被移除`,
                 });
                 continue;
             }
 
-            const newTask = incomingTaskMap.get(oldTask.taskId)!;
+            const newTask = incomingTaskMap.get(oldTask.taskKey)!;
 
             // 任务类型变更
             if (oldTask.taskKind !== newTask.taskKind) {
                 stale.push({
-                    taskId: oldTask.taskId,
+                    taskKey: oldTask.taskKey,
                     taskKind: oldTask.taskKind,
                     registrationVersion: existing.registrationVersion,
                     lastSeenAt: Date.now(),
                     source: 'task_kind_changed',
                     isStale: true,
-                    staleReason: `任务 ${oldTask.taskId} 类型从 ${oldTask.taskKind} 变更为 ${newTask.taskKind}`,
+                    staleReason: `任务 ${oldTask.taskKey} 类型从 ${oldTask.taskKind} 变更为 ${newTask.taskKind}`,
                 });
                 continue;
             }
 
             // 能力要求变更 → 检查旧资源是否还合法
             if (this.capabilitiesChanged(oldTask.requiredCapabilities, newTask.requiredCapabilities)) {
-                const binding = existing.routeBindings?.find(b => b.taskId === oldTask.taskId);
+                const binding = existing.routeBindings?.find(b => b.taskKey === oldTask.taskKey);
                 if (binding && this.resourceCapabilityQuery) {
                     const resourceCaps = this.resourceCapabilityQuery(binding.resourceId);
                     const missing = newTask.requiredCapabilities.filter(c => !resourceCaps.includes(c));
                     if (missing.length > 0) {
                         stale.push({
-                            taskId: oldTask.taskId,
+                            taskKey: oldTask.taskKey,
                             taskKind: oldTask.taskKind,
                             registrationVersion: existing.registrationVersion,
                             lastSeenAt: Date.now(),
@@ -368,12 +368,12 @@ export class ConsumerRegistry {
 
     private buildRecommendedSnapshots(
         tasks: TaskDescriptor[],
-    ): Record<string, { taskId: string; resourceId?: string; model?: string; profileId?: string }> {
-        const result: Record<string, { taskId: string; resourceId?: string; model?: string; profileId?: string }> = {};
+    ): Record<string, { taskKey: string; resourceId?: string; model?: string; profileId?: string }> {
+        const result: Record<string, { taskKey: string; resourceId?: string; model?: string; profileId?: string }> = {};
         for (const task of tasks) {
             if (task.recommendedRoute) {
-                result[task.taskId] = {
-                    taskId: task.taskId,
+                result[task.taskKey] = {
+                    taskKey: task.taskKey,
                     resourceId: task.recommendedRoute.resourceId,
                     profileId: task.recommendedRoute.profileId,
                 };

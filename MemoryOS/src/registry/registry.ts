@@ -36,7 +36,7 @@ export class PluginRegistry implements STXRegistry {
             this.degradedPlugins.delete(manifest.pluginId);
         }
 
-        const action: 'add' | 'update' = this.plugins.has(manifest.pluginId) ? 'update' : 'add';
+        const action: 'register' | 'update' = this.plugins.has(manifest.pluginId) ? 'update' : 'register';
         const normalizedManifest: PluginManifest = {
             ...manifest,
             declaredAt: manifest.declaredAt ?? Date.now(),
@@ -68,8 +68,8 @@ export class PluginRegistry implements STXRegistry {
      * @param pluginId 插件唯一标识。
      * @returns 命中返回清单，否则返回 undefined。
      */
-    get(pluginId: string): PluginManifest | undefined {
-        return this.plugins.get(pluginId);
+    get(pluginId: string): PluginManifest | null {
+        return this.plugins.get(pluginId) ?? null;
     }
 
     /**
@@ -92,14 +92,14 @@ export class PluginRegistry implements STXRegistry {
      * @returns 是否具备能力。
      */
     hasCapability(pluginId: string, capabilityType: 'events' | 'memory' | 'llm', capability: string): boolean {
-        const manifest: PluginManifest | undefined = this.plugins.get(pluginId);
+        const manifest: PluginManifest | null = this.plugins.get(pluginId) ?? null;
         if (!manifest) return false;
 
         if (this.degradedPlugins.has(pluginId) && capabilityType !== 'events') {
             return false;
         }
 
-        const capabilities: string[] | undefined = manifest.capabilities[capabilityType];
+        const capabilities: string[] | undefined = manifest.capabilities?.[capabilityType];
         return Array.isArray(capabilities) ? capabilities.includes(capability) : false;
     }
 

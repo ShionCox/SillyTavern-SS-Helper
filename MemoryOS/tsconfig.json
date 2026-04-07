@@ -22,7 +22,8 @@
     "src/**/*.ts",
     "src/**/*.d.ts",
     "../_Components/css.d.ts",
-    "../SDK/css.d.ts"
+    "../SDK/css.d.ts",
+    "../SDK/vite-env.d.ts"
   ],
   "exclude": [
     "node_modules",

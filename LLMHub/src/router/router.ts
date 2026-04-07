@@ -81,17 +81,17 @@ export class TaskRouter {
 
     applyTaskAssignments(assignments: TaskAssignment[]): void {
         this.taskAssignments.clear();
-        for (const a of assignments) this.taskAssignments.set(`${a.pluginId}::${a.taskId}`, a);
+        for (const a of assignments) this.taskAssignments.set(`${a.pluginId}::${a.taskKey}`, a);
     }
 
-    getTaskAssignment(pluginId: string, taskId: string): TaskAssignment | undefined {
-        return this.taskAssignments.get(`${pluginId}::${taskId}`);
+    getTaskAssignment(pluginId: string, taskKey: string): TaskAssignment | undefined {
+        return this.taskAssignments.get(`${pluginId}::${taskKey}`);
     }
 
     // ─── 统一路由解析 ───
 
     resolveRoute(args: RouteResolveArgs): RouteResolveResult {
-        const { consumer, taskKind, taskId, requiredCapabilities, routeHint } = args;
+        const { consumer, taskKind, taskKey, requiredCapabilities, routeHint } = args;
 
         // 1. routeHint
         if (routeHint?.resourceId) {
@@ -106,8 +106,8 @@ export class TaskRouter {
         }
 
         // 2. 任务分配
-        if (taskId) {
-            const assignment = this.taskAssignments.get(`${consumer}::${taskId}`);
+        if (taskKey) {
+            const assignment = this.taskAssignments.get(`${consumer}::${taskKey}`);
             if (assignment?.resourceId && !assignment.isStale) {
                 if (this.providerSatisfies(assignment.resourceId, requiredCapabilities)) {
                     return {
@@ -120,8 +120,8 @@ export class TaskRouter {
         }
 
         // 3. 插件注册任务推荐
-        if (taskId && this.registry) {
-            const taskDesc = this.registry.getTaskDescriptor(consumer, taskId);
+        if (taskKey && this.registry) {
+            const taskDesc = this.registry.getTaskDescriptor(consumer, taskKey);
             if (taskDesc?.recommendedRoute?.resourceId) {
                 if (this.providerSatisfies(taskDesc.recommendedRoute.resourceId, requiredCapabilities)) {
                     return {

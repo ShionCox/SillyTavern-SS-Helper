@@ -1,604 +1,972 @@
-import { buildSettingsCardStylesTemplate } from './settingsCardStylesTemplate';
-import { buildSettingsCardHtmlTemplate } from './settingsCardHtmlTemplate';
-import type { MemoryOSSettingsIds } from './settingsCardTemplateTypes';
+import { buildSettingPageStyles, buildSettingPageTemplate, hydrateSettingPage } from '../../../_Components/Setting';
+import { buildSharedCheckboxCard, buildSharedCheckboxStyles } from '../../../_Components/sharedCheckbox';
+import { buildSharedButton, buildSharedButtonStyles } from '../../../_Components/sharedButton';
+import { buildSharedInputField, buildSharedInputStyles } from '../../../_Components/sharedInput';
+import { buildThemeVars } from '../../../SDK/theme';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
-import { logger, toast } from '../runtime/runtime-services';
-import { openRecordEditor } from './recordEditorNext';
-import { hydrateSharedSelects, refreshSharedSelectOptions } from '../../../_Components/sharedSelect';
-import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
-import { applyTailwindScopeToNode } from '../../../SDK/tailwind';
-import { mountThemeHost, unmountThemeHost, initThemeKernel, subscribeTheme } from '../../../SDK/theme';
-import { renderSettingsExperience } from './settingsCardExperience';
-import { showSnapshotSourceDetails } from './candidateSourceDialogs';
-import { createEditorActionExecutor } from './editorActions';
-import { bindRuntimeControlTab } from './settingsTabs/runtimeControlTab';
-import { bindMemoryStrategyTab } from './settingsTabs/memoryStrategyTab';
-import { bindInjectionPromptTab } from './settingsTabs/injectionPromptTab';
-import { bindDataMaintenanceTab } from './settingsTabs/dataMaintenanceTab';
-import { bindAboutDiagnosticsTab } from './settingsTabs/aboutDiagnosticsTab';
+import { logger } from '../runtime/runtime-services';
+import { openUnifiedMemoryWorkbench } from './unifiedMemoryWorkbench';
+import { DEFAULT_MEMORY_OS_SETTINGS, type MemoryOSSettings, readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 
-interface SettingsTabEntry {
-    tabId: string;
-    panelId: string;
-}
+const CARD_ID = 'stx-memoryos-card';
+const STYLE_ID = 'stx-memoryos-settings-style';
+const DRAWER_TOGGLE_ID = 'stx-memoryos-drawer-toggle';
+const DRAWER_CONTENT_ID = 'stx-memoryos-drawer-content';
+const DRAWER_ICON_ID = 'stx-memoryos-drawer-icon';
+const BTN_ID = 'stx-memoryos-open-workbench';
+const RESET_BTN_ID = 'stx-memoryos-reset-settings';
+const STATUS_ID = 'stx-memoryos-settings-status';
+const TAB_GENERAL_ID = 'stx-memoryos-tab-general';
+const TAB_MEMORY_ID = 'stx-memoryos-tab-memory';
+const TAB_INJECTION_ID = 'stx-memoryos-tab-injection';
+const TAB_PIPELINE_ID = 'stx-memoryos-tab-pipeline';
+const TAB_ABOUT_ID = 'stx-memoryos-tab-about';
+const PANEL_GENERAL_ID = 'stx-memoryos-panel-general';
+const PANEL_MEMORY_ID = 'stx-memoryos-panel-memory';
+const PANEL_INJECTION_ID = 'stx-memoryos-panel-injection';
+const PANEL_PIPELINE_ID = 'stx-memoryos-panel-pipeline';
+const PANEL_ABOUT_ID = 'stx-memoryos-panel-about';
+const ENABLED_ID = 'stx-memoryos-enabled';
+const TOOLBAR_QUICK_ACTIONS_ID = 'stx-memoryos-toolbar-quick-actions-enabled';
+const COLD_START_ENABLED_ID = 'stx-memoryos-cold-start-enabled';
+const TAKEOVER_ENABLED_ID = 'stx-memoryos-takeover-enabled';
+const DREAM_ENABLED_ID = 'stx-memoryos-dream-enabled';
+const DREAM_AUTO_TRIGGER_ID = 'stx-memoryos-dream-auto-trigger-enabled';
+const DREAM_REQUIRE_APPROVAL_ID = 'stx-memoryos-dream-require-approval';
+const DREAM_PROMPT_ENABLED_ID = 'stx-memoryos-dream-prompt-enabled';
+const DREAM_PROMPT_VERSION_ID = 'stx-memoryos-dream-prompt-version';
+const DREAM_PROMPT_ALLOW_EXPANSION_ID = 'stx-memoryos-dream-prompt-allow-expansion';
+const DREAM_PROMPT_MAX_HIGHLIGHTS_ID = 'stx-memoryos-dream-prompt-max-highlights';
+const DREAM_PROMPT_MAX_MUTATIONS_ID = 'stx-memoryos-dream-prompt-max-mutations';
+const DREAM_PROMPT_REQUIRE_EXPLAIN_ID = 'stx-memoryos-dream-prompt-require-explain';
+const DREAM_PROMPT_STRICT_JSON_ID = 'stx-memoryos-dream-prompt-strict-json';
+const DREAM_PROMPT_WEAK_INFERENCE_ID = 'stx-memoryos-dream-prompt-weak-inference';
+const DREAM_CONTEXT_MAX_CHARS_ID = 'stx-memoryos-dream-context-max-chars';
+const DREAM_RECENT_TOPK_ID = 'stx-memoryos-dream-recent-topk';
+const DREAM_MID_TOPK_ID = 'stx-memoryos-dream-mid-topk';
+const DREAM_DEEP_TOPK_ID = 'stx-memoryos-dream-deep-topk';
+const DREAM_FUSED_MAX_ITEMS_ID = 'stx-memoryos-dream-fused-max-items';
+const DREAM_STYLE_PRESET_ID = 'stx-memoryos-dream-style-preset';
+const DREAM_WAVE_ENABLED_ID = 'stx-memoryos-dream-wave-enabled';
+const DREAM_WAVE_RECENT_TOPK_ID = 'stx-memoryos-dream-wave-recent-topk';
+const DREAM_WAVE_MID_TOPK_ID = 'stx-memoryos-dream-wave-mid-topk';
+const DREAM_WAVE_DEEP_TOPK_ID = 'stx-memoryos-dream-wave-deep-topk';
+const DREAM_WAVE_FUSION_TOPK_ID = 'stx-memoryos-dream-wave-fusion-topk';
+const DREAM_GRAPH_ENABLED_ID = 'stx-memoryos-dream-graph-enabled';
+const DREAM_GRAPH_EXPAND_DEPTH_ID = 'stx-memoryos-dream-graph-expand-depth';
+const DREAM_NOVELTY_ENABLED_ID = 'stx-memoryos-dream-novelty-enabled';
+const DREAM_NOVELTY_WEIGHT_ID = 'stx-memoryos-dream-novelty-weight';
+const DREAM_REPETITION_PENALTY_WEIGHT_ID = 'stx-memoryos-dream-repetition-penalty-weight';
+const DREAM_DIAGNOSTICS_ENABLED_ID = 'stx-memoryos-dream-diagnostics-enabled';
+const DREAM_SCHEDULER_ENABLED_ID = 'stx-memoryos-dream-scheduler-enabled';
+const DREAM_SCHEDULER_COOLDOWN_ID = 'stx-memoryos-dream-scheduler-cooldown';
+const DREAM_SCHEDULER_DAILY_MAX_ID = 'stx-memoryos-dream-scheduler-daily-max';
+const DREAM_SCHEDULER_IDLE_MINUTES_ID = 'stx-memoryos-dream-scheduler-idle-minutes';
+const DREAM_SCHEDULER_GENERATION_TRIGGER_ID = 'stx-memoryos-dream-scheduler-generation-trigger';
+const DREAM_SCHEDULER_IDLE_TRIGGER_ID = 'stx-memoryos-dream-scheduler-idle-trigger';
+const DREAM_MAINTENANCE_ENABLED_ID = 'stx-memoryos-dream-maintenance-enabled';
+const DREAM_MAINTENANCE_MAX_PROPOSALS_ID = 'stx-memoryos-dream-maintenance-max-proposals';
+const DREAM_QUALITY_GUARD_ENABLED_ID = 'stx-memoryos-dream-quality-guard-enabled';
+const DREAM_AUTO_APPLY_LOW_RISK_ID = 'stx-memoryos-dream-auto-apply-low-risk';
+const DREAM_WORKBENCH_ENABLED_ID = 'stx-memoryos-dream-workbench-enabled';
+const DREAM_ROLLBACK_ENABLED_ID = 'stx-memoryos-dream-rollback-enabled';
+const SUMMARY_AUTO_TRIGGER_ID = 'stx-memoryos-summary-auto-trigger';
+const SUMMARY_PROGRESS_OVERLAY_ID = 'stx-memoryos-summary-progress-overlay-enabled';
+const SUMMARY_INTERVAL_ID = 'stx-memoryos-summary-interval-floors';
+const SUMMARY_MIN_MESSAGES_ID = 'stx-memoryos-summary-min-messages';
+const SUMMARY_RECENT_WINDOW_ID = 'stx-memoryos-summary-recent-window';
+const SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-rolling-digest-max-chars';
+const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-candidate-summary-max-chars';
+const TAKEOVER_DETECT_MIN_FLOORS_ID = 'stx-memoryos-takeover-detect-min-floors';
+const TAKEOVER_DEFAULT_RECENT_FLOORS_ID = 'stx-memoryos-takeover-default-recent-floors';
+const TAKEOVER_DEFAULT_BATCH_SIZE_ID = 'stx-memoryos-takeover-default-batch-size';
+const TAKEOVER_REQUEST_INTERVAL_SECONDS_ID = 'stx-memoryos-takeover-request-interval-seconds';
+const TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID = 'stx-memoryos-takeover-default-prioritize-recent';
+const TAKEOVER_DEFAULT_AUTO_CONTINUE_ID = 'stx-memoryos-takeover-default-auto-continue';
+const TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID = 'stx-memoryos-takeover-default-auto-consolidate';
+const TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID = 'stx-memoryos-takeover-default-pause-on-error';
+const INJECTION_PROMPT_ID = 'stx-memoryos-injection-prompt-enabled';
+const INJECTION_PREVIEW_ID = 'stx-memoryos-injection-preview-enabled';
+const INJECTION_CUSTOM_BUDGET_ID = 'stx-memoryos-injection-custom-budget-enabled';
+const INJECTION_BUDGET_FIELDS_ID = 'stx-memoryos-injection-budget-fields';
+const TIMELINE_MAX_ITEMS_ID = 'stx-memoryos-timeline-max-items';
+const WORLD_BASE_MAX_ITEMS_ID = 'stx-memoryos-world-base-max-items';
+const SCENE_ACTIVE_MAX_ITEMS_ID = 'stx-memoryos-scene-active-max-items';
+const SCENE_RECENT_MAX_ITEMS_ID = 'stx-memoryos-scene-recent-max-items';
+const ENTITY_MAX_ITEMS_ID = 'stx-memoryos-entity-max-items';
+const IDENTITY_MAX_ITEMS_ID = 'stx-memoryos-identity-max-items';
+const RELATIONSHIP_MAX_ITEMS_ID = 'stx-memoryos-relationship-max-items';
+const EVENT_MAX_ITEMS_ID = 'stx-memoryos-event-max-items';
+const SHADOW_EVENT_MAX_ITEMS_ID = 'stx-memoryos-shadow-event-max-items';
+const INTERPRETATION_MAX_ITEMS_ID = 'stx-memoryos-interpretation-max-items';
+const RETRIEVAL_MODE_ID = 'stx-memoryos-retrieval-mode';
+const RETRIEVAL_DEFAULT_TOPK_ID = 'stx-memoryos-retrieval-default-topk';
+const RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID = 'stx-memoryos-retrieval-default-expand-depth';
+const RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID = 'stx-memoryos-retrieval-enable-payload-filter';
+const RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID = 'stx-memoryos-retrieval-enable-graph-expansion';
+const RETRIEVAL_ENABLE_GRAPH_PENALTY_ID = 'stx-memoryos-retrieval-enable-graph-penalty';
+const FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID = 'stx-memoryos-forgetting-shadow-recall-penalty-mild';
+const FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID = 'stx-memoryos-forgetting-shadow-recall-penalty-heavy';
+const FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID = 'stx-memoryos-forgetting-shadow-confidence-penalty-mild';
+const FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID = 'stx-memoryos-forgetting-shadow-confidence-penalty-heavy';
+const FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID = 'stx-memoryos-forgetting-shadow-max-final-items';
+const RETENTION_BLUR_THRESHOLD_ID = 'stx-memoryos-retention-blur-threshold';
+const RETENTION_DISTORTED_THRESHOLD_ID = 'stx-memoryos-retention-distorted-threshold';
+const RETRIEVAL_LOG_ENABLED_ID = 'stx-memoryos-retrieval-log-enabled';
+const RETRIEVAL_TRACE_PANEL_ID = 'stx-memoryos-retrieval-trace-panel-enabled';
+const RETRIEVAL_LOG_LEVEL_ID = 'stx-memoryos-retrieval-log-level';
+const RETRIEVAL_RULE_PACK_ID = 'stx-memoryos-retrieval-rule-pack';
+const VECTOR_TOPK_ID = 'stx-memoryos-vector-topk';
+const VECTOR_DEEP_WINDOW_ID = 'stx-memoryos-vector-deep-window';
+const VECTOR_FINAL_TOPK_ID = 'stx-memoryos-vector-final-topk';
+const VECTOR_ENABLE_STRATEGY_ROUTING_ID = 'stx-memoryos-vector-enable-strategy-routing';
+const VECTOR_ENABLE_RERANK_ID = 'stx-memoryos-vector-enable-rerank';
+const VECTOR_RERANK_WINDOW_ID = 'stx-memoryos-vector-rerank-window';
+const VECTOR_EMBEDDING_MODEL_ID = 'stx-memoryos-vector-embedding-model';
+const VECTOR_EMBEDDING_VERSION_ID = 'stx-memoryos-vector-embedding-version';
+const VECTOR_AUTO_INDEX_ON_WRITE_ID = 'stx-memoryos-vector-auto-index-on-write';
+const VECTOR_ENABLE_LLMHUB_RERANK_ID = 'stx-memoryos-vector-enable-llmhub-rerank';
+const VECTOR_LLMHUB_RERANK_RESOURCE_ID = 'stx-memoryos-vector-llmhub-rerank-resource';
+const VECTOR_LLMHUB_RERANK_MODEL_ID = 'stx-memoryos-vector-llmhub-rerank-model';
+const VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-min-candidates';
+const VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID = 'stx-memoryos-vector-llmhub-rerank-max-candidates';
+const VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID = 'stx-memoryos-vector-llmhub-rerank-fallback-to-rule';
+const PIPELINE_BUDGET_ENABLED_ID = 'stx-memoryos-pipeline-budget-enabled';
+const PIPELINE_MAX_INPUT_CHARS_ID = 'stx-memoryos-pipeline-max-input-chars';
+const PIPELINE_MAX_OUTPUT_ITEMS_ID = 'stx-memoryos-pipeline-max-output-items';
+const PIPELINE_MAX_ACTIONS_ID = 'stx-memoryos-pipeline-max-actions';
+const PIPELINE_MAX_SECTION_BATCHES_ID = 'stx-memoryos-pipeline-max-section-batches';
+const PIPELINE_MAX_CONFLICT_BUCKET_ID = 'stx-memoryos-pipeline-max-conflict-bucket';
+const PIPELINE_MAX_SECTION_DIGEST_ID = 'stx-memoryos-pipeline-max-section-digest';
+const PIPELINE_MAX_FINALIZER_ITEMS_ID = 'stx-memoryos-pipeline-max-finalizer-items';
+const PIPELINE_STAGING_RETENTION_DAYS_ID = 'stx-memoryos-pipeline-staging-retention-days';
+const PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID = 'stx-memoryos-pipeline-resolve-unresolved-only';
 
-let MEMORYOS_THEME_BINDING_READY = false;
+type TabKey = 'general' | 'memory' | 'injection' | 'pipeline' | 'about';
+type TabBinding = { key: TabKey; tabId: string; panelId: string };
 
-const NAMESPACE = 'stx-memoryos';
-const CHARACTER_ROLE_STORAGE_PREFIX = 'stx-memoryos-character-role:';
+const TABS: TabBinding[] = [
+    { key: 'general', tabId: TAB_GENERAL_ID, panelId: PANEL_GENERAL_ID },
+    { key: 'memory', tabId: TAB_MEMORY_ID, panelId: PANEL_MEMORY_ID },
+    { key: 'injection', tabId: TAB_INJECTION_ID, panelId: PANEL_INJECTION_ID },
+    { key: 'pipeline', tabId: TAB_PIPELINE_ID, panelId: PANEL_PIPELINE_ID },
+    { key: 'about', tabId: TAB_ABOUT_ID, panelId: PANEL_ABOUT_ID },
+];
+
+let isSyncingForm = false;
+let autoSaveTimer: number | null = null;
 
 /**
- * 功能：规范化文本，便于比较和检索。
- * @param value 原始值。
- * @returns 清理后的字符串。
+ * 功能：构建分隔栏。
+ * @param title 标题。
+ * @returns HTML。
  */
-function normalizeText(value: unknown): string {
-    return String(value ?? '').replace(/\s+/g, ' ').trim();
+function divider(title: string): string {
+    return `<div class="stx-ui-divider"><span>${title}</span><span class="stx-ui-divider-line"></span></div>`;
 }
 
 /**
- * 功能：生成更新日志 HTML。
- * @returns 更新日志片段。
+ * 功能：构建关于页元信息。
+ * @returns HTML。
  */
-function generateChangelogHtml(): string {
-    if (!Array.isArray(changelogData) || changelogData.length === 0) {
-        return '暂无更新记录';
-    }
-    return changelogData.map((log: { version?: string; date?: string; changes?: string[] }): string => `
-      <div class="stx-ui-changelog-entry">
-        <div class="stx-ui-changelog-head">
-          <span class="stx-ui-changelog-version">${log.version || ''}</span>
-          ${log.date ? `<span class="stx-ui-changelog-date">${log.date}</span>` : ''}
+function buildAboutMetaHtml(): string {
+    const manifest = manifestJson as Record<string, unknown>;
+    const version = String(manifest.version ?? '').trim() || '未知';
+    const author = String(manifest.author ?? '').trim() || '未知';
+    const email = String(manifest.email ?? '').trim();
+    const homePage = String(manifest.homePage ?? '').trim();
+    return `
+        <div class="stx-ui-about-meta">
+            <span class="stx-ui-about-meta-item"><i class="fa-solid fa-tag"></i> 版本 ${version}</span>
+            <span class="stx-ui-about-meta-item"><i class="fa-solid fa-user"></i> ${author}</span>
+            ${email ? `<span class="stx-ui-about-meta-item"><i class="fa-solid fa-envelope"></i> ${email}</span>` : ''}
+            ${homePage ? `<span class="stx-ui-about-meta-item"><i class="fa-brands fa-github"></i> <a href="${homePage}" target="_blank" rel="noopener noreferrer">${homePage}</a></span>` : ''}
         </div>
-        <ul class="stx-ui-changelog-list">
-          ${(Array.isArray(log.changes) ? log.changes : []).map((item: string): string => `<li>${item}</li>`).join('')}
-        </ul>
-      </div>
-    `).join('');
-}
-
-const IDS: MemoryOSSettingsIds = {
-    cardId: `${NAMESPACE}-card`,
-    drawerToggleId: `${NAMESPACE}-drawer-toggle`,
-    drawerContentId: `${NAMESPACE}-drawer-content`,
-    drawerIconId: `${NAMESPACE}-drawer-icon`,
-    displayName: manifestJson.display_name || 'Memory OS',
-    badgeId: `${NAMESPACE}-badge`,
-    badgeText: `v${manifestJson.version || '1.0.0'}`,
-    changelogHtml: generateChangelogHtml(),
-    authorText: manifestJson.author || 'Memory OS Team',
-    emailText: (manifestJson as { email?: string }).email || '',
-    githubText: (manifestJson as { homePage?: string }).homePage
-        ? (manifestJson as { homePage?: string }).homePage!.replace(/^https?:\/\//i, '')
-        : 'GitHub',
-    githubUrl: (manifestJson as { homePage?: string }).homePage || '#',
-    searchId: `${NAMESPACE}-search`,
-    experienceRefreshBtnId: `${NAMESPACE}-experience-refresh`,
-    experienceRecordEditorBtnId: `${NAMESPACE}-experience-record-editor`,
-    experienceSnapshotBtnId: `${NAMESPACE}-experience-snapshot`,
-    tabRoleId: `${NAMESPACE}-tab-role`,
-    tabRecentId: `${NAMESPACE}-tab-recent`,
-    tabRelationId: `${NAMESPACE}-tab-relation`,
-    tabInjectionId: `${NAMESPACE}-tab-injection`,
-    tabMainId: `${NAMESPACE}-tab-main`,
-    tabAiId: `${NAMESPACE}-tab-ai`,
-    tabPromptId: `${NAMESPACE}-tab-prompt`,
-    tabDbId: `${NAMESPACE}-tab-db`,
-    tabAboutId: `${NAMESPACE}-tab-about`,
-    panelRoleId: `${NAMESPACE}-panel-role`,
-    panelRecentId: `${NAMESPACE}-panel-recent`,
-    panelRelationId: `${NAMESPACE}-panel-relation`,
-    panelInjectionId: `${NAMESPACE}-panel-injection`,
-    panelAdvancedToolsId: `${NAMESPACE}-panel-advanced-tools`,
-    panelMainId: `${NAMESPACE}-panel-main`,
-    panelAiId: `${NAMESPACE}-panel-ai`,
-    panelPromptId: `${NAMESPACE}-panel-prompt`,
-    panelDbId: `${NAMESPACE}-panel-db`,
-    panelAboutId: `${NAMESPACE}-panel-about`,
-    roleOverviewMetaId: `${NAMESPACE}-role-overview-meta`,
-    rolePersonaBadgesId: `${NAMESPACE}-role-persona-badges`,
-    rolePrimaryFactsId: `${NAMESPACE}-role-primary-facts`,
-    roleRecentMemoryId: `${NAMESPACE}-role-recent-memory`,
-    roleBlurMemoryId: `${NAMESPACE}-role-blur-memory`,
-    recentEventsId: `${NAMESPACE}-recent-events`,
-    recentSummariesId: `${NAMESPACE}-recent-summaries`,
-    recentLifecycleId: `${NAMESPACE}-recent-lifecycle`,
-    relationOverviewId: `${NAMESPACE}-relation-overview`,
-    relationLanesId: `${NAMESPACE}-relation-lanes`,
-    relationStateId: `${NAMESPACE}-relation-state`,
-    injectionOverviewId: `${NAMESPACE}-injection-overview`,
-    injectionSectionsId: `${NAMESPACE}-injection-sections`,
-    injectionReasonId: `${NAMESPACE}-injection-reason`,
-    injectionPostId: `${NAMESPACE}-injection-post`,
-    tuningCandidateAcceptThresholdBiasId: `${NAMESPACE}-tuning-candidate-threshold-bias`,
-    tuningRecallRelationshipBiasId: `${NAMESPACE}-tuning-recall-relationship-bias`,
-    tuningRecallEmotionBiasId: `${NAMESPACE}-tuning-recall-emotion-bias`,
-    tuningRecallRecencyBiasId: `${NAMESPACE}-tuning-recall-recency-bias`,
-    tuningRecallContinuityBiasId: `${NAMESPACE}-tuning-recall-continuity-bias`,
-    tuningDistortionProtectionBiasId: `${NAMESPACE}-tuning-distortion-protection-bias`,
-    tuningRecallRetentionLimitId: `${NAMESPACE}-tuning-recall-retention-limit`,
-    tuningRefreshBtnId: `${NAMESPACE}-tuning-refresh`,
-    tuningResetBtnId: `${NAMESPACE}-tuning-reset`,
-    tuningSaveBtnId: `${NAMESPACE}-tuning-save`,
-    taskSurfaceBackgroundToastId: `${NAMESPACE}-task-surface-background-toast`,
-    taskSurfaceDisableComposerId: `${NAMESPACE}-task-surface-disable-composer`,
-    taskSurfaceBlockingDefaultId: `${NAMESPACE}-task-surface-blocking-default`,
-    taskSurfaceAutoCloseSecondsId: `${NAMESPACE}-task-surface-auto-close-seconds`,
-    templateListId: `${NAMESPACE}-template-list`,
-    templateRefreshBtnId: `${NAMESPACE}-template-refresh`,
-    templateForceRebuildBtnId: `${NAMESPACE}-template-force-rebuild`,
-    templateActiveSelectId: `${NAMESPACE}-template-active-select`,
-    templateSetActiveBtnId: `${NAMESPACE}-template-active-apply`,
-    templateLockId: `${NAMESPACE}-template-lock`,
-    enabledId: `${NAMESPACE}-enabled`,
-    aiModeEnabledId: `${NAMESPACE}-ai-mode`,
-    aiModeStatusLightId: `${NAMESPACE}-ai-mode-status-light`,
-    autoCompactionId: `${NAMESPACE}-auto-compaction`,
-    dbCompactionDividerId: `${NAMESPACE}-db-divider-compaction`,
-    contextMaxTokensId: `${NAMESPACE}-context-max-tokens`,
-    injectionPreviewEnabledId: `${NAMESPACE}-injection-preview-enabled`,
-    injectionPromptEnabledId: `${NAMESPACE}-injection-prompt-enabled`,
-    injectionPromptPresetId: `${NAMESPACE}-injection-prompt-preset`,
-    injectionPromptAggressivenessId: `${NAMESPACE}-injection-prompt-aggressiveness`,
-    injectionPromptForceDynamicFloorId: `${NAMESPACE}-injection-prompt-force-dynamic-floor`,
-    injectionPromptWorldSettingId: `${NAMESPACE}-injection-prompt-world-setting`,
-    injectionPromptCharacterSettingId: `${NAMESPACE}-injection-prompt-character-setting`,
-    injectionPromptRelationshipStateId: `${NAMESPACE}-injection-prompt-relationship-state`,
-    injectionPromptCurrentSceneId: `${NAMESPACE}-injection-prompt-current-scene`,
-    injectionPromptRecentPlotId: `${NAMESPACE}-injection-prompt-recent-plot`,
-    recordFilterEnabledId: `${NAMESPACE}-record-filter-enabled`,
-    recordFilterSectionId: `${NAMESPACE}-record-filter-section`,
-    recordFilterDetailWrapId: `${NAMESPACE}-record-filter-detail-wrap`,
-    recordFilterLevelId: `${NAMESPACE}-record-filter-level`,
-    recordFilterTypeHtmlId: `${NAMESPACE}-record-filter-type-html`,
-    recordFilterTypeXmlId: `${NAMESPACE}-record-filter-type-xml`,
-    recordFilterTypeJsonId: `${NAMESPACE}-record-filter-type-json`,
-    recordFilterTypeCodeblockId: `${NAMESPACE}-record-filter-type-codeblock`,
-    recordFilterTypeMarkdownId: `${NAMESPACE}-record-filter-type-markdown`,
-    recordFilterCustomCodeblockEnabledId: `${NAMESPACE}-record-filter-custom-codeblock-enabled`,
-    recordFilterCustomCodeblockTagsId: `${NAMESPACE}-record-filter-custom-codeblock-tags`,
-    recordFilterJsonModeId: `${NAMESPACE}-record-filter-json-mode`,
-    recordFilterJsonKeysId: `${NAMESPACE}-record-filter-json-keys`,
-    recordFilterPureCodePolicyId: `${NAMESPACE}-record-filter-pure-policy`,
-    recordFilterPlaceholderId: `${NAMESPACE}-record-filter-placeholder`,
-    recordFilterCustomRegexEnabledId: `${NAMESPACE}-record-filter-custom-enabled`,
-    recordFilterCustomRegexRulesId: `${NAMESPACE}-record-filter-custom-rules`,
-    recordFilterMaxTextLengthId: `${NAMESPACE}-record-filter-max-length`,
-    recordFilterMinEffectiveCharsId: `${NAMESPACE}-record-filter-min-effective`,
-    recordFilterPreviewInputId: `${NAMESPACE}-record-filter-preview-input`,
-    recordFilterPreviewBtnId: `${NAMESPACE}-record-filter-preview-btn`,
-    recordFilterPreviewOutputId: `${NAMESPACE}-record-filter-preview-output`,
-    dbCompactBtnId: `${NAMESPACE}-db-compact-btn`,
-    dbExportBtnId: `${NAMESPACE}-db-export-btn`,
-    dbImportBtnId: `${NAMESPACE}-db-import-btn`,
-    dbClearBtnId: `${NAMESPACE}-db-clear-btn`,
-    recordEditorBtnId: `${NAMESPACE}-record-editor-btn`,
-    auditListId: `${NAMESPACE}-audit-list`,
-    auditCreateSnapshotBtnId: `${NAMESPACE}-audit-snapshot`,
-    auditRefreshBtnId: `${NAMESPACE}-audit-refresh`,
-    mutationHistoryListId: `${NAMESPACE}-mutation-history-list`,
-    mutationHistoryRefreshBtnId: `${NAMESPACE}-mutation-history-refresh`,
-    wiPreviewId: `${NAMESPACE}-wi-preview`,
-    wiPreviewBtnId: `${NAMESPACE}-wi-preview-btn`,
-    wiWritebackBtnId: `${NAMESPACE}-wi-writeback`,
-    wiWriteSummaryBtnId: `${NAMESPACE}-wi-write-summary`,
-    aiDiagOverviewId: `${NAMESPACE}-ai-diag-overview`,
-    aiDiagCapabilitiesId: `${NAMESPACE}-ai-diag-capabilities`,
-    aiDiagRecentTasksId: `${NAMESPACE}-ai-diag-recent-tasks`,
-    aiDiagRefreshBtnId: `${NAMESPACE}-ai-diag-refresh`,
-    aiRoutePreviewId: `${NAMESPACE}-ai-route-preview`,
-    aiSelfTestPanelId: `${NAMESPACE}-ai-self-test-panel`,
-    aiSelfTestSummaryId: `${NAMESPACE}-ai-self-test-summary`,
-    aiSelfTestResultId: `${NAMESPACE}-ai-self-test-result`,
-    aiSelfTestRunAllBtnId: `${NAMESPACE}-ai-self-test-run-all`,
-};
-
-/**
- * 功能：应用设置页通用提示。
- * @returns 无返回值。
- */
-function applySettingsTooltips(): void {
-    ensureSharedTooltip();
+    `;
 }
 
 /**
- * 功能：确保主题变化时重新挂载主题宿主。
- * @returns 无返回值。
+ * 功能：构建更新日志。
+ * @returns HTML。
  */
-function ensureThemeBinding(): void {
-    if (MEMORYOS_THEME_BINDING_READY) {
-        return;
+function buildChangelogHtml(): string {
+    const rows = Array.isArray(changelogData) ? changelogData : [];
+    if (rows.length <= 0) {
+        return '<div class="stx-ui-item-desc">暂无更新日志。</div>';
     }
-    MEMORYOS_THEME_BINDING_READY = true;
-    subscribeTheme((): void => {
-        const cardRoot = document.getElementById(IDS.cardId);
-        if (cardRoot) {
-            unmountThemeHost(cardRoot);
-        }
-        const contentRoot = document.getElementById(IDS.drawerContentId);
-        if (contentRoot) {
-            mountThemeHost(contentRoot);
-        }
+    return rows.map((row: unknown): string => {
+        const record = (row && typeof row === 'object') ? row as Record<string, unknown> : {};
+        const version = String(record.version ?? '').trim() || '未命名版本';
+        const date = String(record.date ?? '').trim();
+        const changes = Array.isArray(record.changes)
+            ? record.changes.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+            : [];
+        return `
+            <div class="stx-ui-changelog-entry">
+                <div class="stx-ui-changelog-head">
+                    <strong>${version}</strong>
+                    ${date ? `<span>${date}</span>` : ''}
+                </div>
+                <div class="stx-ui-changelog-list">
+                    ${changes.length > 0
+                        ? changes.map((item: string): string => `<div class="stx-ui-changelog-item">${item}</div>`).join('')
+                        : '<div class="stx-ui-item-desc">本次版本没有附带详细更新说明。</div>'}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * 功能：构建数字输入框。
+ * @param id 控件 ID。
+ * @param min 最小值。
+ * @param max 最大值。
+ * @param step 步长。
+ * @returns HTML。
+ */
+function numberField(id: string, min: number, max: number, step: number): string {
+    return buildSharedInputField({ id, type: 'number', className: 'stx-ui-input', attributes: { min, max, step } });
+}
+
+/**
+ * 功能：构建仅显示控件的复选框。
+ * @param id 控件 ID。
+ * @param ariaLabel 无障碍标签。
+ * @returns HTML。
+ */
+function inlineCheckbox(id: string, ariaLabel: string): string {
+    return buildSharedCheckboxCard({ id, title: '', containerClassName: 'stx-ui-inline-checkbox is-control-only', inputAttributes: { 'aria-label': ariaLabel } });
+}
+
+/**
+ * 功能：写入设置页样式，标签与分隔栏对齐 LLMHub。
+ */
+function ensureSettingsStyles(): void {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+        ${buildThemeVars(`#${CARD_ID} .stx-setting-content`)}
+        ${buildSettingPageStyles(`#${CARD_ID}`)}
+        ${buildSharedCheckboxStyles(`#${CARD_ID}`)}
+        ${buildSharedButtonStyles(`#${CARD_ID}`)}
+        ${buildSharedInputStyles(`#${CARD_ID}`)}
+        #${CARD_ID}{margin-bottom:5px;color:inherit;}
+        #${CARD_ID} .stx-setting-content{border:1px solid var(--ss-theme-border,rgba(255,255,255,.08));border-top:0;border-radius:0 0 10px 10px;padding:10px;background:var(--ss-theme-surface-1,rgba(0,0,0,.16));backdrop-filter:var(--ss-theme-backdrop-filter,blur(3px));box-sizing:border-box;width:100%;max-width:100%;overflow-x:hidden;}
+        #${CARD_ID} .stx-ui-tabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-start;padding:4px;border:1px solid var(--ss-theme-border,rgba(255,255,255,.16));border-radius:999px;margin-bottom:10px;background:var(--ss-theme-surface-2,rgba(0,0,0,.2));}
+        #${CARD_ID} .stx-ui-tab{flex:1 1 0;min-width:max-content;border:0;border-radius:999px;background:transparent;color:inherit;padding:6px 10px;font-size:12px;line-height:1.2;white-space:nowrap;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;opacity:.75;transition:background-color .2s ease,opacity .2s ease,box-shadow .2s ease;}
+        #${CARD_ID} .stx-ui-tab.is-active{opacity:1;color:var(--ss-theme-text,inherit);background:var(--ss-theme-list-item-active-bg,rgba(197,160,89,.58));}
+        #${CARD_ID} .stx-ui-tab:hover{background:var(--ss-theme-list-item-hover-bg,rgba(197,160,89,.2));box-shadow:0 0 12px color-mix(in srgb,var(--ss-theme-accent,#c5a059) 24%,transparent);}
+        #${CARD_ID} .stx-ui-panel{display:flex;flex-direction:column;gap:10px;min-width:0;max-width:100%;}
+        #${CARD_ID} .stx-ui-panel[hidden]{display:none!important;}
+        #${CARD_ID} .stx-ui-divider{display:flex;align-items:center;gap:8px;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:700;opacity:.95;}
+        #${CARD_ID} .stx-ui-divider-line{flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.2) 18%,rgba(255,255,255,.26) 50%,rgba(255,255,255,.2) 82%,rgba(255,255,255,0));}
+        #${CARD_ID} .stx-ui-item{border:1px solid var(--ss-theme-border,rgba(255,255,255,.2));border-radius:10px;padding:12px;margin:2px 0;background:var(--ss-theme-surface-2,rgba(0,0,0,.16));display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;max-width:100%;box-sizing:border-box;transition:border-color .2s ease,background-color .2s ease,box-shadow .2s ease;}
+        #${CARD_ID} .stx-ui-item:hover{border-color:var(--ss-theme-border-strong,rgba(197,160,89,.48));background:var(--ss-theme-list-item-hover-bg,rgba(0,0,0,.24));}
+        #${CARD_ID} .stx-ui-item-stack{flex-direction:column;align-items:stretch;}
+        #${CARD_ID} .stx-ui-item-main{min-width:0;flex:1;width:100%;}
+        #${CARD_ID} .stx-ui-item-title{font-size:14px;font-weight:700;margin-bottom:3px;overflow-wrap:anywhere;}
+        #${CARD_ID} .stx-ui-item-desc{font-size:12px;line-height:1.45;opacity:.75;word-break:break-word;overflow-wrap:anywhere;}
+        #${CARD_ID} .stx-ui-inline{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+        #${CARD_ID} .stx-ui-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;min-width:0;max-width:100%;}
+        #${CARD_ID} .stx-ui-field{display:flex;flex-direction:column;gap:6px;min-width:0;}
+        #${CARD_ID} .stx-ui-field-label{font-size:12px;opacity:.85;line-height:1.35;word-break:break-word;}
+        #${CARD_ID} .stx-ui-field-hint{font-size:11px;opacity:.68;margin-top:2px;display:block;}
+        #${CARD_ID} .stx-ui-input{width:100%;min-width:0;max-width:100%;box-sizing:border-box;min-height:30px;background:var(--ss-theme-surface-2,var(--SmartThemeBlurTintColor,rgba(0,0,0,.28)));color:inherit;border:1px solid rgba(197,160,89,.36);border-radius:8px;transition:border-color .2s ease,box-shadow .2s ease,background-color .2s ease;}
+        #${CARD_ID} .stx-ui-input:hover{border-color:var(--ss-theme-border-strong,rgba(197,160,89,.58));background-color:var(--ss-theme-surface-3,rgba(0,0,0,.34));box-shadow:0 0 0 1px var(--ss-theme-focus-ring,rgba(197,160,89,.18));}
+        #${CARD_ID} .stx-ui-input:focus{border-color:var(--ss-theme-border-strong,rgba(197,160,89,.72));box-shadow:0 0 0 2px var(--ss-theme-focus-ring,rgba(197,160,89,.22));}
+        #${CARD_ID} .stx-ui-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:6px;}
+        #${CARD_ID} .stx-ui-status{font-size:12px;opacity:.84;}
+        #${CARD_ID} .stx-ui-about-meta{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:6px;}
+        #${CARD_ID} .stx-ui-about-meta-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;opacity:.86;word-break:break-word;}
+        #${CARD_ID} .stx-ui-about-meta-item a{color:var(--ss-theme-accent,var(--SmartThemeQuoteColor,#c5a059));text-decoration:none;word-break:break-all;}
+        #${CARD_ID} .stx-ui-about-meta-item a:hover{text-decoration:underline;}
+        #${CARD_ID} .stx-ui-changelog{display:flex;flex-direction:column;gap:10px;width:100%;}
+        #${CARD_ID} .stx-ui-changelog-entry{border:1px solid var(--ss-theme-border,rgba(255,255,255,.12));border-radius:10px;padding:10px;background:var(--ss-theme-surface-1,rgba(0,0,0,.12));}
+        #${CARD_ID} .stx-ui-changelog-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;font-size:13px;}
+        #${CARD_ID} .stx-ui-changelog-head span{font-size:12px;opacity:.72;}
+        #${CARD_ID} .stx-ui-changelog-list{display:flex;flex-direction:column;gap:6px;}
+        #${CARD_ID} .stx-ui-changelog-item{font-size:12px;line-height:1.5;opacity:.9;word-break:break-word;}
+        #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-copy{display:none;}
+        #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-body{width:auto;}
+        #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-control{min-width:70px;justify-content:center;}
+        @media (max-width:900px){#${CARD_ID} .stx-ui-form-grid{grid-template-columns:minmax(0,1fr);}#${CARD_ID} .stx-ui-tabs,#${CARD_ID} .stx-ui-actions{justify-content:flex-start;}}
+    `;
+    document.head.appendChild(style);
+}
+
+/**
+ * 功能：构建设置页主体。
+ * @returns HTML。
+ */
+function buildSettingsContentHtml(): string {
+    const openWorkbenchBtn = buildSharedButton({ id: BTN_ID, label: '打开统一记忆工作台', variant: 'secondary', iconClassName: 'fa-solid fa-table-cells-large' });
+    const resetBtn = buildSharedButton({ id: RESET_BTN_ID, label: '恢复默认', variant: 'secondary', iconClassName: 'fa-solid fa-rotate-left' });
+    const retrievalLogLevelSelect = `<select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input"><option value="info">信息级</option><option value="debug">调试级</option></select>`;
+    const retrievalRulePackSelect = `<select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input"><option value="hybrid">混合规则包</option><option value="native">原生规则包</option><option value="perocore">PeroCore 兼容包</option></select>`;
+    const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
+    const displayName = String((manifestJson as Record<string, unknown>).display_name ?? 'MemoryOS').trim() || 'MemoryOS';
+    return `
+        <div class="stx-ui-tabs">
+            <button id="${TAB_GENERAL_ID}" type="button" class="stx-ui-tab is-active"><i class="fa-solid fa-gear"></i><span>基础</span></button>
+            <button id="${TAB_MEMORY_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-route"></i><span>流程</span></button>
+            <button id="${TAB_INJECTION_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-wand-magic-sparkles"></i><span>注入</span></button>
+            <button id="${TAB_PIPELINE_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-layer-group"></i><span>编排</span></button>
+            <button id="${TAB_ABOUT_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-circle-info"></i><span>关于</span></button>
+        </div>
+        <div id="${PANEL_GENERAL_ID}" class="stx-ui-panel">
+            ${divider('通用控制')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">统一记忆工作台</div><div class="stx-ui-item-desc">进入统一工作台，管理条目、类型、角色、世界实体和接管测试能力。</div></div><div class="stx-ui-inline">${openWorkbenchBtn}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 MemoryOS</div><div class="stx-ui-item-desc">关闭后将停止消息写入、自动总结、注入和相关后台流程。</div></div><div class="stx-ui-inline">${inlineCheckbox(ENABLED_ID, '启用 MemoryOS')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用工具栏快捷按钮</div><div class="stx-ui-item-desc">在发送区上方显示快捷按钮，便于快速打开 MemoryOS 浮层和工作台。</div></div><div class="stx-ui-inline">${inlineCheckbox(TOOLBAR_QUICK_ACTIONS_ID, '启用工具栏快捷按钮')}</div></div>
+            ${divider('会话初始化')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用冷启动</div><div class="stx-ui-item-desc">新会话时自动弹出冷启动确认，基于角色卡和世界书生成初始记忆。</div></div><div class="stx-ui-inline">${inlineCheckbox(COLD_START_ENABLED_ID, '启用冷启动')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用旧聊天接管</div><div class="stx-ui-item-desc">聊天楼层较多时自动提示创建接管任务，并在后台按批整理历史记忆。</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_ENABLED_ID, '启用旧聊天接管')}</div></div>
+        </div>
+        <div id="${PANEL_MEMORY_ID}" class="stx-ui-panel" hidden>
+            ${divider('梦境系统')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境系统</div><div class="stx-ui-item-desc">开启后可在工具栏手动触发一次梦境会话，生成待审批的梦境提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ENABLED_ID, '启用梦境系统')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保留自动触发开关</div><div class="stx-ui-item-desc">第一阶段默认关闭，仅保留配置位，暂不接入自动触发链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_TRIGGER_ID, '保留自动触发开关')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">第二阶段仍然通过审批弹窗落地，explain 与 diagnostics 也会在这里展示。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境提示词管线</div><div class="stx-ui-item-desc">启用后使用独立提示词模板、版本信息和风格预设来构建梦境生成输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ENABLED_ID, '启用梦境提示词管线')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境召回参数</div><div class="stx-ui-item-desc">控制梦境近层 / 中层 / 深层三段召回，以及送模上下文裁剪。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_CONTEXT_MAX_CHARS_ID}">梦境上下文最大字符数</label>${numberField(DREAM_CONTEXT_MAX_CHARS_ID,1000,30000,200)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_RECENT_TOPK_ID}">近层召回条数</label>${numberField(DREAM_RECENT_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MID_TOPK_ID}">中层召回条数</label>${numberField(DREAM_MID_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_DEEP_TOPK_ID}">深层召回条数</label>${numberField(DREAM_DEEP_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_FUSED_MAX_ITEMS_ID}">融合结果上限</label>${numberField(DREAM_FUSED_MAX_ITEMS_ID,1,60,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_STYLE_PRESET_ID}">梦境风格预设</label><input id="${DREAM_STYLE_PRESET_ID}" class="stx-ui-input" type="text" placeholder="内省型"></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_VERSION_ID}">提示词版本</label><input id="${DREAM_PROMPT_VERSION_ID}" class="stx-ui-input" type="text" placeholder="v1.0.0"></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_MAX_HIGHLIGHTS_ID}">最大发现条数</label>${numberField(DREAM_PROMPT_MAX_HIGHLIGHTS_ID,1,8,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_MAX_MUTATIONS_ID}">最大变更提案数</label>${numberField(DREAM_PROMPT_MAX_MUTATIONS_ID,1,20,1)}</div>
+            </div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境提示词约束</div><div class="stx-ui-item-desc">控制 JSON 严格度、推断边界和解释信息完整度要求。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许叙事适度扩展</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ALLOW_EXPANSION_ID, '允许叙事适度扩展')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">要求解释信息</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_REQUIRE_EXPLAIN_ID, '要求解释信息')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">严格 JSON</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_STRICT_JSON_ID, '严格 JSON')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅允许弱推断</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_WEAK_INFERENCE_ID, '仅允许弱推断')}</div></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用第二阶段波段召回</div><div class="stx-ui-item-desc">启用后使用第二阶段多波段召回和融合排序。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WAVE_ENABLED_ID, '启用第二阶段波段召回')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境图激活</div><div class="stx-ui-item-desc">构建 session 级神经图，为 recall 提供桥接节点与 activation 分。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_GRAPH_ENABLED_ID, '启用梦境图激活')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用新颖度加权</div><div class="stx-ui-item-desc">对深层老记忆做轻量提升，并配合重复惩罚抑制模板化召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_NOVELTY_ENABLED_ID, '启用新颖度加权')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保存诊断和图快照</div><div class="stx-ui-item-desc">会把波段输出、融合诊断和图快照持久化，并显示在审批窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_DIAGNOSTICS_ENABLED_ID, '保存诊断和图快照')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第二阶段参数</div><div class="stx-ui-item-desc">控制波段召回、图扩展、新颖度与重复惩罚的强度。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_RECENT_TOPK_ID}">近层波段条数</label>${numberField(DREAM_WAVE_RECENT_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_MID_TOPK_ID}">中层波段条数</label>${numberField(DREAM_WAVE_MID_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_DEEP_TOPK_ID}">深层波段条数</label>${numberField(DREAM_WAVE_DEEP_TOPK_ID,1,30,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_FUSION_TOPK_ID}">波段融合上限</label>${numberField(DREAM_WAVE_FUSION_TOPK_ID,1,60,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_GRAPH_EXPAND_DEPTH_ID}">图扩展深度</label>${numberField(DREAM_GRAPH_EXPAND_DEPTH_ID,0,3,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_NOVELTY_WEIGHT_ID}">新颖度权重</label>${numberField(DREAM_NOVELTY_WEIGHT_ID,0,1,0.05)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_REPETITION_PENALTY_WEIGHT_ID}">重复惩罚权重</label>${numberField(DREAM_REPETITION_PENALTY_WEIGHT_ID,0,1,0.05)}</div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境调度器</div><div class="stx-ui-item-desc">允许在回复结束和空闲条件满足时自动排队做梦，默认关闭以便先半自动观察。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_ENABLED_ID, '启用梦境调度器')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许回复结束触发</div><div class="stx-ui-item-desc">回复完成后做轻量资格判断，满足条件时把梦境任务放入后台队列，不阻塞当前对话。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, '允许回复结束触发')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许空闲触发</div><div class="stx-ui-item-desc">当前聊天长时间无操作时允许入梦，适合作为夜间维护链的低优先入口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_IDLE_TRIGGER_ID, '允许空闲触发')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第三阶段调度与维护参数</div><div class="stx-ui-item-desc">控制冷却时间、每日次数、空闲判定，以及梦后整理、质量守卫和回滚行为。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_COOLDOWN_ID}">调度冷却分钟数</label>${numberField(DREAM_SCHEDULER_COOLDOWN_ID,1,1440,5)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_DAILY_MAX_ID}">每日最大自动梦境次数</label>${numberField(DREAM_SCHEDULER_DAILY_MAX_ID,1,24,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_IDLE_MINUTES_ID}">空闲触发分钟数</label>${numberField(DREAM_SCHEDULER_IDLE_MINUTES_ID,1,720,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MAINTENANCE_MAX_PROPOSALS_ID}">每轮整理提案上限</label>${numberField(DREAM_MAINTENANCE_MAX_PROPOSALS_ID,1,20,1)}</div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦后整理</div><div class="stx-ui-item-desc">梦境完成后生成压缩、关系强化、影子修正与总结候选提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_MAINTENANCE_ENABLED_ID, '启用梦后整理')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用质量守卫</div><div class="stx-ui-item-desc">检查 explain 完整度、重复 mutation、硬事实风险与幻觉倾向。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_QUALITY_GUARD_ENABLED_ID, '启用质量守卫')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动应用低风险 maintenance</div><div class="stx-ui-item-desc">仅对高置信低风险 maintenance proposal 自动落地，dream mutation 本身仍保持审批边界。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_APPLY_LOW_RISK_ID, '自动应用低风险 maintenance')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境工作台</div><div class="stx-ui-item-desc">在统一工作台提供梦境入口，查看历史会话、提案、质量报告和回滚记录。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WORKBENCH_ENABLED_ID, '启用梦境工作台')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境回滚</div><div class="stx-ui-item-desc">允许按 dreamId 回滚已应用的梦境影响，作为第三阶段自动化的安全阀。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ROLLBACK_ENABLED_ID, '启用梦境回滚')}</div></div>
+            ${divider('AI 总结')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动总结触发</div><div class="stx-ui-item-desc">到达阈值后自动运行 AI 总结，关闭后只保留手动触发。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_AUTO_TRIGGER_ID, '启用自动总结触发')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用总结进度悬浮框</div><div class="stx-ui-item-desc">显示距离下次自动总结还差多少楼层，并在即将触发时给出提示。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_PROGRESS_OVERLAY_ID, '启用总结进度悬浮框')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">总结窗口参数</div><div class="stx-ui-item-desc">控制触发频率、最小消息量和第二阶段摘要截断策略。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">触发间隔楼层</label>${numberField(SUMMARY_INTERVAL_ID,1,200,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_MIN_MESSAGES_ID}">最少消息数</label>${numberField(SUMMARY_MIN_MESSAGES_ID,2,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_RECENT_WINDOW_ID}">最近窗口大小</label>${numberField(SUMMARY_RECENT_WINDOW_ID,10,100,5)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID}">第二阶段 rollingDigest 截断长度</label>${numberField(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示不限制。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID}">第二阶段候选摘要截断长度</label>${numberField(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示不限制。</span></div>
+            </div></div>
+            ${divider('旧聊天接管')}
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">接管默认参数</div><div class="stx-ui-item-desc">控制识别旧聊天的阈值、默认范围和批处理策略。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DETECT_MIN_FLOORS_ID}">识别阈值楼层</label>${numberField(TAKEOVER_DETECT_MIN_FLOORS_ID,1,2000,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_RECENT_FLOORS_ID}">默认最近楼层</label>${numberField(TAKEOVER_DEFAULT_RECENT_FLOORS_ID,1,2000,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_BATCH_SIZE_ID}">默认每批楼层数</label>${numberField(TAKEOVER_DEFAULT_BATCH_SIZE_ID,1,500,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_REQUEST_INTERVAL_SECONDS_ID}">每轮请求间隔秒数</label>${numberField(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID,0,600,1)}<span class="stx-ui-field-hint">控制旧聊天接管每一轮 LLM 请求之间的等待时间，并同步驱动 LLMHub 右下角紧凑提示的自动关闭时间，默认 3 秒。</span></div>
+            </div><div class="stx-ui-form-grid">
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">优先处理最近区间</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, '优先处理最近区间')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动继续</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, '自动继续')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">完成后自动整合</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID, '完成后自动整合')}</div></div>
+                <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">失败自动暂停</div></div><div class="stx-ui-inline">${inlineCheckbox(TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID, '失败自动暂停')}</div></div>
+            </div></div>
+        </div>
+        <div id="${PANEL_INJECTION_ID}" class="stx-ui-panel" hidden>
+            ${divider('注入链路')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Prompt 注入</div><div class="stx-ui-item-desc">控制是否执行主注入链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PROMPT_ID, '启用 Prompt 注入')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用注入预览</div><div class="stx-ui-item-desc">在正式注入前额外计算并显示预览信息，便于调试。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PREVIEW_ID, '启用注入预览')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自定义注入条数预算</div><div class="stx-ui-item-desc">默认使用内置预算且不显示细项；开启后可分别设置各分区最多保留多少条。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_CUSTOM_BUDGET_ID, '自定义注入条数预算')}</div></div>
+            <div id="${INJECTION_BUDGET_FIELDS_ID}" class="stx-ui-item stx-ui-item-stack" hidden><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入条数预算</div><div class="stx-ui-item-desc">控制 XML 注入块每个分区最多保留多少条，所有条目按整条保留，不再按字符截半条。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${TIMELINE_MAX_ITEMS_ID}">timelineMaxItems</label>${numberField(TIMELINE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${WORLD_BASE_MAX_ITEMS_ID}">worldBaseMaxItems</label>${numberField(WORLD_BASE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_ACTIVE_MAX_ITEMS_ID}">sceneActiveMaxItems</label>${numberField(SCENE_ACTIVE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_RECENT_MAX_ITEMS_ID}">sceneRecentMaxItems</label>${numberField(SCENE_RECENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${ENTITY_MAX_ITEMS_ID}">entityMaxItems</label>${numberField(ENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${IDENTITY_MAX_ITEMS_ID}">identityMaxItems</label>${numberField(IDENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${RELATIONSHIP_MAX_ITEMS_ID}">relationshipMaxItems</label>${numberField(RELATIONSHIP_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${EVENT_MAX_ITEMS_ID}">eventMaxItems</label>${numberField(EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SHADOW_EVENT_MAX_ITEMS_ID}">shadowEventMaxItems</label>${numberField(SHADOW_EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${INTERPRETATION_MAX_ITEMS_ID}">interpretationMaxItems</label>${numberField(INTERPRETATION_MAX_ITEMS_ID,0,20,1)}</div></div></div>
+            ${divider('检索与诊断')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索模式</div><div class="stx-ui-item-desc">控制召回主链使用的检索链路：仅词法（默认稳定）、仅向量（测试）、混合（综合）。</div></div><div class="stx-ui-inline">${retrievalModeSelect}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索参数</div><div class="stx-ui-item-desc">控制召回行为的查询级默认配置。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_TOPK_ID}">默认 TopK</label>${numberField(RETRIEVAL_DEFAULT_TOPK_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID}">图扩展深度</label>${numberField(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID,0,3,1)}<span class="stx-ui-field-hint">0 = 不扩展。</span></div>
+            </div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Retention Core</div><div class="stx-ui-item-desc">统一控制记忆强度模型的阶段阈值，以及影子记忆被唤起后的召回/置信惩罚。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_BLUR_THRESHOLD_ID}">Blur 阈值</label>${numberField(RETENTION_BLUR_THRESHOLD_ID,1,99,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 blur。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_DISTORTED_THRESHOLD_ID}">Distorted 阈值</label>${numberField(RETENTION_DISTORTED_THRESHOLD_ID,1,98,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 distorted，且必须小于 blur 阈值。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID}">轻度影子召回惩罚</label>${numberField(FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID}">重度影子召回惩罚</label>${numberField(FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID}">轻度影子置信惩罚</label>${numberField(FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID}">重度影子置信惩罚</label>${numberField(FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID,0,1,0.01)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID}">最终影子条目上限</label>${numberField(FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID,0,10,1)}<span class="stx-ui-field-hint">0 表示彻底不让影子记忆进入最终结果。</span></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展</div><div class="stx-ui-item-desc">控制是否沿关系图扩散种子节点，把相关上下文一起召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, '启用图扩展')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
+            ${divider('向量检索')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用写入自动建索引</div><div class="stx-ui-item-desc">写入条目、关系、角色和总结后立即刷新向量文档，不再依赖当前检索模式。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_AUTO_INDEX_ON_WRITE_ID, '启用写入自动建索引')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量策略路由</div><div class="stx-ui-item-desc">根据查询复杂度决定走快路径还是深路径，并使用不同候选窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_STRATEGY_ROUTING_ID, '启用向量策略路由')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">向量窗口参数</div><div class="stx-ui-item-desc">控制快路径窗口、深路径窗口和最终裁切数量。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_TOPK_ID}">快路径候选数</label>${numberField(VECTOR_TOPK_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_DEEP_WINDOW_ID}">深路径候选窗口</label>${numberField(VECTOR_DEEP_WINDOW_ID,5,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_FINAL_TOPK_ID}">最终 TopK</label>${numberField(VECTOR_FINAL_TOPK_ID,1,50,1)}</div>
+            </div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Embedding 配置</div><div class="stx-ui-item-desc">控制 MemoryOS 向量编码的模型提示和版本标识。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_MODEL_ID}">Embedding 模型提示</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给 LLMHub 自动路由。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_VERSION_ID}">Embedding 版本标识</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_VERSION_ID, type: 'text', className: 'stx-ui-input' })}</div>
+            </div></div>
+            ${divider('向量重排序')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量重排序</div><div class="stx-ui-item-desc">仅在向量深路径中生效，关闭后直接使用融合结果裁切。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_RERANK_ID, '启用向量重排序')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 LLMHub 模型重排序</div><div class="stx-ui-item-desc">开启后仅深路径优先尝试模型重排，失败时可按设置回退规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_LLMHUB_RERANK_ID, '启用 LLMHub 模型重排序')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">重排序参数</div><div class="stx-ui-item-desc">规则重排窗口与 LLMHub 模型重排的候选数量配置。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_RERANK_WINDOW_ID}">规则重排窗口</label>${numberField(VECTOR_RERANK_WINDOW_ID,5,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID}">模型重排最小候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID}">模型重排最大候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,1,100,1)}</div>
+            </div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_RESOURCE_ID}">LLMHub 重排资源</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_RESOURCE_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则使用默认路由。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MODEL_ID}">LLMHub 重排模型</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给资源默认模型。</span></div>
+            </div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">模型重排失败时回退规则重排</div><div class="stx-ui-item-desc">关闭后若模型重排失败，将直接返回当前融合结果裁切，不再继续规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, '模型重排失败时回退规则重排')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用检索日志</div><div class="stx-ui-item-desc">输出中文检索链日志，并为工作台保留结构化 trace。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_LOG_ENABLED_ID, '启用检索日志')}</div></div>
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用诊断 Trace 面板</div><div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定与召回流水。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_TRACE_PANEL_ID, '启用诊断 Trace 面板')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索调试配置</div><div class="stx-ui-item-desc">控制日志级别与当前启用的规则包模式。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_LOG_LEVEL_ID}">retrievalLogLevel</label>${retrievalLogLevelSelect}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_RULE_PACK_ID}">retrievalRulePack</label>${retrievalRulePackSelect}</div>
+            </div></div>
+        </div>
+        <div id="${PANEL_PIPELINE_ID}" class="stx-ui-panel" hidden>
+            ${divider('统一预算')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用统一预算控制</div><div class="stx-ui-item-desc">让总结、冷启动和旧聊天接管共用统一的预算与截断策略。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_BUDGET_ENABLED_ID, '启用统一预算控制')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Pipeline 预算参数</div><div class="stx-ui-item-desc">这些参数会直接影响 batch、section、冲突裁决和 finalizer 的体量。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_INPUT_CHARS_ID}">每批最大输入字符数</label>${numberField(PIPELINE_MAX_INPUT_CHARS_ID,1000,50000,100)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_OUTPUT_ITEMS_ID}">每批最大输出项数</label>${numberField(PIPELINE_MAX_OUTPUT_ITEMS_ID,1,200,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_ACTIONS_ID}">每轮 mutation 最大动作数</label>${numberField(PIPELINE_MAX_ACTIONS_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_SECTION_BATCHES_ID}">每个 section 最大 batch 数</label>${numberField(PIPELINE_MAX_SECTION_BATCHES_ID,1,50,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_CONFLICT_BUCKET_ID}">冲突桶最大记录数</label>${numberField(PIPELINE_MAX_CONFLICT_BUCKET_ID,1,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_SECTION_DIGEST_ID}">section digest 最大字符数</label>${numberField(PIPELINE_MAX_SECTION_DIGEST_ID,100,10000,20)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_FINALIZER_ITEMS_ID}">finalizer 每域最大条目数</label>${numberField(PIPELINE_MAX_FINALIZER_ITEMS_ID,1,500,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_STAGING_RETENTION_DAYS_ID}">staging 保留天数</label>${numberField(PIPELINE_STAGING_RETENTION_DAYS_ID,1,365,1)}</div>
+            </div></div>
+            ${divider('冲突裁决')}
+            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅裁决未解决冲突</div><div class="stx-ui-item-desc">开启后只把 unresolved bucket 送入裁决任务，减少重复消耗。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, '仅裁决未解决冲突')}</div></div>
+        </div>
+        <div id="${PANEL_ABOUT_ID}" class="stx-ui-panel" hidden>
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">${displayName}</div>
+                    <div class="stx-ui-item-desc">统一记忆主链、注入检索、旧聊天接管与梦境维护的设置入口。</div>
+                </div>
+                ${buildAboutMetaHtml()}
+            </div>
+            <div class="stx-ui-item stx-ui-item-stack">
+                <div class="stx-ui-item-main">
+                    <div class="stx-ui-item-title">更新日志</div>
+                </div>
+                <div class="stx-ui-changelog">${buildChangelogHtml()}</div>
+            </div>
+        </div>
+        <div class="stx-ui-actions"><div id="${STATUS_ID}" class="stx-ui-status">已加载当前设置</div><div class="stx-ui-inline">${resetBtn}</div></div>
+    `;
+}
+
+/**
+ * 功能：构建抽屉卡片模板。
+ * @returns HTML。
+ */
+function buildCardTemplateHtml(): string {
+    return buildSettingPageTemplate({
+        drawerToggleId: DRAWER_TOGGLE_ID,
+        drawerContentId: DRAWER_CONTENT_ID,
+        drawerIconId: DRAWER_ICON_ID,
+        title: 'MemoryOS',
+        badgeText: 'Unified',
+        contentHtml: buildSettingsContentHtml(),
     });
 }
 
 /**
- * 功能：等待目标元素出现在页面中。
- * @param selector 目标选择器。
- * @param timeout 超时时间。
- * @returns 找到的元素。
+ * 功能：切换活动标签页。
+ * @param key 标签键。
  */
-function waitForElement(selector: string, timeout: number = 5000): Promise<Element> {
-    return new Promise((resolve, reject) => {
-        const element = document.querySelector(selector);
-        if (element) {
-            resolve(element);
+function activateTab(key: TabKey): void {
+    TABS.forEach((tab: TabBinding): void => {
+        const tabElement = document.getElementById(tab.tabId) as HTMLButtonElement | null;
+        const panelElement = document.getElementById(tab.panelId);
+        const active = tab.key === key;
+        if (tabElement) tabElement.classList.toggle('is-active', active);
+        if (panelElement) panelElement.hidden = !active;
+    });
+}
+
+/**
+ * 功能：绑定标签事件。
+ */
+function bindTabEvents(): void {
+    TABS.forEach((tab: TabBinding): void => {
+        const tabElement = document.getElementById(tab.tabId) as HTMLButtonElement | null;
+        if (!tabElement) return;
+        tabElement.onclick = (): void => activateTab(tab.key);
+    });
+    activateTab('general');
+}
+
+/**
+ * 功能：同步设置到表单。
+ * @param settings 设置对象。
+ */
+function syncSettingsToForm(settings: MemoryOSSettings): void {
+    const setters: Array<[string, string | boolean]> = [
+        [ENABLED_ID, settings.enabled],
+        [TOOLBAR_QUICK_ACTIONS_ID, settings.toolbarQuickActionsEnabled],
+        [COLD_START_ENABLED_ID, settings.coldStartEnabled],
+        [TAKEOVER_ENABLED_ID, settings.takeoverEnabled],
+        [DREAM_ENABLED_ID, settings.dreamEnabled],
+        [DREAM_AUTO_TRIGGER_ID, settings.dreamAutoTriggerEnabled],
+        [DREAM_REQUIRE_APPROVAL_ID, settings.dreamRequireApproval],
+        [DREAM_PROMPT_ENABLED_ID, settings.dreamPromptEnabled],
+        [DREAM_PROMPT_VERSION_ID, settings.dreamPromptVersion],
+        [DREAM_PROMPT_ALLOW_EXPANSION_ID, settings.dreamPromptAllowNarrativeExpansion],
+        [DREAM_PROMPT_MAX_HIGHLIGHTS_ID, String(settings.dreamPromptMaxHighlights)],
+        [DREAM_PROMPT_MAX_MUTATIONS_ID, String(settings.dreamPromptMaxMutations)],
+        [DREAM_PROMPT_REQUIRE_EXPLAIN_ID, settings.dreamPromptRequireExplain],
+        [DREAM_PROMPT_STRICT_JSON_ID, settings.dreamPromptStrictJson],
+        [DREAM_PROMPT_WEAK_INFERENCE_ID, settings.dreamPromptWeakInferenceOnly],
+        [DREAM_CONTEXT_MAX_CHARS_ID, String(settings.dreamContextMaxChars)],
+        [DREAM_RECENT_TOPK_ID, String(settings.dreamRecentTopK)],
+        [DREAM_MID_TOPK_ID, String(settings.dreamMidTopK)],
+        [DREAM_DEEP_TOPK_ID, String(settings.dreamDeepTopK)],
+        [DREAM_FUSED_MAX_ITEMS_ID, String(settings.dreamFusedMaxItems)],
+        [DREAM_STYLE_PRESET_ID, settings.dreamStylePreset],
+        [DREAM_WAVE_ENABLED_ID, settings.dreamWaveEnabled],
+        [DREAM_WAVE_RECENT_TOPK_ID, String(settings.dreamWaveRecentTopK)],
+        [DREAM_WAVE_MID_TOPK_ID, String(settings.dreamWaveMidTopK)],
+        [DREAM_WAVE_DEEP_TOPK_ID, String(settings.dreamWaveDeepTopK)],
+        [DREAM_WAVE_FUSION_TOPK_ID, String(settings.dreamWaveFusionTopK)],
+        [DREAM_GRAPH_ENABLED_ID, settings.dreamGraphEnabled],
+        [DREAM_GRAPH_EXPAND_DEPTH_ID, String(settings.dreamGraphExpandDepth)],
+        [DREAM_NOVELTY_ENABLED_ID, settings.dreamNoveltyEnabled],
+        [DREAM_NOVELTY_WEIGHT_ID, String(settings.dreamNoveltyWeight)],
+        [DREAM_REPETITION_PENALTY_WEIGHT_ID, String(settings.dreamRepetitionPenaltyWeight)],
+        [DREAM_DIAGNOSTICS_ENABLED_ID, settings.dreamDiagnosticsEnabled],
+        [DREAM_SCHEDULER_ENABLED_ID, settings.dreamSchedulerEnabled],
+        [DREAM_SCHEDULER_COOLDOWN_ID, String(settings.dreamSchedulerCooldownMinutes)],
+        [DREAM_SCHEDULER_DAILY_MAX_ID, String(settings.dreamSchedulerDailyMaxRuns)],
+        [DREAM_SCHEDULER_IDLE_MINUTES_ID, String(settings.dreamSchedulerIdleMinutes)],
+        [DREAM_SCHEDULER_GENERATION_TRIGGER_ID, settings.dreamSchedulerAllowGenerationEndedTrigger],
+        [DREAM_SCHEDULER_IDLE_TRIGGER_ID, settings.dreamSchedulerAllowIdleTrigger],
+        [DREAM_MAINTENANCE_ENABLED_ID, settings.dreamMaintenanceEnabled],
+        [DREAM_MAINTENANCE_MAX_PROPOSALS_ID, String(settings.dreamMaintenanceMaxProposalsPerRun)],
+        [DREAM_QUALITY_GUARD_ENABLED_ID, settings.dreamQualityGuardEnabled],
+        [DREAM_AUTO_APPLY_LOW_RISK_ID, settings.dreamAutoApplyLowRiskMaintenance],
+        [DREAM_WORKBENCH_ENABLED_ID, settings.dreamWorkbenchEnabled],
+        [DREAM_ROLLBACK_ENABLED_ID, settings.dreamRollbackEnabled],
+        [SUMMARY_AUTO_TRIGGER_ID, settings.summaryAutoTriggerEnabled],
+        [SUMMARY_PROGRESS_OVERLAY_ID, settings.summaryProgressOverlayEnabled],
+        [SUMMARY_INTERVAL_ID, String(settings.summaryIntervalFloors)],
+        [SUMMARY_MIN_MESSAGES_ID, String(settings.summaryMinMessages)],
+        [SUMMARY_RECENT_WINDOW_ID, String(settings.summaryRecentWindowSize)],
+        [SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID, String(settings.summarySecondStageRollingDigestMaxChars)],
+        [SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID, String(settings.summarySecondStageCandidateSummaryMaxChars)],
+        [TAKEOVER_DETECT_MIN_FLOORS_ID, String(settings.takeoverDetectMinFloors)],
+        [TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(settings.takeoverDefaultRecentFloors)],
+        [TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(settings.takeoverDefaultBatchSize)],
+        [TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(settings.takeoverRequestIntervalSeconds)],
+        [TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, settings.takeoverDefaultPrioritizeRecent],
+        [TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, settings.takeoverDefaultAutoContinue],
+        [TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID, settings.takeoverDefaultAutoConsolidate],
+        [TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID, settings.takeoverDefaultPauseOnError],
+        [INJECTION_PROMPT_ID, settings.injectionPromptEnabled],
+        [INJECTION_PREVIEW_ID, settings.injectionPreviewEnabled],
+        [INJECTION_CUSTOM_BUDGET_ID, settings.injectionCustomBudgetEnabled],
+        [TIMELINE_MAX_ITEMS_ID, String(settings.timelineMaxItems)],
+        [WORLD_BASE_MAX_ITEMS_ID, String(settings.worldBaseMaxItems)],
+        [SCENE_ACTIVE_MAX_ITEMS_ID, String(settings.sceneActiveMaxItems)],
+        [SCENE_RECENT_MAX_ITEMS_ID, String(settings.sceneRecentMaxItems)],
+        [ENTITY_MAX_ITEMS_ID, String(settings.entityMaxItems)],
+        [IDENTITY_MAX_ITEMS_ID, String(settings.identityMaxItems)],
+        [RELATIONSHIP_MAX_ITEMS_ID, String(settings.relationshipMaxItems)],
+        [EVENT_MAX_ITEMS_ID, String(settings.eventMaxItems)],
+        [SHADOW_EVENT_MAX_ITEMS_ID, String(settings.shadowEventMaxItems)],
+        [INTERPRETATION_MAX_ITEMS_ID, String(settings.interpretationMaxItems)],
+        [RETRIEVAL_MODE_ID, settings.retrievalMode],
+        [RETRIEVAL_DEFAULT_TOPK_ID, String(settings.retrievalDefaultTopK)],
+        [RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(settings.retrievalDefaultExpandDepth)],
+        [RETENTION_BLUR_THRESHOLD_ID, String(settings.retentionBlurThreshold)],
+        [RETENTION_DISTORTED_THRESHOLD_ID, String(settings.retentionDistortedThreshold)],
+        [FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID, String(settings.retentionShadowRetrievalPenaltyMild)],
+        [FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID, String(settings.retentionShadowRetrievalPenaltyHeavy)],
+        [FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID, String(settings.retentionShadowConfidencePenaltyMild)],
+        [FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID, String(settings.retentionShadowConfidencePenaltyHeavy)],
+        [FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID, String(settings.retentionShadowMaxFinalItems)],
+        [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, settings.retrievalEnablePayloadFilter],
+        [RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, settings.retrievalEnableGraphExpansion],
+        [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, settings.retrievalEnableGraphPenalty],
+        [VECTOR_TOPK_ID, String(settings.vectorTopK)],
+        [VECTOR_DEEP_WINDOW_ID, String(settings.vectorDeepWindow)],
+        [VECTOR_FINAL_TOPK_ID, String(settings.vectorFinalTopK)],
+        [VECTOR_ENABLE_STRATEGY_ROUTING_ID, settings.vectorEnableStrategyRouting],
+        [VECTOR_ENABLE_RERANK_ID, settings.vectorEnableRerank],
+        [VECTOR_RERANK_WINDOW_ID, String(settings.vectorRerankWindow)],
+        [VECTOR_EMBEDDING_MODEL_ID, settings.vectorEmbeddingModel],
+        [VECTOR_EMBEDDING_VERSION_ID, settings.vectorEmbeddingVersion],
+        [VECTOR_AUTO_INDEX_ON_WRITE_ID, settings.vectorAutoIndexOnWrite],
+        [VECTOR_ENABLE_LLMHUB_RERANK_ID, settings.vectorEnableLLMHubRerank],
+        [VECTOR_LLMHUB_RERANK_RESOURCE_ID, settings.vectorLLMHubRerankResource],
+        [VECTOR_LLMHUB_RERANK_MODEL_ID, settings.vectorLLMHubRerankModel],
+        [VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID, String(settings.vectorLLMHubRerankMinCandidates)],
+        [VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID, String(settings.vectorLLMHubRerankMaxCandidates)],
+        [VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, settings.vectorLLMHubRerankFallbackToRule],
+        [RETRIEVAL_LOG_ENABLED_ID, settings.retrievalLogEnabled],
+        [RETRIEVAL_TRACE_PANEL_ID, settings.retrievalTracePanelEnabled],
+        [RETRIEVAL_LOG_LEVEL_ID, settings.retrievalLogLevel],
+        [RETRIEVAL_RULE_PACK_ID, settings.retrievalRulePack],
+        [PIPELINE_BUDGET_ENABLED_ID, settings.pipelineBudgetEnabled],
+        [PIPELINE_MAX_INPUT_CHARS_ID, String(settings.pipelineMaxInputCharsPerBatch)],
+        [PIPELINE_MAX_OUTPUT_ITEMS_ID, String(settings.pipelineMaxOutputItemsPerBatch)],
+        [PIPELINE_MAX_ACTIONS_ID, String(settings.pipelineMaxActionsPerMutation)],
+        [PIPELINE_MAX_SECTION_BATCHES_ID, String(settings.pipelineMaxSectionBatchCount)],
+        [PIPELINE_MAX_CONFLICT_BUCKET_ID, String(settings.pipelineMaxConflictBucketSize)],
+        [PIPELINE_MAX_SECTION_DIGEST_ID, String(settings.pipelineMaxSectionDigestChars)],
+        [PIPELINE_MAX_FINALIZER_ITEMS_ID, String(settings.pipelineMaxFinalizerItemsPerDomain)],
+        [PIPELINE_STAGING_RETENTION_DAYS_ID, String(settings.pipelineStagingRetentionDays)],
+        [PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, settings.pipelineResolveOnlyUnresolvedConflicts],
+    ];
+    isSyncingForm = true;
+    try {
+        setters.forEach(([id, value]): void => {
+            const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+            if (!element) return;
+            if (typeof value === 'boolean' && element instanceof HTMLInputElement) {
+                element.checked = value;
+                return;
+            }
+            element.value = String(value);
+        });
+    } finally {
+        isSyncingForm = false;
+    }
+    syncInjectionBudgetUiState();
+    syncVectorSettingsUiState();
+}
+
+/**
+ * 功能：读取表单中的设置。
+ * @returns 设置对象。
+ */
+function readSettingsFromForm(): Partial<MemoryOSSettings> {
+    const checked = (id: string, fallback: boolean): boolean => (document.getElementById(id) as HTMLInputElement | null)?.checked ?? fallback;
+    const text = (id: string, fallback: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value ?? fallback;
+    return {
+        enabled: checked(ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.enabled),
+        coldStartEnabled: checked(COLD_START_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.coldStartEnabled),
+        takeoverEnabled: checked(TAKEOVER_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverEnabled),
+        dreamEnabled: checked(DREAM_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamEnabled),
+        dreamAutoTriggerEnabled: checked(DREAM_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamAutoTriggerEnabled),
+        dreamRequireApproval: checked(DREAM_REQUIRE_APPROVAL_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRequireApproval),
+        dreamPromptEnabled: checked(DREAM_PROMPT_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptEnabled),
+        dreamPromptVersion: text(DREAM_PROMPT_VERSION_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion),
+        dreamPromptStylePreset: text(DREAM_STYLE_PRESET_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset),
+        dreamPromptAllowNarrativeExpansion: checked(DREAM_PROMPT_ALLOW_EXPANSION_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptAllowNarrativeExpansion),
+        dreamPromptMaxHighlights: Number(text(DREAM_PROMPT_MAX_HIGHLIGHTS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamPromptMaxHighlights))),
+        dreamPromptMaxMutations: Number(text(DREAM_PROMPT_MAX_MUTATIONS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamPromptMaxMutations))),
+        dreamPromptRequireExplain: checked(DREAM_PROMPT_REQUIRE_EXPLAIN_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptRequireExplain),
+        dreamPromptStrictJson: checked(DREAM_PROMPT_STRICT_JSON_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStrictJson),
+        dreamPromptWeakInferenceOnly: checked(DREAM_PROMPT_WEAK_INFERENCE_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptWeakInferenceOnly),
+        dreamContextMaxChars: Number(text(DREAM_CONTEXT_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamContextMaxChars))),
+        dreamRecentTopK: Number(text(DREAM_RECENT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamRecentTopK))),
+        dreamMidTopK: Number(text(DREAM_MID_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamMidTopK))),
+        dreamDeepTopK: Number(text(DREAM_DEEP_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamDeepTopK))),
+        dreamFusedMaxItems: Number(text(DREAM_FUSED_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamFusedMaxItems))),
+        dreamStylePreset: text(DREAM_STYLE_PRESET_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamStylePreset),
+        dreamWaveEnabled: checked(DREAM_WAVE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamWaveEnabled),
+        dreamWaveRecentTopK: Number(text(DREAM_WAVE_RECENT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveRecentTopK))),
+        dreamWaveMidTopK: Number(text(DREAM_WAVE_MID_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveMidTopK))),
+        dreamWaveDeepTopK: Number(text(DREAM_WAVE_DEEP_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveDeepTopK))),
+        dreamWaveFusionTopK: Number(text(DREAM_WAVE_FUSION_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamWaveFusionTopK))),
+        dreamGraphEnabled: checked(DREAM_GRAPH_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamGraphEnabled),
+        dreamGraphExpandDepth: Number(text(DREAM_GRAPH_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamGraphExpandDepth))),
+        dreamNoveltyEnabled: checked(DREAM_NOVELTY_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamNoveltyEnabled),
+        dreamNoveltyWeight: Number(text(DREAM_NOVELTY_WEIGHT_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamNoveltyWeight))),
+        dreamRepetitionPenaltyWeight: Number(text(DREAM_REPETITION_PENALTY_WEIGHT_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamRepetitionPenaltyWeight))),
+        dreamDiagnosticsEnabled: checked(DREAM_DIAGNOSTICS_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamDiagnosticsEnabled),
+        dreamSchedulerEnabled: checked(DREAM_SCHEDULER_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerEnabled),
+        dreamSchedulerCooldownMinutes: Number(text(DREAM_SCHEDULER_COOLDOWN_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerCooldownMinutes))),
+        dreamSchedulerDailyMaxRuns: Number(text(DREAM_SCHEDULER_DAILY_MAX_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerDailyMaxRuns))),
+        dreamSchedulerIdleMinutes: Number(text(DREAM_SCHEDULER_IDLE_MINUTES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerIdleMinutes))),
+        dreamSchedulerAllowGenerationEndedTrigger: checked(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerAllowGenerationEndedTrigger),
+        dreamSchedulerAllowIdleTrigger: checked(DREAM_SCHEDULER_IDLE_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamSchedulerAllowIdleTrigger),
+        dreamMaintenanceEnabled: checked(DREAM_MAINTENANCE_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamMaintenanceEnabled),
+        dreamMaintenanceMaxProposalsPerRun: Number(text(DREAM_MAINTENANCE_MAX_PROPOSALS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamMaintenanceMaxProposalsPerRun))),
+        dreamQualityGuardEnabled: checked(DREAM_QUALITY_GUARD_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamQualityGuardEnabled),
+        dreamAutoApplyLowRiskMaintenance: checked(DREAM_AUTO_APPLY_LOW_RISK_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamAutoApplyLowRiskMaintenance),
+        dreamWorkbenchEnabled: checked(DREAM_WORKBENCH_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamWorkbenchEnabled),
+        dreamRollbackEnabled: checked(DREAM_ROLLBACK_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRollbackEnabled),
+        toolbarQuickActionsEnabled: checked(TOOLBAR_QUICK_ACTIONS_ID, DEFAULT_MEMORY_OS_SETTINGS.toolbarQuickActionsEnabled),
+        injectionPromptEnabled: checked(INJECTION_PROMPT_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPromptEnabled),
+        injectionPreviewEnabled: checked(INJECTION_PREVIEW_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionPreviewEnabled),
+        injectionCustomBudgetEnabled: checked(INJECTION_CUSTOM_BUDGET_ID, DEFAULT_MEMORY_OS_SETTINGS.injectionCustomBudgetEnabled),
+        timelineMaxItems: Number(text(TIMELINE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.timelineMaxItems))),
+        worldBaseMaxItems: Number(text(WORLD_BASE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.worldBaseMaxItems))),
+        sceneActiveMaxItems: Number(text(SCENE_ACTIVE_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.sceneActiveMaxItems))),
+        sceneRecentMaxItems: Number(text(SCENE_RECENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.sceneRecentMaxItems))),
+        entityMaxItems: Number(text(ENTITY_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.entityMaxItems))),
+        identityMaxItems: Number(text(IDENTITY_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.identityMaxItems))),
+        relationshipMaxItems: Number(text(RELATIONSHIP_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.relationshipMaxItems))),
+        eventMaxItems: Number(text(EVENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.eventMaxItems))),
+        shadowEventMaxItems: Number(text(SHADOW_EVENT_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.shadowEventMaxItems))),
+        interpretationMaxItems: Number(text(INTERPRETATION_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.interpretationMaxItems))),
+        retrievalMode: (() => {
+            const v = text(RETRIEVAL_MODE_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalMode);
+            return v === 'lexical_only' || v === 'vector_only' || v === 'hybrid' ? v : DEFAULT_MEMORY_OS_SETTINGS.retrievalMode;
+        })(),
+        retrievalDefaultTopK: Number(text(RETRIEVAL_DEFAULT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultTopK))),
+        retrievalDefaultExpandDepth: Number(text(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth))),
+        retentionBlurThreshold: Number(text(RETENTION_BLUR_THRESHOLD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionBlurThreshold))),
+        retentionDistortedThreshold: Number(text(RETENTION_DISTORTED_THRESHOLD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionDistortedThreshold))),
+        retentionShadowRetrievalPenaltyMild: Number(text(FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyMild))),
+        retentionShadowRetrievalPenaltyHeavy: Number(text(FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowRetrievalPenaltyHeavy))),
+        retentionShadowConfidencePenaltyMild: Number(text(FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyMild))),
+        retentionShadowConfidencePenaltyHeavy: Number(text(FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowConfidencePenaltyHeavy))),
+        retentionShadowMaxFinalItems: Number(text(FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retentionShadowMaxFinalItems))),
+        retrievalEnablePayloadFilter: checked(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnablePayloadFilter),
+        retrievalEnableGraphExpansion: checked(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphExpansion),
+        retrievalEnableGraphPenalty: checked(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalEnableGraphPenalty),
+        vectorTopK: Number(text(VECTOR_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorTopK))),
+        vectorDeepWindow: Number(text(VECTOR_DEEP_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorDeepWindow))),
+        vectorFinalTopK: Number(text(VECTOR_FINAL_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorFinalTopK))),
+        vectorEnableStrategyRouting: checked(VECTOR_ENABLE_STRATEGY_ROUTING_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableStrategyRouting),
+        vectorEnableRerank: checked(VECTOR_ENABLE_RERANK_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableRerank),
+        vectorRerankWindow: Number(text(VECTOR_RERANK_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorRerankWindow))),
+        vectorEmbeddingModel: text(VECTOR_EMBEDDING_MODEL_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingModel),
+        vectorEmbeddingVersion: text(VECTOR_EMBEDDING_VERSION_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEmbeddingVersion),
+        vectorAutoIndexOnWrite: checked(VECTOR_AUTO_INDEX_ON_WRITE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorAutoIndexOnWrite),
+        vectorEnableLLMHubRerank: checked(VECTOR_ENABLE_LLMHUB_RERANK_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorEnableLLMHubRerank),
+        vectorLLMHubRerankResource: text(VECTOR_LLMHUB_RERANK_RESOURCE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankResource),
+        vectorLLMHubRerankModel: text(VECTOR_LLMHUB_RERANK_MODEL_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankModel),
+        vectorLLMHubRerankMinCandidates: Number(text(VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMinCandidates))),
+        vectorLLMHubRerankMaxCandidates: Number(text(VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankMaxCandidates))),
+        vectorLLMHubRerankFallbackToRule: checked(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, DEFAULT_MEMORY_OS_SETTINGS.vectorLLMHubRerankFallbackToRule),
+        summaryAutoTriggerEnabled: checked(SUMMARY_AUTO_TRIGGER_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryAutoTriggerEnabled),
+        summaryProgressOverlayEnabled: checked(SUMMARY_PROGRESS_OVERLAY_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryProgressOverlayEnabled),
+        summaryIntervalFloors: Number(text(SUMMARY_INTERVAL_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors))),
+        summaryMinMessages: Number(text(SUMMARY_MIN_MESSAGES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages))),
+        summaryRecentWindowSize: Number(text(SUMMARY_RECENT_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize))),
+        summarySecondStageRollingDigestMaxChars: Number(text(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageRollingDigestMaxChars))),
+        summarySecondStageCandidateSummaryMaxChars: Number(text(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageCandidateSummaryMaxChars))),
+        pipelineBudgetEnabled: checked(PIPELINE_BUDGET_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.pipelineBudgetEnabled),
+        pipelineMaxInputCharsPerBatch: Number(text(PIPELINE_MAX_INPUT_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxInputCharsPerBatch))),
+        pipelineMaxOutputItemsPerBatch: Number(text(PIPELINE_MAX_OUTPUT_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxOutputItemsPerBatch))),
+        pipelineMaxActionsPerMutation: Number(text(PIPELINE_MAX_ACTIONS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxActionsPerMutation))),
+        pipelineMaxSectionBatchCount: Number(text(PIPELINE_MAX_SECTION_BATCHES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxSectionBatchCount))),
+        pipelineMaxConflictBucketSize: Number(text(PIPELINE_MAX_CONFLICT_BUCKET_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxConflictBucketSize))),
+        pipelineMaxSectionDigestChars: Number(text(PIPELINE_MAX_SECTION_DIGEST_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxSectionDigestChars))),
+        pipelineMaxFinalizerItemsPerDomain: Number(text(PIPELINE_MAX_FINALIZER_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxFinalizerItemsPerDomain))),
+        pipelineStagingRetentionDays: Number(text(PIPELINE_STAGING_RETENTION_DAYS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineStagingRetentionDays))),
+        pipelineResolveOnlyUnresolvedConflicts: checked(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, DEFAULT_MEMORY_OS_SETTINGS.pipelineResolveOnlyUnresolvedConflicts),
+        takeoverDetectMinFloors: Number(text(TAKEOVER_DETECT_MIN_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors))),
+        takeoverDefaultRecentFloors: Number(text(TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors))),
+        takeoverDefaultBatchSize: Number(text(TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize))),
+        takeoverRequestIntervalSeconds: Number(text(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverRequestIntervalSeconds))),
+        takeoverDefaultPrioritizeRecent: checked(TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultPrioritizeRecent),
+        takeoverDefaultAutoContinue: checked(TAKEOVER_DEFAULT_AUTO_CONTINUE_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoContinue),
+        takeoverDefaultAutoConsolidate: checked(TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultAutoConsolidate),
+        takeoverDefaultPauseOnError: checked(TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID, DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultPauseOnError),
+        retrievalLogEnabled: checked(RETRIEVAL_LOG_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalLogEnabled),
+        retrievalLogLevel: text(RETRIEVAL_LOG_LEVEL_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalLogLevel) === 'debug' ? 'debug' : 'info',
+        retrievalRulePack: text(RETRIEVAL_RULE_PACK_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalRulePack) === 'native'
+            ? 'native'
+            : text(RETRIEVAL_RULE_PACK_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalRulePack) === 'perocore'
+                ? 'perocore'
+                : 'hybrid',
+        retrievalTracePanelEnabled: checked(RETRIEVAL_TRACE_PANEL_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalTracePanelEnabled),
+    };
+}
+
+/**
+ * 功能：同步向量设置区的可编辑状态。
+ */
+function syncVectorSettingsUiState(): void {
+    const rerankEnabled = (document.getElementById(VECTOR_ENABLE_RERANK_ID) as HTMLInputElement | null)?.checked ?? false;
+    const llmhubEnabled = (document.getElementById(VECTOR_ENABLE_LLMHUB_RERANK_ID) as HTMLInputElement | null)?.checked ?? false;
+    const rerankFieldIds = [
+        VECTOR_ENABLE_LLMHUB_RERANK_ID,
+        VECTOR_RERANK_WINDOW_ID,
+        VECTOR_LLMHUB_RERANK_RESOURCE_ID,
+        VECTOR_LLMHUB_RERANK_MODEL_ID,
+        VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID,
+    ];
+    const llmhubFieldIds = [
+        VECTOR_LLMHUB_RERANK_RESOURCE_ID,
+        VECTOR_LLMHUB_RERANK_MODEL_ID,
+        VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,
+        VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID,
+    ];
+
+    rerankFieldIds.forEach((id: string): void => {
+        const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+        if (!element) {
             return;
         }
-        const observer = new MutationObserver((_mutations: MutationRecord[], mutationObserver: MutationObserver): void => {
-            const nextElement = document.querySelector(selector);
-            if (nextElement) {
-                mutationObserver.disconnect();
-                resolve(nextElement);
-            }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-        window.setTimeout((): void => {
-            observer.disconnect();
-            reject(new Error(`Timeout waiting for ${selector}`));
-        }, timeout);
+        if (id === VECTOR_ENABLE_LLMHUB_RERANK_ID) {
+            element.disabled = !rerankEnabled;
+            return;
+        }
+        if (llmhubFieldIds.includes(id)) {
+            element.disabled = !rerankEnabled || !llmhubEnabled;
+            return;
+        }
+        element.disabled = !rerankEnabled;
+    });
+}
+
+function syncInjectionBudgetUiState(): void {
+    const customBudgetEnabled = (document.getElementById(INJECTION_CUSTOM_BUDGET_ID) as HTMLInputElement | null)?.checked ?? false;
+    const container = document.getElementById(INJECTION_BUDGET_FIELDS_ID);
+    if (container) {
+        container.hidden = !customBudgetEnabled;
+    }
+    [
+        TIMELINE_MAX_ITEMS_ID,
+        WORLD_BASE_MAX_ITEMS_ID,
+        SCENE_ACTIVE_MAX_ITEMS_ID,
+        SCENE_RECENT_MAX_ITEMS_ID,
+        ENTITY_MAX_ITEMS_ID,
+        IDENTITY_MAX_ITEMS_ID,
+        RELATIONSHIP_MAX_ITEMS_ID,
+        EVENT_MAX_ITEMS_ID,
+        SHADOW_EVENT_MAX_ITEMS_ID,
+        INTERPRETATION_MAX_ITEMS_ID,
+    ].forEach((id: string): void => {
+        const element = document.getElementById(id) as HTMLInputElement | null;
+        if (element) {
+            element.disabled = !customBudgetEnabled;
+        }
     });
 }
 
 /**
- * 功能：读取角色标记缓存。
- * @param chatKey 聊天键。
- * @returns 角色标记表。
+ * 功能：设置状态提示文案。
+ * @param text 文案。
  */
-function readCharacterRoleMarks(chatKey: string): Record<string, string> {
-    if (typeof window === 'undefined' || !window.localStorage || !chatKey) {
-        return {};
+function setStatusText(text: string): void {
+    const element = document.getElementById(STATUS_ID);
+    if (element) element.textContent = text;
+}
+
+/**
+ * 功能：立即执行自动保存。
+ */
+function flushAutoSave(): void {
+    if (isSyncingForm) return;
+    const saved = writeMemoryOSSettings(readSettingsFromForm());
+    syncSettingsToForm(saved);
+    setStatusText('已自动保存，下一轮对话生效');
+}
+
+/**
+ * 功能：延迟调度自动保存。
+ */
+function scheduleAutoSave(): void {
+    if (isSyncingForm) return;
+    if (autoSaveTimer !== null) window.clearTimeout(autoSaveTimer);
+    setStatusText('检测到更改，正在准备自动保存…');
+    autoSaveTimer = window.setTimeout((): void => {
+        autoSaveTimer = null;
+        flushAutoSave();
+    }, 320);
+}
+
+/**
+ * 功能：绑定交互事件。
+ */
+function bindActionEvents(): void {
+    const openButton = document.getElementById(BTN_ID) as HTMLButtonElement | null;
+    if (openButton) openButton.onclick = (): void => openUnifiedMemoryWorkbench();
+    const resetButton = document.getElementById(RESET_BTN_ID) as HTMLButtonElement | null;
+    if (resetButton) {
+        resetButton.onclick = (): void => {
+            if (autoSaveTimer !== null) window.clearTimeout(autoSaveTimer);
+            autoSaveTimer = null;
+            const saved = writeMemoryOSSettings({ ...DEFAULT_MEMORY_OS_SETTINGS });
+            syncSettingsToForm(saved);
+            setStatusText('已恢复默认设置');
+        };
     }
-    try {
-        const raw = window.localStorage.getItem(`${CHARACTER_ROLE_STORAGE_PREFIX}${chatKey}`);
-        if (!raw) {
-            return {};
+    const elements = Array.from(document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(`#${CARD_ID} input, #${CARD_ID} select`));
+    elements.forEach((element: HTMLInputElement | HTMLSelectElement): void => {
+        if (element.id === BTN_ID || element.id === RESET_BTN_ID) return;
+        if (element instanceof HTMLInputElement && element.type === 'checkbox') {
+            element.addEventListener('change', (): void => {
+                syncInjectionBudgetUiState();
+                syncVectorSettingsUiState();
+                scheduleAutoSave();
+            });
+            return;
         }
-        const parsed = JSON.parse(raw) as Record<string, string>;
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-        return {};
-    }
+        element.addEventListener('input', (): void => {
+            syncInjectionBudgetUiState();
+            syncVectorSettingsUiState();
+            scheduleAutoSave();
+        });
+        element.addEventListener('change', (): void => {
+            syncInjectionBudgetUiState();
+            syncVectorSettingsUiState();
+            scheduleAutoSave();
+        });
+        element.addEventListener('blur', (): void => flushAutoSave());
+    });
 }
 
 /**
- * 功能：写入角色标记缓存。
- * @param chatKey 聊天键。
- * @param actorKey 角色键。
- * @param role 标记值。
- * @returns 无返回值。
- */
-function writeCharacterRoleMark(chatKey: string, actorKey: string, role: string): void {
-    if (typeof window === 'undefined' || !window.localStorage || !chatKey || !actorKey) {
-        return;
-    }
-    const nextMarks = readCharacterRoleMarks(chatKey);
-    nextMarks[actorKey] = role;
-    window.localStorage.setItem(`${CHARACTER_ROLE_STORAGE_PREFIX}${chatKey}`, JSON.stringify(nextMarks));
-}
-
-/**
- * 功能：格式化候选类型标签。
- * @param kind 原始类型。
- * @returns 展示文本。
- */
-function formatCandidateKindLabel(kind: string): string {
-    switch (kind) {
-        case 'state':
-            return 'world_state';
-        case 'fact':
-            return 'fact';
-        case 'summary':
-            return 'summary';
-        case 'relationship':
-            return 'relationship';
-        default:
-            return kind || 'unknown';
-    }
-}
-
-/**
- * 功能：渲染 MemoryOS 设置面板。
- * @returns 无返回值。
+ * 功能：渲染 MemoryOS 设置入口。
+ * @returns 异步完成。
  */
 export async function renderSettingsUi(): Promise<void> {
-    try {
-        initThemeKernel();
-        const container = await waitForElement('#extensions_settings');
-        const styleId = `${IDS.cardId}-styles`;
-        const styleText = buildSettingsCardStylesTemplate(IDS.cardId);
-        const existingStyleEl = document.getElementById(styleId) as HTMLStyleElement | null;
-        if (existingStyleEl) {
-            if (existingStyleEl.innerHTML !== styleText) {
-                existingStyleEl.innerHTML = styleText;
-            }
-        } else {
-            const styleEl = document.createElement('style');
-            styleEl.id = styleId;
-            styleEl.innerHTML = styleText;
-            document.head.appendChild(styleEl);
-        }
-
-        let cardWrapper = document.getElementById(IDS.cardId) as HTMLDivElement | null;
-        if (!cardWrapper) {
-            cardWrapper = document.createElement('div');
-            cardWrapper.id = IDS.cardId;
-            let pluginContainer = document.getElementById('ss-helper-plugins-container');
-            if (!pluginContainer) {
-                pluginContainer = document.createElement('div');
-                pluginContainer.id = 'ss-helper-plugins-container';
-                pluginContainer.className = 'ss-helper-plugins-container';
-                container.prepend(pluginContainer);
-            }
-            pluginContainer.appendChild(cardWrapper);
-        }
-
-        cardWrapper.innerHTML = buildSettingsCardHtmlTemplate(IDS);
-        hydrateSharedSelects(cardWrapper);
-        refreshSharedSelectOptions(cardWrapper);
-        unmountThemeHost(cardWrapper);
-        const contentRoot = document.getElementById(IDS.drawerContentId);
-        if (contentRoot) {
-            mountThemeHost(contentRoot);
-        }
-        ensureThemeBinding();
-        applyTailwindScopeToNode(cardWrapper);
-        bindUiEvents();
-        await renderSettingsExperience(IDS);
-        applySettingsTooltips();
-    } catch (error) {
-        logger.error('[MemoryOS] UI 渲染失败：', error);
-    }
-}
-
-export { openWorldbookInitPanel } from './worldbookInitPanel';
-
-/**
- * 功能：绑定设置卡片的交互事件。
- * @returns 无返回值。
- */
-function bindUiEvents(): void {
-    const cardRoot = document.getElementById(IDS.cardId) as HTMLElement | null;
-    const drawerToggle = document.getElementById(IDS.drawerToggleId) as HTMLElement | null;
-    const drawerContent = document.getElementById(IDS.drawerContentId) as HTMLElement | null;
-    const drawerIcon = document.getElementById(IDS.drawerIconId) as HTMLElement | null;
-    const searchInput = document.getElementById(IDS.searchId) as HTMLInputElement | null;
-
-    if (!cardRoot || !drawerToggle || !drawerContent || !drawerIcon) {
+    const container = document.querySelector('#extensions_settings');
+    if (!container) {
+        logger.warn('[MemoryOS] 未找到 extensions_settings 容器');
         return;
     }
-    const cardRootEl = cardRoot;
-    const drawerToggleEl = drawerToggle;
-    const drawerContentEl = drawerContent;
-    const drawerIconEl = drawerIcon;
-
-    const basicTabs: SettingsTabEntry[] = [
-        { tabId: IDS.tabRoleId, panelId: IDS.panelRoleId },
-        { tabId: IDS.tabRecentId, panelId: IDS.panelRecentId },
-        { tabId: IDS.tabRelationId, panelId: IDS.panelRelationId },
-        { tabId: IDS.tabInjectionId, panelId: IDS.panelInjectionId },
-    ];
-    const advancedTabs: SettingsTabEntry[] = [
-        { tabId: IDS.tabMainId, panelId: IDS.panelMainId },
-        { tabId: IDS.tabAiId, panelId: IDS.panelAiId },
-        { tabId: IDS.tabPromptId, panelId: IDS.panelPromptId },
-        { tabId: IDS.tabDbId, panelId: IDS.panelDbId },
-        { tabId: IDS.tabAboutId, panelId: IDS.panelAboutId },
-    ];
-
-    let activeBasicPanelId = IDS.panelRoleId;
-    let activeAdvancedPanelId = IDS.panelMainId;
-
-    /**
-     * 功能：刷新四个体验页签的数据。
-     * @returns 无返回值。
-     */
-    async function refreshExperiencePanels(): Promise<void> {
-        await renderSettingsExperience(IDS);
+    ensureSettingsStyles();
+    let card = document.getElementById(CARD_ID) as HTMLDivElement | null;
+    if (!card) {
+        card = document.createElement('div');
+        card.id = CARD_ID;
+        container.prepend(card);
     }
+    card.innerHTML = buildCardTemplateHtml();
+    hydrateSettingPage(card);
+    bindTabEvents();
+    bindActionEvents();
+    syncSettingsToForm(readMemoryOSSettings());
+    setStatusText('已加载当前设置');
+}
 
-    /**
-     * 功能：判断抽屉是否可见。
-     * @returns 是否可见。
-     */
-    function isDrawerVisible(): boolean {
-        return drawerContentEl.style.display !== 'none';
-    }
-
-    /**
-     * 功能：打开抽屉时刷新当前聊天绑定与体验面板。
-     * @returns 无返回值。
-     */
-    async function refreshCurrentChatContextOnOpen(): Promise<void> {
-        const plugin = (window as Window & {
-            MemoryOSPlugin?: {
-                refreshCurrentChatBinding?: () => Promise<void>;
-            };
-        }).MemoryOSPlugin;
-        try {
-            await plugin?.refreshCurrentChatBinding?.();
-        } catch (error) {
-            logger.error('[MemoryOS] 刷新当前聊天绑定失败：', error);
-        }
-        await refreshExperiencePanels();
-    }
-
-    /**
-     * 功能：切换某组页签的激活状态。
-     * @param entries 页签集合。
-     * @param activeTabId 当前激活的按钮 ID。
-     * @param activePanelId 当前激活的面板 ID。
-     * @returns 无返回值。
-     */
-    function applyTabState(entries: SettingsTabEntry[], activeTabId: string, activePanelId: string): void {
-        entries.forEach((entry: SettingsTabEntry): void => {
-            const tabButton = document.getElementById(entry.tabId);
-            const panel = document.getElementById(entry.panelId) as HTMLElement | null;
-            tabButton?.classList.toggle('is-active', entry.tabId === activeTabId);
-            if (panel) {
-                panel.hidden = entry.panelId !== activePanelId;
-            }
-        });
-    }
-
-    /**
-     * 功能：激活基础页签。
-     * @param tabId 页签按钮 ID。
-     * @param panelId 面板 ID。
-     * @returns 无返回值。
-     */
-    function activateBasicTab(tabId: string, panelId: string): void {
-        activeBasicPanelId = panelId;
-        applyTabState(basicTabs, tabId, panelId);
-    }
-
-    /**
-     * 功能：激活高级页签。
-     * @param tabId 页签按钮 ID。
-     * @param panelId 面板 ID。
-     * @returns 无返回值。
-     */
-    function activateAdvancedTab(tabId: string, panelId: string): void {
-        activeAdvancedPanelId = panelId;
-        applyTabState(advancedTabs, tabId, panelId);
-    }
-
-    /**
-     * 功能：打开记录编辑器中的系统诊断页。
-     * @returns 无返回值。
-     */
-    function openDiagnostics(): void {
-        void openRecordEditor({ initialView: 'diagnostics' });
-    }
-
-    const executeEditorAction = createEditorActionExecutor({
-        dialogIdPrefix: `${NAMESPACE}-source-details`,
-        formatCandidateKindLabel,
-        openRecordEditor,
-        openDiagnostics,
-        refreshExperiencePanels,
-        toast,
-    });
-
-    drawerToggleEl.addEventListener('click', (): void => {
-        const wasVisible = isDrawerVisible();
-        window.setTimeout((): void => {
-            const isVisibleNow = isDrawerVisible();
-            if (!wasVisible && isVisibleNow) {
-                void refreshCurrentChatContextOnOpen();
-            }
-        }, 0);
-    });
-
-    drawerIconEl.addEventListener('keydown', (event: KeyboardEvent): void => {
-        if (event.key !== 'Enter' && event.key !== ' ') {
-            return;
-        }
-        event.preventDefault();
-        drawerToggleEl.click();
-    });
-
-    basicTabs.forEach((entry: SettingsTabEntry): void => {
-        document.getElementById(entry.tabId)?.addEventListener('click', (): void => {
-            activateBasicTab(entry.tabId, entry.panelId);
-        });
-    });
-
-    advancedTabs.forEach((entry: SettingsTabEntry): void => {
-        document.getElementById(entry.tabId)?.addEventListener('click', (): void => {
-            activateAdvancedTab(entry.tabId, entry.panelId);
-        });
-    });
-
-    document.getElementById(IDS.experienceRefreshBtnId)?.addEventListener('click', (): void => {
-        void refreshExperiencePanels();
-    });
-
-    document.getElementById(IDS.experienceRecordEditorBtnId)?.addEventListener('click', (): void => {
-        openRecordEditor();
-    });
-
-    document.getElementById(IDS.experienceSnapshotBtnId)?.addEventListener('click', (): void => {
-        void executeEditorAction('rebuild-chat-view');
-    });
-
-    cardRootEl.addEventListener('click', (event: Event): void => {
-        const target = event.target as HTMLElement | null;
-        if (!target) {
-            return;
-        }
-
-        const sourceTrigger = target.closest<HTMLElement>('[data-stx-source-details]');
-        if (sourceTrigger) {
-            const payload = sourceTrigger.dataset.stxSourceDetails || '';
-            if (payload) {
-                showSnapshotSourceDetails(payload, `${NAMESPACE}-source-details`);
-            }
-            return;
-        }
-
-        const roleTrigger = target.closest<HTMLElement>('[data-stx-character-role]');
-        if (roleTrigger) {
-            const chatKey = roleTrigger.dataset.stxChatKey || '';
-            const actorKey = roleTrigger.dataset.stxActorKey || '';
-            const role = roleTrigger.dataset.stxCharacterRole || '';
-            if (!chatKey || !actorKey || !role) {
-                return;
-            }
-            writeCharacterRoleMark(chatKey, actorKey, role);
-            cardRootEl.querySelectorAll<HTMLElement>('[data-stx-character-role]').forEach((button: HTMLElement): void => {
-                const sameChat = button.dataset.stxChatKey === chatKey;
-                const sameActor = button.dataset.stxActorKey === actorKey;
-                if (!sameChat || !sameActor) {
-                    return;
-                }
-                    button.setAttribute('aria-pressed', button.dataset.stxCharacterRole === role ? 'true' : 'false');
-            });
-            return;
-        }
-
-        const actionTrigger = target.closest<HTMLElement>('[data-stx-editor-action]');
-        if (actionTrigger) {
-            const action = actionTrigger.dataset.stxEditorAction || '';
-            if (!action) {
-                return;
-            }
-            void executeEditorAction(action, actionTrigger);
-        }
-    });
-
-    bindRuntimeControlTab({ ids: IDS });
-    bindMemoryStrategyTab({ ids: IDS, refreshExperiencePanels });
-    bindInjectionPromptTab({ ids: IDS });
-    const { syncSearchState } = bindDataMaintenanceTab({ ids: IDS, cardId: IDS.cardId });
-    bindAboutDiagnosticsTab({ ids: IDS });
-
-    if (searchInput) {
-        searchInput.addEventListener('input', (): void => {
-            const keyword = normalizeText(searchInput.value).toLowerCase();
-            cardRootEl.querySelectorAll<HTMLElement>('[data-stx-ui-search]').forEach((element: HTMLElement): void => {
-                const haystack = normalizeText(element.dataset.stxUiSearch || '').toLowerCase();
-                const matched = !keyword || haystack.includes(keyword);
-                element.classList.toggle('is-hidden-by-search', !matched);
-            });
-            syncSearchState();
-        });
-    }
-
-    activateBasicTab(IDS.tabRoleId, IDS.panelRoleId);
-    activateAdvancedTab(IDS.tabMainId, IDS.panelMainId);
-    drawerContentEl.style.display = 'none';
-    drawerToggleEl.classList.remove('open');
-    drawerIconEl.classList.add('down');
+/**
+ * 功能：兼容导出旧世界书入口，当前转到统一工作台。
+ */
+export function openWorldbookInitPanel(): void {
+    openUnifiedMemoryWorkbench({ initialView: 'world' });
 }

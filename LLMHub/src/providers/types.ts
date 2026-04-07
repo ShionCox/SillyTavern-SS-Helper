@@ -4,6 +4,7 @@
  */
 
 import type { ApiType } from '../schema/types';
+import type { SchemaCompatOptions } from '../schema/strict-json-schema';
 
 export interface LLMProviderCapabilities {
     chat: boolean;
@@ -22,6 +23,7 @@ export interface LLMRequest {
     schema?: object;
     schemaName?: string;
     preferredResponseFormat?: 'json_object' | 'json_schema' | 'system_json';
+    schemaCompat?: SchemaCompatOptions;
 }
 
 export interface LLMResponse {

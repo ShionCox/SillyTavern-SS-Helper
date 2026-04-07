@@ -6,6 +6,16 @@ import type {
 import { stripRuntimePlaceholderArtifactsEvent } from "./artifacts";
 
 /**
+ * 功能：定义酒馆聊天消息正文兼容抽取结果。
+ */
+export interface SdkTavernMessageTextExtractionEvent {
+  text: string;
+  textSource: string;
+  isEmpty: boolean;
+  normalizedShapeHint?: string;
+}
+
+/**
  * 功能：把任意输入规范化为字符串文本。
  * @param raw 原始输入值
  * @returns 规范化后的字符串
@@ -49,34 +59,247 @@ function getPromptArrayTextEvent(contentArray: unknown[]): string {
 }
 
 /**
+ * 功能：从未知字段中抽取可见正文。
+ * @param value 待读取的值。
+ * @param sourcePrefix 当前来源标记。
+ * @returns 命中的抽取结果；未命中时返回 null。
+ */
+function extractTextFromUnknownRecordEvent(
+  value: unknown,
+  sourcePrefix: string
+): SdkTavernMessageTextExtractionEvent | null {
+  if (typeof value === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(value),
+      textSource: sourcePrefix,
+      isEmpty: value.trim().length === 0,
+      normalizedShapeHint: "string",
+    };
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const textValue = record.text;
+  if (typeof textValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(textValue),
+      textSource: `${sourcePrefix}.text`,
+      isEmpty: textValue.trim().length === 0,
+      normalizedShapeHint: "object.text",
+    };
+  }
+
+  const contentValue = record.content;
+  if (typeof contentValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(contentValue),
+      textSource: `${sourcePrefix}.content`,
+      isEmpty: contentValue.trim().length === 0,
+      normalizedShapeHint: "object.content",
+    };
+  }
+
+  const messageValue = record.message;
+  if (typeof messageValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(messageValue),
+      textSource: `${sourcePrefix}.message`,
+      isEmpty: messageValue.trim().length === 0,
+      normalizedShapeHint: "object.message",
+    };
+  }
+
+  const mesValue = record.mes;
+  if (typeof mesValue === "string") {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(mesValue),
+      textSource: `${sourcePrefix}.mes`,
+      isEmpty: mesValue.trim().length === 0,
+      normalizedShapeHint: "object.mes",
+    };
+  }
+
+  if (mesValue && typeof mesValue === "object") {
+    const nestedMesResult = extractTextFromUnknownRecordEvent(mesValue, `${sourcePrefix}.mes`);
+    if (nestedMesResult) {
+      return {
+        ...nestedMesResult,
+        normalizedShapeHint: nestedMesResult.normalizedShapeHint || "object.mes_object",
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 功能：构造统一的空抽取结果。
+ * @param textSource 正文来源标记。
+ * @param normalizedShapeHint 结构提示。
+ * @returns 空抽取结果。
+ */
+function buildEmptyExtractionEvent(
+  textSource: string,
+  normalizedShapeHint?: string
+): SdkTavernMessageTextExtractionEvent {
+  return {
+    text: "",
+    textSource,
+    isEmpty: true,
+    normalizedShapeHint,
+  };
+}
+
+/**
+ * 功能：统一抽取酒馆聊天消息正文，并返回来源诊断信息。
+ * @param message 任意聊天消息对象。
+ * @returns 正文抽取结果。
+ */
+export function extractTavernMessageTextEvent(message: unknown): SdkTavernMessageTextExtractionEvent {
+  if (!message || typeof message !== "object") {
+    return buildEmptyExtractionEvent("message.invalid", "non_object");
+  }
+
+  const messageRecord = message as Record<string, unknown>;
+  const swipeId = Number(messageRecord.swipe_id ?? messageRecord.swipeId);
+  const swipes = messageRecord.swipes;
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    const swipeResult = extractTextFromUnknownRecordEvent(swipes[swipeId], `swipes[${swipeId}]`);
+    if (swipeResult) {
+      return swipeResult;
+    }
+    return buildEmptyExtractionEvent(`swipes[${swipeId}]`, "unsupported_swipe_shape");
+  }
+
+  const mesResult = extractTextFromUnknownRecordEvent(messageRecord.mes, "mes");
+  if (mesResult) {
+    return mesResult;
+  }
+
+  const contentResult = extractTextFromUnknownRecordEvent(messageRecord.content, "content");
+  if (contentResult) {
+    return contentResult;
+  }
+
+  const textResult = extractTextFromUnknownRecordEvent(messageRecord.text, "text");
+  if (textResult) {
+    return textResult;
+  }
+
+  const messageResult = extractTextFromUnknownRecordEvent(messageRecord.message, "message");
+  if (messageResult) {
+    return messageResult;
+  }
+
+  const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
+  if (promptText.trim().length > 0) {
+    return {
+      text: stripRuntimePlaceholderArtifactsEvent(promptText),
+      textSource: "prompt.content",
+      isEmpty: false,
+      normalizedShapeHint: Array.isArray(messageRecord.content)
+        ? "prompt.content_array"
+        : typeof messageRecord.content === "object" && messageRecord.content !== null
+          ? "prompt.content_object"
+          : "prompt.direct",
+    };
+  }
+
+  return buildEmptyExtractionEvent("message.unsupported", "unsupported_message_shape");
+}
+
+/**
  * 功能：统一读取普通聊天消息文本，优先读取当前激活 swipe。
  * @param message 任意消息对象（SillyTavern 原始消息或兼容结构）
  * @returns 归一化后的消息文本
  */
 export function getTavernMessageTextEvent(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const messageRecord = message as Record<string, unknown>;
+  return extractTavernMessageTextEvent(message).text;
+}
 
-  const swipeId = Number(messageRecord.swipe_id ?? messageRecord.swipeId);
-  const swipes = messageRecord.swipes;
+/**
+ * 功能：读取消息的原始完整文本（含被 SillyTavern 剥离的 reasoning 块）。
+ *
+ * SillyTavern 的 reasoning 模块会在流式输出/保存时将 `<think>` 等推理块从
+ * `mes` / `swipes[swipeId]` 中剥离，存入 `extra.reasoning`（或
+ * `swipe_info[swipeId].extra.reasoning`）。直接读取 `mes` 拿到的是去掉
+ * reasoning 的文本，不是原始完整内容。
+ *
+ * 本函数会将 reasoning 文本还原并拼到正文前面，以得到真正的"原始楼层文本"。
+ * @param message 酒馆 chat 消息对象。
+ * @returns 包含原始文本及来源的结果。
+ */
+export function extractTavernMessageOriginalTextEvent(message: unknown): { text: string; source: string } {
+  if (!message || typeof message !== "object") {
+    return { text: '', source: 'message.invalid' };
+  }
+
+  const record = message as Record<string, unknown>;
+  const extra = record.extra && typeof record.extra === 'object'
+    ? record.extra as Record<string, unknown>
+    : null;
+
+  const swipeId = Number(record.swipe_id ?? record.swipeId);
+  const swipes = record.swipes;
+  const swipeInfo = record.swipe_info;
+
+  let visibleText = '';
+  let reasoning = '';
+  let source = '';
+
+  // 优先从当前激活 swipe 读取
   if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
-    const activeSwipe = swipes[swipeId];
-    if (typeof activeSwipe === "string") {
-      return stripRuntimePlaceholderArtifactsEvent(activeSwipe);
+    visibleText = typeof swipes[swipeId] === 'string' ? swipes[swipeId] : '';
+    source = `swipes[${swipeId}]`;
+
+    // swipe 级别的 reasoning 存在 swipe_info[swipeId].extra.reasoning
+    if (Array.isArray(swipeInfo) && swipeId < swipeInfo.length) {
+      const swipeExtra = swipeInfo[swipeId] && typeof swipeInfo[swipeId] === 'object'
+        ? (swipeInfo[swipeId] as Record<string, unknown>).extra
+        : null;
+      if (swipeExtra && typeof swipeExtra === 'object') {
+        const swipeReasoning = (swipeExtra as Record<string, unknown>).reasoning;
+        if (typeof swipeReasoning === 'string' && swipeReasoning) {
+          reasoning = swipeReasoning;
+          source = `swipes[${swipeId}]+swipe_info[${swipeId}].extra.reasoning`;
+        }
+      }
     }
-    if (activeSwipe && typeof activeSwipe === "object") {
-      const swipeText = getTavernPromptMessageTextEvent(activeSwipe as SdkTavernPromptMessageEvent);
-      if (swipeText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(swipeText);
-      const swipeRecord = activeSwipe as Record<string, unknown>;
-      const fallbackSwipeText = swipeRecord.mes ?? swipeRecord.content ?? swipeRecord.text ?? swipeRecord.message;
-      if (typeof fallbackSwipeText === "string") return stripRuntimePlaceholderArtifactsEvent(fallbackSwipeText);
+
+    // swipe 级别没找到 reasoning 时回退到 extra.reasoning
+    if (!reasoning && extra) {
+      const topReasoning = extra.reasoning;
+      if (typeof topReasoning === 'string' && topReasoning) {
+        reasoning = topReasoning;
+        source = `swipes[${swipeId}]+extra.reasoning`;
+      }
+    }
+  } else {
+    // 非 swipe 场景——直接读 mes
+    visibleText = typeof record.mes === 'string' ? record.mes : '';
+    source = 'mes';
+
+    if (extra) {
+      const topReasoning = extra.reasoning;
+      if (typeof topReasoning === 'string' && topReasoning) {
+        reasoning = topReasoning;
+        source = 'mes+extra.reasoning';
+      }
     }
   }
 
-  const promptText = getTavernPromptMessageTextEvent(messageRecord as SdkTavernPromptMessageEvent);
-  if (promptText.trim().length > 0) return stripRuntimePlaceholderArtifactsEvent(promptText);
-  const raw = messageRecord.mes ?? messageRecord.content ?? messageRecord.text ?? messageRecord.message;
-  return typeof raw === "string" ? stripRuntimePlaceholderArtifactsEvent(raw) : "";
+  if (!visibleText && !reasoning) {
+    return { text: '', source: 'empty' };
+  }
+
+  // 还原原始文本：reasoning 在前，正文在后
+  const fullText = reasoning
+    ? reasoning + '\n' + visibleText
+    : visibleText;
+
+  return { text: fullText, source };
 }
 
 /**

@@ -8,6 +8,7 @@ import type {
 export type MaxTokensSource =
     | 'global_manual'
     | 'task_manual'
+    | 'task_registered'
     | 'adaptive'
     | 'request_budget'
     | 'consumer_budget'
@@ -67,9 +68,9 @@ function estimateAdaptiveMaxTokens(args: RunTaskArgs, config?: AdaptiveMaxTokens
     const schemaChars = safeJsonLength(args.schema);
 
     let base = args.schema ? 960 : 720;
-    if (args.taskId === 'world.template.build') {
+    if (args.taskKey === 'world.template.build') {
         base = 1400;
-    } else if (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize') {
+    } else if (args.taskKey === 'memory.extract' || args.taskKey === 'world.update' || args.taskKey === 'memory.summarize') {
         base = 1100;
     }
 
@@ -103,6 +104,7 @@ function estimateAdaptiveMaxTokens(args: RunTaskArgs, config?: AdaptiveMaxTokens
 export function resolveMaxTokens(args: RunTaskArgs, options: {
     globalControl?: GlobalMaxTokensControl;
     taskAssignment?: TaskAssignment;
+    taskRegisteredMaxTokens?: number;
     consumerBudgetMaxTokens?: number;
     profileMaxTokens?: number;
 }): ResolvedMaxTokensResult {
@@ -127,21 +129,21 @@ export function resolveMaxTokens(args: RunTaskArgs, options: {
             source: 'task_manual',
             detail: {
                 pluginId: taskAssignment?.pluginId,
-                taskId: taskAssignment?.taskId,
+                taskKey: taskAssignment?.taskKey,
             },
+        };
+    }
+
+    const taskRegistered = toPositiveInt(options.taskRegisteredMaxTokens);
+    if (taskRegistered) {
+        return {
+            value: taskRegistered,
+            source: 'task_registered',
         };
     }
 
     if (globalControl?.mode === 'adaptive') {
         return estimateAdaptiveMaxTokens(args, globalControl.adaptive);
-    }
-
-    const requestBudget = toPositiveInt(args.budget?.maxTokens);
-    if (requestBudget) {
-        return {
-            value: requestBudget,
-            source: 'request_budget',
-        };
     }
 
     const consumerBudget = toPositiveInt(options.consumerBudgetMaxTokens);

@@ -6,13 +6,18 @@ const logger = new Logger('SDK-LlmRequestLogs');
 
 export interface AppendLlmRequestLogInput {
     logId: string;
+    llmTaskId: string;
     requestId: string;
     sourcePluginId: string;
     consumer: string;
-    taskId: string;
+    taskKey: string;
     taskKind: string;
     state: string;
     taskDescription?: string;
+    attemptIndex: number;
+    attemptTag: string;
+    attemptOutcome: string;
+    isFinalAttempt: boolean;
     chatKey?: string;
     sessionId?: string;
     reasonCode?: string;
@@ -38,12 +43,17 @@ function buildSearchCorpus(row: DBLlmRequestLog): string {
     return [
         row.logId,
         row.requestId,
+        row.llmTaskId,
         row.sourcePluginId,
         row.consumer,
-        row.taskId,
+        row.taskKey,
         row.taskKind,
         row.state,
         row.taskDescription,
+        row.attemptIndex,
+        row.attemptTag,
+        row.attemptOutcome,
+        row.isFinalAttempt,
         row.chatKey,
         row.sessionId,
         row.reasonCode,
@@ -58,13 +68,18 @@ export async function appendLlmRequestLog(input: AppendLlmRequestLogInput): Prom
     const now = Date.now();
     const row: DBLlmRequestLog = {
         logId: input.logId,
+        llmTaskId: input.llmTaskId,
         requestId: input.requestId,
         sourcePluginId: input.sourcePluginId,
         consumer: input.consumer,
-        taskId: input.taskId,
+        taskKey: input.taskKey,
         taskKind: input.taskKind,
         state: input.state,
         taskDescription: input.taskDescription,
+        attemptIndex: input.attemptIndex,
+        attemptTag: input.attemptTag,
+        attemptOutcome: input.attemptOutcome,
+        isFinalAttempt: input.isFinalAttempt,
         chatKey: String(input.chatKey || '').trim() || undefined,
         sessionId: String(input.sessionId || '').trim() || undefined,
         reasonCode: String(input.reasonCode || '').trim() || undefined,
@@ -82,8 +97,9 @@ export async function appendLlmRequestLog(input: AppendLlmRequestLogInput): Prom
     logger.info('[LlmRequestLogs][Append]', {
         logId: row.logId,
         requestId: row.requestId,
+        llmTaskId: row.llmTaskId,
         sourcePluginId: row.sourcePluginId,
-        taskId: row.taskId,
+        taskKey: row.taskKey,
         state: row.state,
         sortTs: row.sortTs,
     });
@@ -137,8 +153,9 @@ export async function queryLlmRequestLogs(opts?: QueryLlmRequestLogsOptions): Pr
         sample: rows.slice(0, 5).map((row: DBLlmRequestLog) => ({
             logId: row.logId,
             requestId: row.requestId,
+            llmTaskId: row.llmTaskId,
             sourcePluginId: row.sourcePluginId,
-            taskId: row.taskId,
+            taskKey: row.taskKey,
             state: row.state,
         })),
     });

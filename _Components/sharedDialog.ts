@@ -48,6 +48,7 @@ export interface SharedDialogOptions {
   initialFocusSelector?: string;
   animationDurationMs?: number;
   ariaLabel?: string;
+  backdropBackground?: string;
   beforeClose?: (context: SharedDialogCloseContext) => boolean | void | Promise<boolean | void>;
   onMount?: (instance: SharedDialogInstance) => void;
   onAfterOpen?: (instance: SharedDialogInstance) => void;
@@ -459,6 +460,9 @@ export function openSharedDialog(options: SharedDialogOptions = {}): SharedDialo
 
   backdrop.className = 'stx-shared-dialog-backdrop';
   backdrop.setAttribute('data-stx-dialog-backdrop', 'true');
+  if (options.backdropBackground) {
+    backdrop.style.background = options.backdropBackground;
+  }
 
   surface.className = joinClassNames('stx-shared-dialog-surface', options.surfaceClassName);
   surface.setAttribute('data-stx-dialog-surface', 'true');

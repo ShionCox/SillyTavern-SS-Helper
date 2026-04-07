@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LLMHub 统一入口
  * 四层架构：注册中心 → 路由解析器 → 请求编排器 → 展示控制器
  * 导出公共模块并初始化运行时实例。
@@ -108,6 +108,7 @@ export type {
 // UI 层
 export { renderSettingsUi as renderLLMHubSettings } from './ui/index';
 import { renderSettingsUi } from './ui/index';
+import { startLLMHubRuntime } from './runtime-entry';
 
 import { respond } from '../../SDK/bus/rpc';
 import { Logger } from '../../SDK/logger';
@@ -238,14 +239,16 @@ class LLMHub {
             this.orchestrator,
             this.displayController,
             this.registry,
+            this.requestLogService,
         );
         this.sdk.setSettingsResolver(() => this.readSettings());
         this.sdk.inspect = this.buildInspectApi();
         this.orchestrator.setArchiveCallback((record) => {
             logger.info('[RequestLog][ArchiveTrigger]', {
+                llmTaskId: record.llmTaskId,
                 requestId: record.requestId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 state: record.state,
                 chatKey: record.chatKey,
                 reasonCode: record.debug?.reasonCode,
@@ -253,9 +256,10 @@ class LLMHub {
             });
             void this.requestLogService.archiveRecord(record).catch((error: unknown) => {
                 logger.error('[RequestLog][ArchivePersistFailed]', {
+                    llmTaskId: record.llmTaskId,
                     requestId: record.requestId,
                     consumer: record.consumer,
-                    taskId: record.taskId,
+                    taskKey: record.taskKey,
                     state: record.state,
                     chatKey: record.chatKey,
                     error: String((error as Error)?.message || error),
@@ -265,15 +269,11 @@ class LLMHub {
 
         this.bindOverlayRenderer();
 
-        this.registry.setPersistCallback((snapshots) => {
-            const settings = this.readSettings();
-            this.writeSettings({ ...settings, consumerSnapshots: snapshots });
-        });
-
         this.registry.setResourceCapabilityQuery((resourceId) => {
             return this.router.getProviderCapabilities(resourceId);
         });
 
+        this.pruneLegacyConsumerSnapshots();
         this.restoreFromStorage();
         this.registerBuiltinTavernResource();
         this.registerToSTX();
@@ -334,7 +334,7 @@ class LLMHub {
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact {
                     right: 20px;
                     bottom: 20px;
-                    width: min(420px, calc(100vw - 24px));
+                    width: min(360px, calc(100vw - 24px));
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-card {
@@ -351,8 +351,55 @@ class LLMHub {
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-card {
                     width: 100%;
-                    max-height: 50vh;
+                    max-height: 220px;
                     border-radius: 14px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-head {
+                    padding: 14px 16px 12px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-title {
+                    font-size: 15px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay--compact .stx-llmhub-overlay-body {
+                    padding: 0 16px 16px;
+                    overflow: hidden;
+                    gap: 10px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-note {
+                    margin: 0;
+                    padding: 10px 12px;
+                    border-radius: 12px;
+                    background: rgba(255, 255, 255, 0.05);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    font-size: 12px;
+                    line-height: 1.6;
+                    opacity: 0.88;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-countdown {
+                    position: relative;
+                    width: 100%;
+                    height: 6px;
+                    overflow: hidden;
+                    border-radius: 999px;
+                    background: rgba(255, 255, 255, 0.08);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-compact-countdown-fill {
+                    position: absolute;
+                    inset: 0;
+                    border-radius: inherit;
+                    background: linear-gradient(90deg, rgba(88, 211, 106, 0.96), rgba(125, 230, 141, 0.96));
+                    transform-origin: left center;
+                    transition: width 180ms linear, opacity 180ms linear;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-status--error ~ .stx-llmhub-overlay-body .stx-llmhub-overlay-compact-countdown-fill {
+                    background: linear-gradient(90deg, rgba(255, 120, 120, 0.96), rgba(255, 154, 154, 0.96));
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-head {
@@ -411,11 +458,32 @@ class LLMHub {
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close {
                     border: 0;
-                    border-radius: 10px;
-                    padding: 8px 10px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 999px;
+                    padding: 0;
                     cursor: pointer;
                     color: inherit;
                     background: rgba(255, 255, 255, 0.08);
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: background 160ms ease, transform 160ms ease, opacity 160ms ease;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close:hover {
+                    background: rgba(255, 255, 255, 0.16);
+                    transform: scale(1.04);
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close:focus-visible {
+                    outline: 2px solid rgba(255,255,255,0.52);
+                    outline-offset: 2px;
+                }
+
+                #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-close i {
+                    font-size: 13px;
+                    pointer-events: none;
                 }
 
                 #${LLMHUB_OVERLAY_ROOT_ID} .stx-llmhub-overlay-body {
@@ -499,6 +567,62 @@ class LLMHub {
             done: '已完成',
             error: '出错了',
         };
+        let compactCountdownRenderTimer: ReturnType<typeof setInterval> | null = null;
+
+        const resolveAutoCloseSeconds = (spec: { autoCloseMs?: number; autoCloseAt?: number }): number => {
+            const autoCloseAt = Number(spec.autoCloseAt ?? 0);
+            if (autoCloseAt > 0) {
+                return Math.max(1, Math.ceil((autoCloseAt - Date.now()) / 1000));
+            }
+            return Math.max(1, Math.ceil((Number(spec.autoCloseMs ?? 0) || 0) / 1000));
+        };
+
+        const resolveAutoCloseProgressPercent = (spec: { autoCloseMs?: number; autoCloseAt?: number }): number => {
+            const totalMs = Math.max(0, Math.trunc(Number(spec.autoCloseMs ?? 0) || 0));
+            if (totalMs <= 0) {
+                return 0;
+            }
+            const autoCloseAt = Number(spec.autoCloseAt ?? 0);
+            if (autoCloseAt <= 0) {
+                return 100;
+            }
+            const remainingMs = Math.max(0, autoCloseAt - Date.now());
+            return Math.max(0, Math.min(100, (remainingMs / totalMs) * 100));
+        };
+
+        const buildCompactNote = (spec: { status?: string; autoClose?: boolean; autoCloseMs?: number; autoCloseAt?: number }): string => {
+            const status = spec.status || 'done';
+            if (status === 'loading' || status === 'streaming') {
+                return '任务正在执行，请稍候。';
+            }
+            const autoCloseSeconds = resolveAutoCloseSeconds(spec);
+            if (status === 'error') {
+                return `任务执行失败，提示将在 ${autoCloseSeconds} 秒后自动关闭。`;
+            }
+            return `任务已完成，提示将在 ${autoCloseSeconds} 秒后自动关闭。`;
+        };
+
+        const syncCompactCountdownTimer = (): void => {
+            const overlays = this.displayController.listActiveOverlays();
+            const shouldTick = overlays.some((spec) => {
+                return spec.displayMode === 'compact'
+                    && spec.autoClose === true
+                    && typeof spec.autoCloseAt === 'number'
+                    && spec.autoCloseAt > Date.now();
+            });
+            if (shouldTick) {
+                if (!compactCountdownRenderTimer) {
+                    compactCountdownRenderTimer = setInterval((): void => {
+                        renderAll();
+                    }, 250);
+                }
+                return;
+            }
+            if (compactCountdownRenderTimer) {
+                clearInterval(compactCountdownRenderTimer);
+                compactCountdownRenderTimer = null;
+            }
+        };
 
         const renderAll = (): void => {
             ensureStyle();
@@ -506,12 +630,21 @@ class LLMHub {
             const overlays = this.displayController.listActiveOverlays();
             if (overlays.length === 0) {
                 root.innerHTML = '';
+                syncCompactCountdownTimer();
                 return;
             }
 
             root.innerHTML = overlays.map((spec) => {
                 const modeClass = spec.displayMode === 'compact' ? 'stx-llmhub-overlay--compact' : 'stx-llmhub-overlay--fullscreen';
                 const status = spec.status || 'done';
+                const progressPercent = resolveAutoCloseProgressPercent(spec);
+                const countdownBar = spec.displayMode === 'compact' && spec.autoClose && typeof spec.autoCloseMs === 'number' && spec.autoCloseMs > 0
+                    ? `<div class="stx-llmhub-overlay-compact-countdown"><div class="stx-llmhub-overlay-compact-countdown-fill" style="width:${progressPercent.toFixed(2)}%; opacity:${progressPercent > 0 ? '1' : '0.72'};"></div></div>`
+                    : '';
+                const compactBody = `
+                    <p class="stx-llmhub-overlay-compact-note">${escapeHtml(buildCompactNote(spec))}</p>
+                    ${countdownBar}
+                `;
                 return `
                     <section class="stx-llmhub-overlay ${modeClass}" data-llmhub-overlay-id="${escapeHtml(spec.requestId)}">
                         <div class="stx-llmhub-overlay-card">
@@ -521,16 +654,19 @@ class LLMHub {
                                     <div class="stx-llmhub-overlay-meta">请求 ID：${escapeHtml(spec.requestId)}</div>
                                 </div>
                                 <div class="stx-llmhub-overlay-status stx-llmhub-overlay-status--${escapeHtml(status)}">${escapeHtml(statusLabelMap[status] || status)}</div>
-                                <button type="button" class="stx-llmhub-overlay-close" data-llmhub-overlay-close="${escapeHtml(spec.requestId)}" aria-label="关闭">关闭</button>
+                                <button type="button" class="stx-llmhub-overlay-close" data-llmhub-overlay-close="${escapeHtml(spec.requestId)}" aria-label="关闭">
+                                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                                </button>
                             </header>
                             <div class="stx-llmhub-overlay-body">
                                 ${status === 'loading' || status === 'streaming' ? '<div class="stx-llmhub-overlay-loading-bar"></div>' : ''}
-                                ${renderContent(spec.content)}
+                                ${spec.displayMode === 'compact' ? compactBody : renderContent(spec.content)}
                             </div>
                         </div>
                     </section>
                 `;
             }).join('');
+            syncCompactCountdownTimer();
         };
 
         this.displayController.setRenderCallback(() => {
@@ -565,9 +701,6 @@ class LLMHub {
     private restoreFromStorage(): void {
         const settings = this.readSettings();
 
-        if (settings.consumerSnapshots) {
-            this.registry.restoreFromStorage(settings.consumerSnapshots);
-        }
         if (settings.silentPermissions) {
             this.displayController.restoreSilentPermissions(settings.silentPermissions);
         }
@@ -580,6 +713,26 @@ class LLMHub {
         if (settings.taskAssignments) {
             this.router.applyTaskAssignments(settings.taskAssignments);
         }
+    }
+
+    /**
+     * 功能：清理历史遗留的消费者注册快照，避免旧注册值覆盖当前运行时注册。
+     *
+     * 参数：
+     *   无
+     *
+     * 返回：
+     *   void：无返回值
+     */
+    private pruneLegacyConsumerSnapshots(): void {
+        const settings = this.readSettings() as LLMHubSettings & { consumerSnapshots?: unknown };
+        if (!Object.prototype.hasOwnProperty.call(settings, 'consumerSnapshots')) {
+            return;
+        }
+        const nextSettings = { ...settings } as LLMHubSettings & { consumerSnapshots?: unknown };
+        delete nextSettings.consumerSnapshots;
+        this.writeSettings(nextSettings);
+        logger.info('[注册中心] 已移除历史 consumerSnapshots 持久化快照。');
     }
 
     public async applySettingsFromContext(): Promise<void> {
@@ -743,7 +896,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: false,
                 blockedReason: 'LLMHub 未启用',
@@ -784,7 +937,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: blockedReason.length === 0,
                 resourceId: resolved.resourceId,
@@ -799,7 +952,7 @@ class LLMHub {
             return {
                 consumer: args.consumer,
                 taskKind: args.taskKind,
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities,
                 available: false,
                 blockedReason: String((error as Error)?.message || error),
@@ -1032,12 +1185,10 @@ class LLMHub {
     }
 }
 
-// 挂载运行时
-(window as any).LLMHubPlugin = new LLMHub();
-
-// 自动初始化 UI
-if (typeof document !== 'undefined') {
-    renderSettingsUi().catch((error: unknown) => {
+startLLMHubRuntime({
+    runtimeFactory: (): LLMHub => new LLMHub(),
+    renderUi: (): Promise<void> => renderSettingsUi(),
+    onRenderUiError: (error: unknown): void => {
         logger.error('UI 渲染失败', error);
-    });
-}
+    },
+});

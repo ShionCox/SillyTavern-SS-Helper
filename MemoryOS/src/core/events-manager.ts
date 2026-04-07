@@ -94,4 +94,25 @@ export class EventsManager {
     async count(): Promise<number> {
         return db.events.where('chatKey').equals(this.chatKey).count();
     }
+
+    /**
+     * 功能：统计指定类型事件在当前聊天中的数量。
+     * @param types 事件类型列表。
+     * @returns 命中数量。
+     */
+    async countByTypes(types: string[]): Promise<number> {
+        const normalizedTypes: Set<string> = new Set(
+            types
+                .map((item: string): string => String(item ?? '').trim())
+                .filter(Boolean),
+        );
+        if (normalizedTypes.size <= 0) {
+            return 0;
+        }
+        return db.events
+            .where('chatKey')
+            .equals(this.chatKey)
+            .and((row: DBEvent): boolean => normalizedTypes.has(String(row.type ?? '').trim()))
+            .count();
+    }
 }

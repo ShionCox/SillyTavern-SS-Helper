@@ -12,12 +12,18 @@ import {
 import { normalizeStructuredCategoryBuckets } from '../schema/structured-output-classifier';
 import { ProfileManager } from '../profile/profile-manager';
 import { inferReasonCode } from '../schema/error-codes';
+import {
+    isStrictJsonSchemaCompatible,
+    processProviderStrictJsonSchema,
+    type SchemaCompatOptions,
+} from '../schema/strict-json-schema';
 import { resolveMaxTokens } from './max-tokens';
 import { RequestOrchestrator } from '../orchestrator/orchestrator';
 import { DisplayController } from '../display/display-controller';
 import { ConsumerRegistry } from '../registry/consumer-registry';
 import { buildSdkChatKeyEvent } from '../../../SDK/tavern';
 import { logger } from '../index';
+import { RequestLogService } from '../log/requestLogService';
 import type {
     LLMRunResult,
     LLMRunMeta,
@@ -94,6 +100,7 @@ export class LLMSDKImpl {
     private orchestrator: RequestOrchestrator;
     private displayController: DisplayController;
     private registry: ConsumerRegistry;
+    private requestLogService: RequestLogService;
     private globalProfileId: string;
     private settingsResolver: (() => LLMHubSettings) | null = null;
     public inspect?: LLMInspectApi;
@@ -104,6 +111,7 @@ export class LLMSDKImpl {
         orchestrator: RequestOrchestrator,
         displayController: DisplayController,
         registry: ConsumerRegistry,
+        requestLogService: RequestLogService,
     ) {
         this.router = router;
         this.budgetManager = budgetManager;
@@ -111,6 +119,7 @@ export class LLMSDKImpl {
         this.orchestrator = orchestrator;
         this.displayController = displayController;
         this.registry = registry;
+        this.requestLogService = requestLogService;
         this.globalProfileId = 'balanced';
 
         // 连接编排器与展示控制器
@@ -176,8 +185,8 @@ export class LLMSDKImpl {
 
     private emitLifecycle(
         args: RunTaskArgs | EmbedArgs | RerankArgs,
-        record: Pick<RequestRecord, 'requestId' | 'consumer' | 'taskId' | 'taskKind'>,
-        event: Omit<LLMTaskLifecycleEvent, 'requestId' | 'consumer' | 'taskId' | 'taskKind' | 'ts'>,
+        record: Pick<RequestRecord, 'requestId' | 'llmTaskId' | 'consumer' | 'taskKey' | 'taskKind'>,
+        event: Omit<LLMTaskLifecycleEvent, 'requestId' | 'llmTaskId' | 'consumer' | 'taskKey' | 'taskKind' | 'ts'>,
     ): void {
         if (typeof args.onLifecycle !== 'function') {
             return;
@@ -186,8 +195,9 @@ export class LLMSDKImpl {
         try {
             args.onLifecycle({
                 requestId: record.requestId,
+                llmTaskId: record.llmTaskId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 taskKind: record.taskKind,
                 ts: Date.now(),
                 ...event,
@@ -197,14 +207,103 @@ export class LLMSDKImpl {
         }
     }
 
-    private resolveTaskDescription(consumer: string, taskId: string, explicit?: string): string {
+    private formatRetryReason(result: LLMRunResult<unknown>): string {
+        if (result.ok) {
+            return '';
+        }
+        const errorText = String(result.error || '').trim();
+        const reasonCode = String(result.reasonCode || '').trim();
+        if (errorText && reasonCode) {
+            return `${errorText}\n原因码：${reasonCode}`;
+        }
+        if (errorText) {
+            return errorText;
+        }
+        if (reasonCode) {
+            return `原因码：${reasonCode}`;
+        }
+        return '未提供更详细的失败原因。';
+    }
+
+    private isReasonCodeRetryable(reasonCode?: string): boolean {
+        const normalizedReasonCode = String(reasonCode || '').trim();
+        return normalizedReasonCode === 'timeout'
+            || normalizedReasonCode === 'rate_limited'
+            || normalizedReasonCode === 'network_error'
+            || normalizedReasonCode === 'circuit_open'
+            || normalizedReasonCode === 'provider_unavailable'
+            || normalizedReasonCode === 'unknown'
+            || normalizedReasonCode === 'token_limit_exceeded'
+            || normalizedReasonCode === 'invalid_json'
+            || normalizedReasonCode === 'schema_validation_failed';
+    }
+
+    private shouldOfferRetry(result: LLMRunResult<unknown>): boolean {
+        if (result.ok) {
+            return false;
+        }
+        if (result.retryable === true) {
+            return true;
+        }
+        const inferredReasonCode = String(result.reasonCode || '').trim() || inferReasonCode(String(result.error || ''));
+        return this.isReasonCodeRetryable(inferredReasonCode);
+    }
+
+    private confirmRetryableFailure(record: RequestRecord, result: LLMRunResult<unknown>, retryCount: number): boolean {
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function' || result.ok || !this.shouldOfferRetry(result)) {
+            return false;
+        }
+        const taskLabel = String(record.taskDescription || record.taskKey || 'LLM 任务').trim() || 'LLM 任务';
+        const reasonText = this.formatRetryReason(result);
+        const retryPrompt = retryCount <= 0
+            ? '是否立即重试？'
+            : `当前已重试 ${retryCount} 次，是否继续重试？`;
+        return window.confirm(
+            `LLMHub 请求失败：${taskLabel}\n\n失败原因：\n${reasonText}\n\n${retryPrompt}`,
+        );
+    }
+
+    private async executeWithRetryLoop<T>(
+        record: RequestRecord,
+        args: RunTaskArgs | EmbedArgs | RerankArgs,
+        executor: () => Promise<LLMRunResult<T>>,
+    ): Promise<LLMRunResult<T>> {
+        let retryCount = 0;
+
+        while (true) {
+            const attemptRequestId = this.generateAttemptRequestId(record);
+            const currentResult = await executor();
+            const shouldOfferRetry = !currentResult.ok && this.shouldOfferRetry(currentResult);
+            const shouldRetry = shouldOfferRetry
+                ? this.confirmRetryableFailure(record, currentResult, retryCount)
+                : false;
+
+            await this.recordAttemptLog(record, attemptRequestId, currentResult, !shouldRetry);
+
+            if (!shouldRetry) {
+                return currentResult;
+            }
+
+            retryCount += 1;
+            this.emitLifecycle(args, record, {
+                stage: 'running',
+                message: retryCount === 1
+                    ? '用户已确认重试，正在重新请求'
+                    : `用户已确认第 ${retryCount} 次重试，正在重新请求`,
+                progress: 0.35,
+            });
+            this.orchestrator.advanceAttempt(record);
+        }
+    }
+
+    private resolveTaskDescription(consumer: string, taskKey: string, explicit?: string): string {
         const explicitText = String(explicit || '').trim();
         if (explicitText) {
             return explicitText;
         }
-        const registered = this.registry.getTaskDescriptor(consumer, taskId)?.description;
+        const registered = this.registry.getTaskDescriptor(consumer, taskKey)?.description;
         const registeredText = String(registered || '').trim();
-        return registeredText || taskId;
+        return registeredText || taskKey;
     }
 
     private summarizeSchema(schema: unknown): string | undefined {
@@ -305,11 +404,11 @@ export class LLMSDKImpl {
      */
     async runTask<T>(args: RunTaskArgs<T>): Promise<LLMRunResult<T>> {
         const taskKind: CapabilityKind = args.taskKind;
-        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskKey, args.taskDescription);
 
         const record = this.orchestrator.enqueue<T>(
             args.consumer,
-            args.taskId,
+            args.taskKey,
             taskKind,
             {
                 ...args.enqueue,
@@ -317,8 +416,8 @@ export class LLMSDKImpl {
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot(taskKind, taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -336,19 +435,19 @@ export class LLMSDKImpl {
      * AI 结果返回时立即完成。
      */
     async embed(args: EmbedArgs): Promise<any> {
-        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskKey, args.taskDescription);
         const record = this.orchestrator.enqueue(
             args.consumer,
-            args.taskId,
+            args.taskKey,
             'embedding',
             {
                 ...args.enqueue,
-                displayMode: 'silent',
+                displayMode: args.enqueue?.displayMode || 'silent',
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('embedding', taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -365,19 +464,19 @@ export class LLMSDKImpl {
      * AI 结果返回时立即完成。
      */
     async rerank(args: RerankArgs): Promise<any> {
-        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskId, args.taskDescription);
+        const taskDescription = this.resolveTaskDescription(args.consumer, args.taskKey, args.taskDescription);
         const record = this.orchestrator.enqueue(
             args.consumer,
-            args.taskId,
+            args.taskKey,
             'rerank',
             {
                 ...args.enqueue,
-                displayMode: 'silent',
+                displayMode: args.enqueue?.displayMode || 'silent',
                 scope: args.enqueue?.scope || { pluginId: args.consumer },
             },
             args,
+            taskDescription,
         );
-        record.taskDescription = taskDescription;
         record.chatKey = this.resolveRequestChatKey(args);
         record.requestLogSnapshot = this.buildRequestLogSnapshot('rerank', taskDescription, args);
         this.emitLifecycle(args, record, {
@@ -414,7 +513,7 @@ export class LLMSDKImpl {
                     message: '任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeGeneration(args, record);
+                return this.executeWithRetryLoop(record, args, () => this.executeGeneration(args, record));
             case 'embedding':
                 if (!this.isEmbedArgs(args)) {
                     return { ok: false, error: 'embedding 请求参数不合法', reasonCode: 'unknown' };
@@ -424,7 +523,7 @@ export class LLMSDKImpl {
                     message: '向量任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeEmbed(args, record);
+                return this.executeWithRetryLoop(record, args, () => this.executeEmbed(args, record));
             case 'rerank':
                 if (!this.isRerankArgs(args)) {
                     return { ok: false, error: 'rerank 请求参数不合法', reasonCode: 'unknown' };
@@ -434,19 +533,19 @@ export class LLMSDKImpl {
                     message: '重排任务开始执行',
                     progress: 0.25,
                 });
-                return this.executeRerank(args, record);
+                return this.executeWithRetryLoop(record, args, () => this.executeRerank(args, record));
             default:
                 return { ok: false, error: `未知任务类型: ${record.taskKind}`, reasonCode: 'unknown' };
         }
     }
 
-    private hasBaseRequestArgs(args: unknown): args is { consumer: string; taskId: string } {
+    private hasBaseRequestArgs(args: unknown): args is { consumer: string; taskKey: string } {
         if (!args || typeof args !== 'object') {
             return false;
         }
 
         const value = args as Record<string, unknown>;
-        return typeof value.consumer === 'string' && typeof value.taskId === 'string';
+        return typeof value.consumer === 'string' && typeof value.taskKey === 'string';
     }
 
     private isGenerationArgs(args: unknown): args is RunTaskArgs {
@@ -587,6 +686,18 @@ export class LLMSDKImpl {
         args: RunTaskArgs,
         schemaSummary?: string,
         maxTokensSource?: string,
+        requestMeta?: {
+            originalStrictSchemaCompatible?: boolean;
+            providerSchemaCompatible?: boolean;
+            schemaAutofillApplied?: boolean;
+            schemaCompatMode?: string;
+            originalStrictIncompatibilityPath?: string;
+            originalStrictIncompatibilityReason?: string;
+            providerStrictIncompatibilityPath?: string;
+            providerStrictIncompatibilityReason?: string;
+            responseFormatBeforeCompat?: string;
+            responseFormatAfterCompat?: string;
+        },
     ): Record<string, unknown> {
         const provider = this.router.getProvider(resourceId) as ({ kind?: string; apiType?: ApiType } | undefined);
         const providerKind = provider?.kind || 'unknown';
@@ -600,10 +711,21 @@ export class LLMSDKImpl {
             jsonMode: Boolean(llmReq.jsonMode),
             apiType: providerApiType,
             preferredResponseFormat: llmReq.preferredResponseFormat,
+            schemaCompat: llmReq.schemaCompat,
             normalizeMode,
             schemaSummary,
             routeHint: args.routeHint,
             budget: args.budget,
+            originalStrictSchemaCompatible: requestMeta?.originalStrictSchemaCompatible,
+            providerSchemaCompatible: requestMeta?.providerSchemaCompatible,
+            schemaAutofillApplied: requestMeta?.schemaAutofillApplied,
+            schemaCompatMode: requestMeta?.schemaCompatMode,
+            originalStrictIncompatibilityPath: requestMeta?.originalStrictIncompatibilityPath,
+            originalStrictIncompatibilityReason: requestMeta?.originalStrictIncompatibilityReason,
+            providerStrictIncompatibilityPath: requestMeta?.providerStrictIncompatibilityPath,
+            providerStrictIncompatibilityReason: requestMeta?.providerStrictIncompatibilityReason,
+            responseFormatBeforeCompat: requestMeta?.responseFormatBeforeCompat,
+            responseFormatAfterCompat: requestMeta?.responseFormatAfterCompat,
         };
         const genericPayload: Record<string, unknown> = {
             messages: llmReq.messages,
@@ -681,7 +803,7 @@ export class LLMSDKImpl {
             resolved = this.router.resolveRoute({
                 consumer: args.consumer,
                 taskKind: 'generation',
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 routeHint: args.routeHint ? {
                     resourceId: args.routeHint.resource,
                     model: args.routeHint.model,
@@ -714,36 +836,98 @@ export class LLMSDKImpl {
         const profile = this.profileManager.get(profileId);
         const consumerBudget = this.budgetManager.getConfig(args.consumer);
         const settings = this.readSettings();
-        const taskAssignment = this.router.getTaskAssignment(args.consumer, args.taskId);
+        const taskDescriptor = this.registry.getTaskDescriptor(args.consumer, args.taskKey);
+        const taskAssignment = this.router.getTaskAssignment(args.consumer, args.taskKey);
         const resolvedProvider = this.router.getProvider(resolved.resourceId) as ({ apiType?: ApiType } | undefined);
         const resolvedApiType: ApiType = this.normalizeApiType(resolvedProvider?.apiType);
 
         const hasCustomSchema = Boolean(args.schema);
         const runtimeSchema = hasCustomSchema
             ? args.schema
-            : args.taskId === 'world.template.build'
+            : args.taskKey === 'world.template.build'
                 ? WorldTemplateSchema
-                : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
+                : (args.taskKey === 'memory.extract' || args.taskKey === 'world.update' || args.taskKey === 'memory.summarize')
                     ? ProposalEnvelopeSchema
                     : undefined;
-        const providerSchema = hasCustomSchema && !this.isZodSchema(args.schema)
+        const originalProviderSchema = hasCustomSchema && !this.isZodSchema(args.schema)
             ? args.schema
             : undefined;
-        const promptSchema = (providerSchema ?? this.serializeSchemaForLog(args.schema ?? runtimeSchema)) as object | undefined;
+        const promptSchema = (originalProviderSchema ?? this.serializeSchemaForLog(args.schema ?? runtimeSchema)) as object | undefined;
         const normalizeMode = hasCustomSchema
             ? 'none'
-            : args.taskId === 'world.template.build'
+            : args.taskKey === 'world.template.build'
                 ? 'world_template'
-                : (args.taskId === 'memory.extract' || args.taskId === 'world.update' || args.taskId === 'memory.summarize')
+                : (args.taskKey === 'memory.extract' || args.taskKey === 'world.update' || args.taskKey === 'memory.summarize')
                     ? 'proposal'
                     : 'none';
 
         const resolvedMaxTokens = resolveMaxTokens(args, {
             globalControl: settings.maxTokensControl,
             taskAssignment: taskAssignment?.isStale ? undefined : taskAssignment,
+            taskRegisteredMaxTokens: taskDescriptor?.maxTokens,
             consumerBudgetMaxTokens: consumerBudget?.maxTokens,
             profileMaxTokens: profile?.maxTokens,
         });
+        const schemaCompat: SchemaCompatOptions = {
+            strictAutofill: args.schemaCompat?.strictAutofill ?? 'default',
+            onIncompatible: args.schemaCompat?.onIncompatible ?? 'downgrade',
+        };
+        const responseFormatBeforeCompat = (resolvedApiType === 'openai' || resolvedApiType === 'gemini')
+            ? (runtimeSchema ? 'json_schema' : 'none')
+            : (runtimeSchema ? 'system_json' : 'none');
+        const strictSchemaProcessing = (resolvedApiType === 'openai' || resolvedApiType === 'gemini') && originalProviderSchema
+            ? processProviderStrictJsonSchema(originalProviderSchema as object, schemaCompat)
+            : {
+                schema: originalProviderSchema as object | undefined,
+                originalCompatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                autofillApplied: false,
+                providerCompatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                originalDiagnostic: {
+                    compatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                },
+                providerDiagnostic: {
+                    compatible: originalProviderSchema ? isStrictJsonSchemaCompatible(originalProviderSchema) : false,
+                },
+            };
+        const providerSchema = strictSchemaProcessing.schema;
+        const canUseStrictJsonSchema = providerSchema
+            ? strictSchemaProcessing.providerCompatible
+            : false;
+        const responseFormatAfterCompat = resolvedApiType === 'openai' || resolvedApiType === 'gemini'
+            ? (canUseStrictJsonSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : 'none'))
+            : (runtimeSchema ? 'system_json' : 'none');
+
+        if (
+            (resolvedApiType === 'openai' || resolvedApiType === 'gemini')
+            && originalProviderSchema
+            && !canUseStrictJsonSchema
+            && schemaCompat.onIncompatible === 'error'
+        ) {
+            const diagnostic = strictSchemaProcessing.providerDiagnostic.compatible
+                ? strictSchemaProcessing.originalDiagnostic
+                : strictSchemaProcessing.providerDiagnostic;
+            const diagnosticSuffix = diagnostic.reason
+                ? ` (${diagnostic.path || '$'} -> ${diagnostic.reason})`
+                : '';
+            const reasonCode = strictSchemaProcessing.autofillApplied
+                ? 'schema_strict_autofill_incompatible'
+                : 'schema_strict_incompatible';
+            const error = strictSchemaProcessing.autofillApplied
+                ? 'Schema 自动填充后仍不兼容严格 json_schema，已按请求配置阻止降级'
+                : 'Schema 不兼容严格 json_schema，已按请求配置阻止降级';
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: error,
+                error,
+                reasonCode,
+            });
+            return {
+                ok: false,
+                error,
+                retryable: false,
+                reasonCode,
+            };
+        }
 
         const llmReq: LLMRequest = {
             messages: Array.isArray(args.input?.messages)
@@ -761,23 +945,39 @@ export class LLMSDKImpl {
             model: resolved.model,
             maxTokens: resolvedMaxTokens.value,
             jsonMode: !!runtimeSchema || profile?.jsonMode === true,
-            schema: promptSchema,
+            schema: providerSchema ?? promptSchema,
             schemaName: this.sanitizeSchemaName(this.summarizeSchema(args.schema ?? runtimeSchema)),
             preferredResponseFormat: resolvedApiType === 'openai' || resolvedApiType === 'gemini'
-                ? (providerSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
+                ? (canUseStrictJsonSchema ? 'json_schema' : (runtimeSchema ? 'json_object' : undefined))
                 : (runtimeSchema ? 'system_json' : undefined),
+            schemaCompat,
             temperature: args.input?.temperature ?? profile?.temperature ?? 0.3,
         };
 
         const schemaSummary = this.summarizeSchema(args.schema ?? runtimeSchema);
+        const schemaForLog = this.serializeSchemaForLog(originalProviderSchema ?? args.schema ?? runtimeSchema);
+        const schemaCharCount = schemaForLog ? JSON.stringify(schemaForLog).length : 0;
+        const inputCharCount = llmReq.messages.reduce((sum, msg) => sum + String(msg.content || '').length, 0);
         record.requestLogSnapshot = {
             ...(record.requestLogSnapshot || {
                 taskKind: record.taskKind,
                 taskDescription: record.taskDescription,
             }),
             schemaSummary,
-            schema: this.serializeSchemaForLog(providerSchema ?? args.schema ?? runtimeSchema),
+            schema: schemaForLog,
             jsonMode: llmReq.jsonMode,
+            strictSchemaCompatible: canUseStrictJsonSchema,
+            originalStrictSchemaCompatible: strictSchemaProcessing.originalCompatible,
+            providerSchemaCompatible: strictSchemaProcessing.providerCompatible,
+            schemaAutofillApplied: strictSchemaProcessing.autofillApplied,
+            schemaCompatMode: `${schemaCompat.strictAutofill}:${schemaCompat.onIncompatible}`,
+            originalStrictIncompatibilityPath: strictSchemaProcessing.originalDiagnostic.path,
+            originalStrictIncompatibilityReason: strictSchemaProcessing.originalDiagnostic.reason,
+            providerStrictIncompatibilityPath: strictSchemaProcessing.providerDiagnostic.path,
+            providerStrictIncompatibilityReason: strictSchemaProcessing.providerDiagnostic.reason,
+            responseFormatResolved: llmReq.preferredResponseFormat || 'none',
+            responseFormatBeforeCompat,
+            responseFormatAfterCompat,
             resolvedMaxTokens: {
                 value: resolvedMaxTokens.value,
                 source: resolvedMaxTokens.source,
@@ -792,7 +992,24 @@ export class LLMSDKImpl {
                 args,
                 schemaSummary,
                 resolvedMaxTokens.source,
+                {
+                    originalStrictSchemaCompatible: strictSchemaProcessing.originalCompatible,
+                    providerSchemaCompatible: strictSchemaProcessing.providerCompatible,
+                    schemaAutofillApplied: strictSchemaProcessing.autofillApplied,
+                    schemaCompatMode: `${schemaCompat.strictAutofill}:${schemaCompat.onIncompatible}`,
+                    originalStrictIncompatibilityPath: strictSchemaProcessing.originalDiagnostic.path,
+                    originalStrictIncompatibilityReason: strictSchemaProcessing.originalDiagnostic.reason,
+                    providerStrictIncompatibilityPath: strictSchemaProcessing.providerDiagnostic.path,
+                    providerStrictIncompatibilityReason: strictSchemaProcessing.providerDiagnostic.reason,
+                    responseFormatBeforeCompat,
+                    responseFormatAfterCompat,
+                },
             ),
+            metrics: {
+                ...(record.requestLogSnapshot?.metrics || {}),
+                schemaCharCount,
+                inputCharCount,
+            },
         };
 
         const maxLatencyMs = args.budget?.maxLatencyMs ?? consumerBudget?.maxLatencyMs;
@@ -811,7 +1028,7 @@ export class LLMSDKImpl {
             runtimeSchema,
             normalizeMode,
             args.consumer,
-            args.taskId,
+            args.taskKey,
             maxLatencyMs,
         );
 
@@ -820,7 +1037,7 @@ export class LLMSDKImpl {
 
         if (primaryResult.ok) {
             const meta: LLMRunMeta = {
-                requestId: record.requestId,
+                requestId: this.getActiveAttemptRequestId(record),
                 resourceId: resolved.resourceId,
                 model: resolved.model,
                 capabilityKind: 'generation',
@@ -863,14 +1080,14 @@ export class LLMSDKImpl {
                 runtimeSchema,
                 normalizeMode,
                 args.consumer,
-                args.taskId,
+                args.taskKey,
                 maxLatencyMs,
             );
             this.attachProviderRequestSnapshot(record, fallbackResult.providerRequest);
             this.attachRecordDebug(record, fallbackResult);
             if (fallbackResult.ok) {
                 const meta: LLMRunMeta = {
-                    requestId: record.requestId,
+                    requestId: this.getActiveAttemptRequestId(record),
                     resourceId: resolved.fallbackResourceId,
                     model: resolved.model,
                     capabilityKind: 'generation',
@@ -947,6 +1164,10 @@ export class LLMSDKImpl {
             finalError: result.error,
             reasonCode: result.reasonCode,
         };
+
+        if (record.requestLogSnapshot?.metrics && result.rawResponseText != null) {
+            record.requestLogSnapshot.metrics.outputCharCount = result.rawResponseText.length;
+        }
     }
 
     private attachProviderRequestSnapshot(record: RequestRecord, providerRequest?: unknown): void {
@@ -1001,7 +1222,7 @@ export class LLMSDKImpl {
             resolved = this.router.resolveRoute({
                 consumer: args.consumer,
                 taskKind: 'embedding',
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities: ['embeddings'],
                 routeHint: args.routeHint ? { resourceId: args.routeHint.resource, model: args.routeHint.model } : undefined,
             });
@@ -1052,7 +1273,7 @@ export class LLMSDKImpl {
                 providerResponse: response,
             });
             const meta: LLMRunMeta = {
-                requestId: record.requestId,
+                requestId: this.getActiveAttemptRequestId(record),
                 resourceId: resolved.resourceId,
                 model: resolved.model,
                 capabilityKind: 'embedding',
@@ -1070,17 +1291,68 @@ export class LLMSDKImpl {
             });
             return { ok: true, vectors: response.embeddings, model: resolved.model, meta, providerResponse: response };
         } catch (error) {
+            const errorMessage = (error as Error).message;
+            const reasonCode = inferReasonCode(errorMessage);
             this.attachRecordDebug(record, {
-                error: (error as Error).message,
-                reasonCode: 'exception',
+                error: errorMessage,
+                reasonCode,
             });
             this.emitLifecycle(args, record, {
                 stage: 'failed',
-                message: (error as Error).message,
-                error: (error as Error).message,
+                message: errorMessage,
+                error: errorMessage,
             });
-            return { ok: false, error: (error as Error).message };
+            return {
+                ok: false,
+                error: errorMessage,
+                retryable: this.isReasonCodeRetryable(reasonCode),
+                reasonCode,
+            };
         }
+    }
+
+    /**
+     * 功能：为一次请求尝试生成新的请求 ID。
+     * @param record 请求主记录。
+     * @returns 当前尝试使用的请求 ID。
+     */
+    private generateAttemptRequestId(record: RequestRecord): string {
+        const requestId = `${record.llmTaskId}_req_${record.attemptIndex}_${Date.now()}`;
+        record.activeAttemptRequestId = requestId;
+        return requestId;
+    }
+
+    /**
+     * 功能：读取当前尝试请求 ID。
+     * @param record 请求主记录。
+     * @returns 当前尝试请求 ID。
+     */
+    private getActiveAttemptRequestId(record: RequestRecord): string {
+        return String(record.activeAttemptRequestId || '').trim() || this.generateAttemptRequestId(record);
+    }
+
+    /**
+     * 功能：记录一次尝试日志。
+     * @param record 请求主记录。
+     * @param requestId 当前尝试请求 ID。
+     * @param result 当前尝试结果。
+     * @param isFinalAttempt 是否为最终尝试。
+     * @returns 异步完成。
+     */
+    private async recordAttemptLog(
+        record: RequestRecord,
+        requestId: string,
+        result: LLMRunResult<unknown>,
+        isFinalAttempt: boolean,
+    ): Promise<void> {
+        await this.requestLogService.recordAttempt({
+            record,
+            requestId,
+            result,
+            attemptTag: record.attemptIndex > 1 ? '重试' : '初次请求',
+            attemptOutcome: result.ok ? '成功' : '失败',
+            isFinalAttempt,
+        });
     }
 
     private async executeRerank(args: RerankArgs, record: RequestRecord): Promise<any> {
@@ -1089,7 +1361,7 @@ export class LLMSDKImpl {
             resolved = this.router.resolveRoute({
                 consumer: args.consumer,
                 taskKind: 'rerank',
-                taskId: args.taskId,
+                taskKey: args.taskKey,
                 requiredCapabilities: ['rerank'],
                 routeHint: args.routeHint ? { resourceId: args.routeHint.resource, model: args.routeHint.model } : undefined,
             });
@@ -1135,7 +1407,7 @@ export class LLMSDKImpl {
                     providerResponse: response,
                 });
                 const meta: LLMRunMeta = {
-                    requestId: record.requestId,
+                    requestId: this.getActiveAttemptRequestId(record),
                     resourceId: resolved.resourceId,
                     model: resolved.model,
                     capabilityKind: 'rerank',
@@ -1152,18 +1424,25 @@ export class LLMSDKImpl {
                     progress: 1,
                 });
                 return { ok: true, results: response.results, resource: resolved.resourceId, meta, providerResponse: response };
-            } catch (error) {
-                this.attachRecordDebug(record, {
-                    error: (error as Error).message,
-                    reasonCode: 'exception',
-                });
-                this.emitLifecycle(args, record, {
-                    stage: 'failed',
-                    message: (error as Error).message,
-                    error: (error as Error).message,
-                });
-                return { ok: false, error: (error as Error).message };
-            }
+        } catch (error) {
+            const errorMessage = (error as Error).message;
+            const reasonCode = inferReasonCode(errorMessage);
+            this.attachRecordDebug(record, {
+                error: errorMessage,
+                reasonCode,
+            });
+            this.emitLifecycle(args, record, {
+                stage: 'failed',
+                message: errorMessage,
+                error: errorMessage,
+            });
+            return {
+                ok: false,
+                error: errorMessage,
+                retryable: this.isReasonCodeRetryable(reasonCode),
+                reasonCode,
+            };
+        }
         }
 
         // Provider 不支持 rerank：关键词覆盖率兜底
@@ -1210,7 +1489,7 @@ export class LLMSDKImpl {
         schema: unknown,
         normalizeMode: 'proposal' | 'world_template' | 'none',
         consumer: string,
-        taskId: string,
+        taskKey: string,
         maxLatencyMs?: number,
     ): Promise<{
         ok: boolean;
@@ -1241,6 +1520,20 @@ export class LLMSDKImpl {
                 : await provider.request(req);
 
             const runtimeSchema = schema;
+            const finishReason = String((response as { finishReason?: unknown }).finishReason ?? '').trim().toLowerCase();
+
+            if (finishReason === 'length') {
+                this.budgetManager.recordFailure(consumer);
+                return {
+                    ok: false,
+                    error: `模型输出被截断：已触发 max_tokens=${Number(req.maxTokens ?? 0) || 0} 上限，返回的 JSON 未完整结束`,
+                    retryable: true,
+                    reasonCode: 'token_limit_exceeded',
+                    rawResponseText: response.content,
+                    providerResponse: response,
+                    providerRequest: response.debugRequest,
+                };
+            }
 
             if (runtimeSchema) {
                 const parsed = parseJsonOutput(response.content);

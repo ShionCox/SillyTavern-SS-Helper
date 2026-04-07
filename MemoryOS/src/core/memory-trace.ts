@@ -1,13 +1,75 @@
-import type {
-    MemoryMainlineTraceEntry,
-    MemoryMainlineTraceSnapshot,
-    MemoryTraceContext,
-    MemoryTraceSource,
-    MemoryTraceStage,
-} from '../types';
+/**
+ * 功能：定义主链追踪来源。
+ */
+export type MemoryTraceSource = 'prompt_injection' | 'event_ingest' | 'runtime';
+
+/**
+ * 功能：定义主链追踪阶段。
+ */
+export type MemoryTraceStage =
+    | 'memory_recall_started'
+    | 'memory_context_built'
+    | 'memory_prompt_inserted'
+    | 'memory_prompt_insert_success'
+    | 'memory_ingest_started'
+    | 'memory_event_appended'
+    | 'cold_start_started'
+    | 'cold_start_succeeded'
+    | 'cold_start_failed'
+    | 'world_profile_bound'
+    | 'summary_started'
+    | 'candidate_types_resolved'
+    | 'type_schemas_resolved'
+    | 'candidate_records_resolved'
+    | 'mutation_validated'
+    | 'mutation_applied'
+    | 'summary_failed'
+    | 'injection_context_built';
+
+/**
+ * 功能：定义追踪上下文。
+ */
+export interface MemoryTraceContext {
+    traceId: string;
+    chatKey: string;
+    sourceMessageId?: string;
+    eventId?: string;
+    requestId?: string;
+    source: MemoryTraceSource;
+    stage: MemoryTraceStage;
+    ts: number;
+}
+
+/**
+ * 功能：定义主链追踪记录。
+ */
+export interface MemoryMainlineTraceEntry extends MemoryTraceContext {
+    ok: boolean;
+    label: string;
+    detail?: Record<string, unknown>;
+}
+
+/**
+ * 功能：定义主链追踪快照。
+ */
+export interface MemoryMainlineTraceSnapshot {
+    lastTrace: MemoryMainlineTraceEntry | null;
+    lastSuccessTrace: MemoryMainlineTraceEntry | null;
+    recentTraces: MemoryMainlineTraceEntry[];
+    lastIngestTrace: MemoryMainlineTraceEntry | null;
+    lastAppendTrace: MemoryMainlineTraceEntry | null;
+    lastRecallTrace: MemoryMainlineTraceEntry | null;
+    lastPromptInjectionTrace: MemoryMainlineTraceEntry | null;
+    lastUpdatedAt: number;
+}
 
 const DEFAULT_MAINLINE_TRACE_LIMIT = 12;
 
+/**
+ * 功能：计算文本哈希。
+ * @param value 原始文本。
+ * @returns 哈希文本。
+ */
 function hashText(value: string): string {
     let hash = 5381;
     for (let index = 0; index < value.length; index += 1) {
@@ -17,9 +79,9 @@ function hashText(value: string): string {
 }
 
 /**
- * 功能：创建一条统一的主链 trace 上下文。
- * @param input trace 基础字段。
- * @returns trace 上下文。
+ * 功能：创建追踪上下文。
+ * @param input 上下文参数。
+ * @returns 追踪上下文。
  */
 export function createMemoryTraceContext(input: {
     chatKey: string;
@@ -55,11 +117,11 @@ export function createMemoryTraceContext(input: {
 }
 
 /**
- * 功能：在同一条 trace 上推进到新的 stage。
- * @param trace 原始 trace。
+ * 功能：推进追踪阶段。
+ * @param trace 原追踪上下文。
  * @param stage 新阶段。
- * @param source 新来源，默认沿用原值。
- * @returns 新 trace 上下文。
+ * @param source 新来源。
+ * @returns 新追踪上下文。
  */
 export function advanceMemoryTraceContext(
     trace: MemoryTraceContext,
@@ -75,9 +137,9 @@ export function advanceMemoryTraceContext(
 }
 
 /**
- * 功能：把 trace 上下文包装成可写入快照的执行记录。
- * @param input 执行结果。
- * @returns trace 记录。
+ * 功能：构建追踪记录。
+ * @param input 记录入参。
+ * @returns 追踪记录。
  */
 export function buildMemoryMainlineTraceEntry(input: {
     trace: MemoryTraceContext;
@@ -94,9 +156,9 @@ export function buildMemoryMainlineTraceEntry(input: {
 }
 
 /**
- * 功能：归一化 trace 记录。
- * @param value 待归一化对象。
- * @returns 归一化后的记录，失败则返回 null。
+ * 功能：标准化追踪记录。
+ * @param value 原始值。
+ * @returns 标准化结果。
  */
 export function normalizeMemoryMainlineTraceEntry(value: unknown): MemoryMainlineTraceEntry | null {
     if (!value || typeof value !== 'object') {
@@ -126,48 +188,44 @@ export function normalizeMemoryMainlineTraceEntry(value: unknown): MemoryMainlin
 }
 
 /**
- * 功能：归一化主链 trace 快照。
- * @param snapshot 原始快照。
- * @returns 可直接存储的快照。
+ * 功能：标准化追踪快照。
+ * @param snapshot 原快照。
+ * @returns 标准化快照。
  */
 export function normalizeMemoryMainlineTraceSnapshot(snapshot?: MemoryMainlineTraceSnapshot | null): MemoryMainlineTraceSnapshot {
     const recentTraces = Array.isArray(snapshot?.recentTraces)
-        ? snapshot!.recentTraces.map((item): MemoryMainlineTraceEntry | null => normalizeMemoryMainlineTraceEntry(item)).filter((item): item is MemoryMainlineTraceEntry => Boolean(item))
+        ? snapshot.recentTraces
+            .map((item: MemoryMainlineTraceEntry): MemoryMainlineTraceEntry | null => normalizeMemoryMainlineTraceEntry(item))
+            .filter((item: MemoryMainlineTraceEntry | null): item is MemoryMainlineTraceEntry => Boolean(item))
         : [];
-    const normalizeByStage = (entry: MemoryMainlineTraceEntry | null | undefined, stage: MemoryTraceStage): MemoryMainlineTraceEntry | null => {
-        if (entry && entry.stage === stage) {
-            return entry;
-        }
-        return recentTraces.slice().reverse().find((item) => item.stage === stage) ?? null;
-    };
     const lastTrace = normalizeMemoryMainlineTraceEntry(snapshot?.lastTrace ?? null);
     const lastSuccessTrace = normalizeMemoryMainlineTraceEntry(snapshot?.lastSuccessTrace ?? null)
-        ?? recentTraces.slice().reverse().find((item) => item.ok) ?? null;
+        ?? recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.ok) ?? null;
     return {
         lastTrace,
         lastSuccessTrace,
         recentTraces: recentTraces.slice(-DEFAULT_MAINLINE_TRACE_LIMIT),
-        lastIngestTrace: normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastIngestTrace ?? null), 'memory_ingest_started'),
-        lastAppendTrace: normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastAppendTrace ?? null), 'memory_event_appended'),
-        lastTrustedWriteTrace: normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastTrustedWriteTrace ?? null), 'memory_trusted_write_finished')
-            ?? normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastTrustedWriteTrace ?? null), 'memory_trusted_write_started'),
-        lastRecallTrace: normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastRecallTrace ?? null), 'memory_recall_started')
-            ?? normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastRecallTrace ?? null), 'memory_context_built'),
-        lastPromptInjectionTrace: normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastPromptInjectionTrace ?? null), 'memory_prompt_insert_success')
-            ?? normalizeByStage(normalizeMemoryMainlineTraceEntry(snapshot?.lastPromptInjectionTrace ?? null), 'memory_prompt_inserted'),
-        lastUpdatedAt: Math.max(
-            0,
-            Number(snapshot?.lastUpdatedAt ?? 0) || 0,
-            lastTrace?.ts ?? 0,
-            lastSuccessTrace?.ts ?? 0,
-        ),
+        lastIngestTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_ingest_started') ?? null,
+        lastAppendTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => item.stage === 'memory_event_appended') ?? null,
+        lastRecallTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => {
+            return item.stage === 'memory_recall_started'
+                || item.stage === 'memory_context_built'
+                || item.stage === 'summary_started'
+                || item.stage === 'cold_start_started';
+        }) ?? null,
+        lastPromptInjectionTrace: recentTraces.slice().reverse().find((item: MemoryMainlineTraceEntry): boolean => {
+            return item.stage === 'memory_prompt_insert_success'
+                || item.stage === 'memory_prompt_inserted'
+                || item.stage === 'injection_context_built';
+        }) ?? null,
+        lastUpdatedAt: Math.max(0, Number(snapshot?.lastUpdatedAt ?? 0) || 0, lastTrace?.ts ?? 0, lastSuccessTrace?.ts ?? 0),
     };
 }
 
 /**
- * 功能：将一条 trace 记录并入快照。
- * @param snapshot 现有快照。
- * @param entry 新 trace 记录。
+ * 功能：写入一条追踪记录到快照。
+ * @param snapshot 原快照。
+ * @param entry 新记录。
  * @returns 更新后的快照。
  */
 export function touchMemoryMainlineTraceSnapshot(
@@ -176,31 +234,32 @@ export function touchMemoryMainlineTraceSnapshot(
 ): MemoryMainlineTraceSnapshot {
     const base = normalizeMemoryMainlineTraceSnapshot(snapshot ?? null);
     const recentTraces = [...base.recentTraces, entry].slice(-DEFAULT_MAINLINE_TRACE_LIMIT);
-    const next: MemoryMainlineTraceSnapshot = {
+    return {
         ...base,
         lastTrace: entry,
         recentTraces,
         lastSuccessTrace: entry.ok ? entry : base.lastSuccessTrace,
         lastIngestTrace: entry.stage === 'memory_ingest_started' ? entry : base.lastIngestTrace,
         lastAppendTrace: entry.stage === 'memory_event_appended' ? entry : base.lastAppendTrace,
-        lastTrustedWriteTrace: entry.stage === 'memory_trusted_write_finished' || entry.stage === 'memory_trusted_write_started'
-            ? entry
-            : base.lastTrustedWriteTrace,
-        lastRecallTrace: entry.stage === 'memory_recall_started' || entry.stage === 'memory_context_built'
-            ? entry
-            : base.lastRecallTrace,
-        lastPromptInjectionTrace: entry.stage === 'memory_prompt_insert_success' || entry.stage === 'memory_prompt_inserted'
-            ? entry
-            : base.lastPromptInjectionTrace,
+        lastRecallTrace: (
+            entry.stage === 'memory_recall_started'
+            || entry.stage === 'memory_context_built'
+            || entry.stage === 'summary_started'
+            || entry.stage === 'cold_start_started'
+        ) ? entry : base.lastRecallTrace,
+        lastPromptInjectionTrace: (
+            entry.stage === 'memory_prompt_insert_success'
+            || entry.stage === 'memory_prompt_inserted'
+            || entry.stage === 'injection_context_built'
+        ) ? entry : base.lastPromptInjectionTrace,
         lastUpdatedAt: Math.max(base.lastUpdatedAt, entry.ts),
     };
-    return next;
 }
 
 /**
- * 功能：把 trace 记录压缩成一条便于日志展示的摘要。
- * @param entry trace 记录。
- * @returns 单行摘要。
+ * 功能：格式化追踪摘要文本。
+ * @param entry 追踪记录。
+ * @returns 摘要文本。
  */
 export function summarizeMemoryMainlineTrace(entry: MemoryMainlineTraceEntry | MemoryTraceContext): string {
     const ok = 'ok' in entry ? (entry.ok ? 'ok' : 'failed') : 'ctx';

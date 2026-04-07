@@ -1,0 +1,993 @@
+import { escapeHtml } from '../editorShared';
+import { getWorldProfileById } from '../../memory-world-profile';
+import { buildWorldStrategyExplanationFromBinding, listSelectableWorldProfiles } from '../../services/world-strategy-service';
+import {
+    resolveEntryActionTypeLabel,
+    resolveEntryTypeLabel,
+    resolveFailureReasonLabel,
+    resolvePreviewWorkbenchText,
+    resolvePromptStatsLabel,
+    resolveNarrativeStyleLabel,
+    resolveNarrativeStyleSourceLabel,
+    resolveMutationActionLabel,
+    resolveMutationSummaryFieldValue,
+    resolvePromptBlockTitle,
+    resolveRecallReasonCodeLabel,
+    resolveRecallSourceLabel,
+    resolveRetrievalProviderLabel,
+    resolveRetrievalRulePackLabel,
+    resolveSummaryFailureStageLabel,
+    resolveSummaryPlannerFieldLabel,
+    resolveSummaryStageLabel,
+    resolveTraceEmptyText,
+    resolveTraceLevelLabel,
+    resolveTracePanelTitle,
+    resolveTraceStageLabel,
+    resolveWorldIdentifierList,
+    resolveWorldProfileLabel,
+    resolveWorldReasonCodeLabel,
+    resolveWorldSubTypeLabel,
+    resolveWorldTypeLabel,
+} from '../workbenchLocale';
+import {
+    escapeAttr,
+    formatDisplayValue,
+    formatTimestamp,
+    stringifyData,
+    truncateText,
+    type WorkbenchSnapshot,
+    type WorkbenchState,
+} from './shared';
+import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
+
+type PreviewTraceRecord = {
+    ts: number;
+    level: string;
+    stage: string;
+    title: string;
+    message: string;
+};
+
+type EntryUpdateRecord = {
+    key: string;
+    ts: number;
+    status: 'success' | 'failed';
+    mode: string;
+    title: string;
+    entryType: string;
+    entryId: string;
+    sourceLabel: string;
+    detailText: string;
+    payload: Record<string, unknown>;
+    actionType?: string;
+    changedFields?: Array<{
+        label: string;
+        beforeText: string;
+        afterText: string;
+    }>;
+    beforeSnapshot?: Record<string, unknown> | null;
+    afterSnapshot?: Record<string, unknown> | null;
+    rawAuditRecord?: Record<string, unknown> | null;
+    failureReason?: string;
+};
+
+/**
+ * 功能：构建诊断中心预览视图。
+ * @param snapshot 工作台快照。
+ * @param state 当前状态。
+ * @returns 页面 HTML。
+ */
+export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
+    const previewNotReady = !state.previewTabLoaded;
+    const previewLoading = state.previewTabLoading;
+    const entryUpdateCards = buildEntryUpdateCards(snapshot);
+    const previewDiagnostics = snapshot.preview?.diagnostics ?? null;
+    const currentTraceRecords = previewDiagnostics?.traceRecords ?? [];
+    const latestTraceRecords = snapshot.recallExplanation?.traceRecords ?? [];
+    const promptSizeStats = buildPromptSizeStatsMarkup(snapshot);
+    const actionDistribution = buildActionDistributionMarkup(snapshot);
+    const summaryStageDetails = buildSummaryStageDetailsMarkup(snapshot);
+
+    return `
+        <section class="stx-memory-workbench__view"${state.currentView !== 'preview' ? ' hidden' : ''}>
+            <div class="stx-memory-workbench__view-head">
+                <div class="stx-memory-workbench__section-title">${escapeHtml(resolvePreviewWorkbenchText('section_title'))}</div>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <input class="stx-memory-workbench__input" id="stx-memory-preview-query" placeholder="${escapeAttr(resolvePreviewWorkbenchText('preview_query_placeholder'))}" style="width:280px;" value="${escapeAttr(state.previewQuery)}">
+                    <button class="stx-memory-workbench__button" data-action="refresh-preview"><i class="fa-solid fa-satellite-dish"></i> ${escapeHtml(resolvePreviewWorkbenchText('refresh_preview'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="capture-summary"><i class="fa-solid fa-camera"></i> ${escapeHtml(resolvePreviewWorkbenchText('capture_summary'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="export-chat-database"><i class="fa-solid fa-file-export"></i> ${escapeHtml(resolvePreviewWorkbenchText('export_chat_database'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="clear-chat-database" style="border-color:rgba(239,68,68,0.4); color:var(--mw-warn);">
+                        <i class="fa-solid fa-trash-can"></i> ${escapeHtml(resolvePreviewWorkbenchText('clear_chat_database'))}
+                    </button>
+                </div>
+            </div>
+            ${previewNotReady && !previewLoading ? `
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('lazy_placeholder'))}</div>
+                </div>
+            ` : ''}
+            ${previewLoading ? `
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('loading_placeholder'))}</div>
+                </div>
+            ` : ''}
+            ${previewNotReady || previewLoading ? '' : `
+            <div class="stx-memory-workbench__diagnostics">
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('basic_info'))}</div>
+                    ${buildWorldProfilePanelMarkup(snapshot)}
+                    ${buildWorldProfileTestBenchMarkup(state)}
+                    ${buildWorldProfileHistoryMarkup(snapshot)}
+                </div>
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_overview'))}</div>
+                    <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple">
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('query_text'))}</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.preview?.query, resolvePreviewWorkbenchText('not_provided')))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('generated_at'))}</span><strong>${escapeHtml(formatTimestamp(snapshot.preview?.generatedAt))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_actor_count'))}</span><strong>${escapeHtml(String(snapshot.preview?.matchedActorKeys.length ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_entry_count'))}</span><strong>${escapeHtml(String(snapshot.preview?.matchedEntryIds.length ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injection_actor'))}</span><strong>${escapeHtml(previewDiagnostics?.injectionActorKey || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injected_entry_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.injectedCount ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('estimated_chars'))}</span><strong>${escapeHtml(String(previewDiagnostics?.estimatedChars ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('clear_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.clear ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('blur_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.blur ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('distorted_memory'))}</span><strong>${escapeHtml(String(previewDiagnostics?.retentionStageCounts?.distorted ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子注入条目</span><strong>${escapeHtml(String(previewDiagnostics?.shadowInjectedCount ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子记忆小节</span><strong>${escapeHtml(previewDiagnostics?.shadowSectionVisible ? '已显示' : '未显示')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(String(previewDiagnostics?.compareKeySchemaVersion ?? 'v2'))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.indexed_match ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(previewDiagnostics?.matchModeCounts?.fallback_match ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>事件语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.event ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>状态语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.state ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>任务推进语义</span><strong>${escapeHtml(String(snapshot.recallExplanation?.semanticCounts?.task_progress ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>活跃记忆</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.active ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.shadow_forgotten ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>硬遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation?.forgettingCounts?.hard_forgotten ?? 0))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>影子唤起次数</span><strong>${escapeHtml(String(snapshot.recallExplanation?.shadowTriggeredCount ?? 0))}</strong></div>
+                    </div>
+                    <div class="stx-memory-workbench__stack" style="margin-top:12px;">
+                        <div class="stx-memory-workbench__card">
+                            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('systemText'))}</div>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.systemText || resolvePreviewWorkbenchText('no_system_text'))}</pre>
+                        </div>
+                        <div class="stx-memory-workbench__card">
+                            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePromptBlockTitle('finalText'))}</div>
+                            <pre style="max-height: 180px; overflow-y: auto; padding-right: 4px;">${escapeHtml(snapshot.preview?.finalText || resolvePreviewWorkbenchText('no_final_text'))}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                ${promptSizeStats}
+
+                ${actionDistribution}
+
+                ${summaryStageDetails}
+
+                ${buildMutationApplyDiagnosticsMarkup(snapshot)}
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('entry_updates'))}</div>
+                    <div class="stx-memory-workbench__stack" style="max-height: 900px; overflow-y: auto; padding-right: 4px;">
+                        ${entryUpdateCards || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_entry_updates'))}</div>`}
+                    </div>
+                </div>
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTracePanelTitle('currentRecall'))}</div>
+                    <div style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
+                        ${buildTraceMarkup(currentTraceRecords, resolveTraceEmptyText('currentRecall'))}
+                    </div>
+                </div>
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('latest_injection_reason'))}</div>
+                    ${snapshot.recallExplanation ? `
+                        <div class="stx-memory-workbench__info-list">
+                            <div class="stx-memory-workbench__info-row"><span>记录来源</span><strong>${escapeHtml(resolveRecallSourceLabel(snapshot.recallExplanation.source || 'unified_memory'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>生成时间</span><strong>${escapeHtml(formatTimestamp(snapshot.recallExplanation.generatedAt))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>查询文本</span><strong>${escapeHtml(sanitizeWorkbenchDisplayText(snapshot.recallExplanation.query, '暂无'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>最终链路</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.finalProviderId || snapshot.recallExplanation.retrievalProviderId || ''))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>基线种子</span><strong>${escapeHtml(resolveRetrievalProviderLabel(snapshot.recallExplanation.seedProviderId || ''))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>规则包</span><strong>${escapeHtml(resolveRetrievalRulePackLabel(snapshot.recallExplanation.retrievalRulePack || ''))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('vector_hit_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.vectorHitCount ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('merge_used'))}</span><strong>${escapeHtml(snapshot.recallExplanation.mergeUsed ? resolvePreviewWorkbenchText('yes') : resolvePreviewWorkbenchText('no'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('rerank_used'))}</span><strong>${escapeHtml(snapshot.recallExplanation.rerankUsed ? resolvePreviewWorkbenchText('yes') : resolvePreviewWorkbenchText('no'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('rerank_source'))}</span><strong>${escapeHtml(snapshot.recallExplanation.rerankSource === 'llmhub' ? resolvePreviewWorkbenchText('rerank_source_llmhub') : snapshot.recallExplanation.rerankSource === 'rule' ? resolvePreviewWorkbenchText('rerank_source_rule') : resolvePreviewWorkbenchText('rerank_source_none'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('strategy_route'))}</span><strong>${escapeHtml(snapshot.recallExplanation.strategyDecision?.route === 'deep_vector' ? resolvePreviewWorkbenchText('strategy_route_deep') : snapshot.recallExplanation.strategyDecision?.route === 'fast_vector' ? resolvePreviewWorkbenchText('strategy_route_fast') : resolvePreviewWorkbenchText('strategy_route_none'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('candidate_window'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.candidateWindow ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('final_topk'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.strategyDecision?.finalTopK ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('compare_key_schema_version'))}</span><strong>${escapeHtml(snapshot.recallExplanation.compareKeySchemaVersion || 'v2')}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_actors'))}</span><strong>${escapeHtml(snapshot.recallExplanation.matchedActorKeys.join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('matched_entries'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(snapshot.recallExplanation.matchedEntryIds.join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('indexed_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.indexed_match ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('fallback_match_count'))}</span><strong>${escapeHtml(String(snapshot.recallExplanation.matchModeCounts?.fallback_match ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>活跃记忆</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.active ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>影子遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.shadow_forgotten ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>硬遗忘</span><strong>${escapeHtml(String(snapshot.recallExplanation.forgettingCounts?.hard_forgotten ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>影子唤起次数</span><strong>${escapeHtml(String(snapshot.recallExplanation.shadowTriggeredCount ?? 0))}</strong></div>
+                            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_codes'))}</span><strong style="max-height:80px; overflow-y:auto; display:inline-block; text-align:left;">${escapeHtml(resolveWorldIdentifierList(snapshot.recallExplanation.reasonCodes, resolveRecallReasonCodeLabel))}</strong></div>
+                        </div>
+                    ` : `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_latest_injection_reason'))}</div>`}
+                </div>
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveTracePanelTitle('latestInjection'))}</div>
+                    <div style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
+                        ${buildTraceMarkup(latestTraceRecords, resolveTraceEmptyText('latestInjection'))}
+                    </div>
+                </div>
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('recent_summaries'))}</div>
+                    <div class="stx-memory-workbench__stack" style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
+                        ${snapshot.summaries.map((summary): string => `
+                            <article class="stx-memory-workbench__card">
+                                <div class="stx-memory-workbench__split-head">
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(sanitizeWorkbenchDisplayText(summary.title, resolvePreviewWorkbenchText('unnamed_summary')))}</div>
+                                    <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(summary.updatedAt))}</span>
+                                </div>
+                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(summary.content, resolvePreviewWorkbenchText('no_content_text')))}</div>
+                            </article>
+                        `).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_summary_snapshots'))}</div>`}
+                    </div>
+                </div>
+
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('raw_timeline'))}</div>
+                    <div class="stx-memory-workbench__stack" style="max-height: 360px; overflow-y: auto; padding-right: 4px;">
+                        ${snapshot.mutationHistory.map((history): string => `
+                            <article class="stx-memory-workbench__card">
+                                <div class="stx-memory-workbench__split-head">
+                                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveMutationActionLabel(history.action))}</div>
+                                    <span class="stx-memory-workbench__badge">${escapeHtml(formatTimestamp(history.ts))}</span>
+                                </div>
+                                <div class="stx-memory-workbench__detail-block">${escapeHtml(sanitizeWorkbenchDisplayText(buildHistorySummary(history.action, history.payload)))}</div>
+                                <details class="stx-memory-workbench__details">
+                                    <summary>${escapeHtml(resolvePreviewWorkbenchText('view_raw_data'))}</summary>
+                                    <pre>${escapeHtml(stringifyData(history.payload))}</pre>
+                                </details>
+                            </article>
+                        `).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_timeline'))}</div>`}
+                    </div>
+                </div>
+            </div>
+            `}
+        </section>
+    `;
+}
+
+/**
+ * 功能：构建提示词体积统计卡片。
+ * @param snapshot 工作台快照。
+ * @returns HTML 片段。
+ */
+/**
+ * 功能：渲染当前聊天的基础画像信息。
+ * @param snapshot 工作台快照。
+ * @returns 基础信息模块 HTML。
+ */
+function buildWorldProfilePanelMarkup(snapshot: WorkbenchSnapshot): string {
+    const binding = snapshot.worldProfileBinding;
+    if (!binding) {
+        const options = listSelectableWorldProfiles().map((item) => `<option value="${escapeAttr(item.profileId)}">${escapeHtml(item.displayName)}</option>`).join('');
+        return `
+            <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_world_profile'))}</div>
+            <div class="stx-memory-workbench__stack" style="margin-top:12px;">
+                <div class="stx-memory-workbench__field">
+                    <label>${escapeHtml(resolvePreviewWorkbenchText('manual_profile_select'))}</label>
+                    <select class="stx-memory-workbench__select" id="stx-memory-world-profile-select">${options}</select>
+                </div>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-apply">${escapeHtml(resolvePreviewWorkbenchText('apply_manual_profile'))}</button>
+                </div>
+            </div>
+        `;
+    }
+    const primaryProfile = getWorldProfileById(binding.primaryProfile);
+    const explanation = buildWorldStrategyExplanationFromBinding(binding);
+    const primaryProfileLabel = resolveWorldProfileLabel(binding.primaryProfile);
+    const secondaryProfileText = resolveWorldIdentifierList(binding.secondaryProfiles, resolveWorldProfileLabel);
+    const worldType = resolveWorldTypeLabel(binding.primaryProfile);
+    const subTypeText = primaryProfile?.subGenres?.length
+        ? resolveWorldIdentifierList(primaryProfile.subGenres, resolveWorldSubTypeLabel)
+        : resolvePreviewWorkbenchText('empty_value');
+    const reasonCodeText = resolveWorldIdentifierList(binding.reasonCodes, resolveWorldReasonCodeLabel);
+    const options = listSelectableWorldProfiles().map((item) => {
+        const selected = item.profileId === binding.primaryProfile ? ' selected' : '';
+        return `<option value="${escapeAttr(item.profileId)}"${selected}>${escapeHtml(item.displayName)}</option>`;
+    }).join('');
+    const fieldExtensions = Object.entries(explanation?.fieldExtensions ?? {})
+        .map(([schemaId, fields]: [string, string[]]): string => `${schemaId}: ${fields.join(' / ')}`)
+        .join('；') || resolvePreviewWorkbenchText('empty_value');
+    const matchedKeywordText = resolveWorldIdentifierList(explanation?.matchedKeywords ?? [], (value: string): string => value);
+    const conflictKeywordText = resolveWorldIdentifierList(explanation?.conflictKeywords ?? [], (value: string): string => value);
+    const sourceTypeText = resolveWorldIdentifierList(explanation?.sourceTypes ?? [], resolveWorldReasonCodeLabel);
+    const suppressedTypeText = resolveWorldIdentifierList(explanation?.suppressedTypes ?? [], (value: string): string => value);
+    const capabilityText = explanation
+        ? [
+            explanation.capabilities.hasMagic ? '魔法' : '',
+            explanation.capabilities.hasCultivation ? '修行' : '',
+            explanation.capabilities.hasFantasyRace ? '幻想种族' : '',
+            explanation.capabilities.hasModernTechnology ? '现代科技' : '',
+            explanation.capabilities.hasFormalPoliticalOrder ? '正式秩序' : '',
+            explanation.capabilities.hasSupernatural ? '超自然' : '',
+        ].filter(Boolean).join('、') || resolvePreviewWorkbenchText('empty_value')
+        : resolvePreviewWorkbenchText('empty_value');
+
+    return `
+        <div class="stx-memory-workbench__info-list">
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_chat_profile'))}</span><strong>${escapeHtml(primaryProfile?.displayName || primaryProfileLabel)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('binding_mode'))}</span><strong>${escapeHtml(binding.bindingMode === 'manual' ? resolvePreviewWorkbenchText('binding_mode_manual') : resolvePreviewWorkbenchText('binding_mode_auto'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_type'))}</span><strong>${escapeHtml(worldType)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('current_world_sub_type'))}</span><strong>${escapeHtml(subTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('secondary_profile'))}</span><strong>${escapeHtml(secondaryProfileText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('confidence'))}</span><strong>${escapeHtml(String(binding.confidence))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('reason_basis'))}</span><strong>${escapeHtml(reasonCodeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('injection_style'))}</span><strong>${escapeHtml(explanation?.injectionStyle || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_schemas'))}</span><strong>${escapeHtml((explanation?.preferredSchemas ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('preferred_facets'))}</span><strong>${escapeHtml((explanation?.preferredFacets ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('summary_bias'))}</span><strong>${escapeHtml((explanation?.boostedTypes ?? []).join('、') || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>抑制类型</span><strong>${escapeHtml(suppressedTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('field_extensions'))}</span><strong>${escapeHtml(fieldExtensions)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('capability_flags'))}</span><strong>${escapeHtml(capabilityText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>命中特征</span><strong>${escapeHtml(matchedKeywordText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>冲突特征</span><strong>${escapeHtml(conflictKeywordText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>最近识别来源</span><strong>${escapeHtml(sourceTypeText)}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>混合题材候选</span><strong>${escapeHtml(explanation?.mixedProfileCandidate ? resolveWorldProfileLabel(explanation.mixedProfileCandidate) : resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>识别指纹</span><strong>${escapeHtml(explanation?.sourceHash || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('created_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.createdAt))}</strong></div>
+            <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('updated_at'))}</span><strong>${escapeHtml(formatTimestamp(binding.updatedAt))}</strong></div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('world_effects'))}</div>
+            <div class="stx-memory-workbench__stack">
+                ${(explanation?.effectSummary ?? []).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(item)}</div>`).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('empty_value'))}</div>`}
+            </div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('manual_override_panel'))}</div>
+            <div class="stx-memory-workbench__stack">
+                <div class="stx-memory-workbench__field">
+                    <label>${escapeHtml(resolvePreviewWorkbenchText('manual_profile_select'))}</label>
+                    <select class="stx-memory-workbench__select" id="stx-memory-world-profile-select">${options}</select>
+                </div>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-apply">${escapeHtml(resolvePreviewWorkbenchText('apply_manual_profile'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="world-profile-reset">${escapeHtml(resolvePreviewWorkbenchText('reset_profile_auto'))}</button>
+                </div>
+            </div>
+        </div>
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('source_samples'))}</div>
+            <div class="stx-memory-workbench__stack">
+                ${(binding.detectedFrom ?? []).slice(0, 4).map((item: string): string => `<div class="stx-memory-workbench__detail-block">${escapeHtml(truncateText(item, 140))}</div>`).join('') || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_source_samples'))}</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildWorldProfileTestBenchMarkup(state: WorkbenchState): string {
+    const result = state.worldProfileTestResult;
+    const fieldExtensions = Object.entries(result?.fieldExtensions ?? {})
+        .map(([schemaId, fields]: [string, string[]]): string => `${schemaId}: ${fields.join(' / ')}`)
+        .join('；') || '暂无';
+    return `
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">世界画像测试台</div>
+            <div class="stx-memory-workbench__stack">
+                <textarea class="stx-memory-workbench__textarea" id="stx-memory-world-profile-test-input" placeholder="输入一段设定、世界书或剧情文本，测试当前识别结果。">${escapeHtml(state.worldProfileTestInput)}</textarea>
+                <div class="stx-memory-workbench__toolbar stx-memory-workbench__toolbar--wrap">
+                    <button class="stx-memory-workbench__button" data-action="world-profile-test"${state.worldProfileTestRunning ? ' disabled' : ''}>${state.worldProfileTestRunning ? '测试中…' : '开始测试'}</button>
+                </div>
+                ${result ? `
+                    <div class="stx-memory-workbench__info-list">
+                        <div class="stx-memory-workbench__info-row"><span>主画像</span><strong>${escapeHtml(resolveWorldProfileLabel(result.primaryProfile))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>次画像</span><strong>${escapeHtml(resolveWorldIdentifierList(result.secondaryProfiles, resolveWorldProfileLabel))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>置信度</span><strong>${escapeHtml(String(result.confidence))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>命中特征</span><strong>${escapeHtml(result.matchedKeywords.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>冲突特征</span><strong>${escapeHtml(result.conflictKeywords.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>识别来源</span><strong>${escapeHtml(resolveWorldIdentifierList(result.sourceTypes, resolveWorldReasonCodeLabel))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>混合题材候选</span><strong>${escapeHtml(result.mixedProfileCandidate ? resolveWorldProfileLabel(result.mixedProfileCandidate) : '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>推荐 schema 偏置</span><strong>${escapeHtml(result.preferredSchemas.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>推荐 facet 偏置</span><strong>${escapeHtml(result.preferredFacets.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>抑制类型</span><strong>${escapeHtml(result.suppressedTypes.join('、') || '暂无')}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>扩展字段</span><strong>${escapeHtml(fieldExtensions)}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>原因码</span><strong>${escapeHtml(resolveWorldIdentifierList(result.reasonCodes, resolveWorldReasonCodeLabel))}</strong></div>
+                    </div>
+                ` : `<div class="stx-memory-workbench__empty">输入文本后可在这里查看识别解释。</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildWorldProfileHistoryMarkup(snapshot: WorkbenchSnapshot): string {
+    const historyRecords = snapshot.mutationHistory
+        .filter((history): boolean => history.action === 'world_profile_bound')
+        .slice(0, 8);
+    return `
+        <div class="stx-memory-workbench__card" style="margin-top:12px;">
+            <div class="stx-memory-workbench__mini-title">画像绑定历史</div>
+            <div class="stx-memory-workbench__stack">
+                ${historyRecords.length > 0 ? historyRecords.map((history): string => {
+                    const payload = normalizeRecord(history.payload);
+                    const primaryProfile = String(payload.primaryProfile ?? '').trim();
+                    const previousPrimaryProfile = String(payload.previousPrimaryProfile ?? '').trim();
+                    const source = String(payload.source ?? '').trim() || 'unknown';
+                    const sourceHash = String(payload.sourceHash ?? '').trim();
+                    const secondaryProfiles = Array.isArray(payload.secondaryProfiles)
+                        ? (payload.secondaryProfiles as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+                        : [];
+                    const reasonCodes = Array.isArray(payload.reasonCodes)
+                        ? (payload.reasonCodes as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+                        : [];
+                    return `
+                        <div class="stx-memory-workbench__detail-block">
+                            <div><strong>${escapeHtml(formatTimestamp(history.ts))}</strong>｜${escapeHtml(resolveWorldReasonCodeLabel(`signal:${source}`))}</div>
+                            <div style="margin-top:4px;">当前画像：${escapeHtml(primaryProfile ? resolveWorldProfileLabel(primaryProfile) : '暂无')}</div>
+                            <div style="margin-top:4px;">变更前：${escapeHtml(previousPrimaryProfile ? resolveWorldProfileLabel(previousPrimaryProfile) : '暂无')}</div>
+                            <div style="margin-top:4px;">次画像：${escapeHtml(resolveWorldIdentifierList(secondaryProfiles, resolveWorldProfileLabel))}</div>
+                            <div style="margin-top:4px;">原因：${escapeHtml(resolveWorldIdentifierList(reasonCodes, resolveWorldReasonCodeLabel))}</div>
+                            <div style="margin-top:4px;">指纹：${escapeHtml(sourceHash || '暂无')}</div>
+                        </div>
+                    `;
+                }).join('') : `<div class="stx-memory-workbench__empty">暂无画像绑定历史。</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildPromptSizeStatsMarkup(snapshot: WorkbenchSnapshot): string {
+    const systemTextLen = (snapshot.preview?.systemText || '').length;
+    const roleTextLen = (snapshot.preview?.roleText || '').length;
+    const finalTextLen = (snapshot.preview?.finalText || '').length;
+    const totalPreviewLen = systemTextLen + roleTextLen + finalTextLen;
+
+    const plannerPayload = snapshot.mutationHistory.find((h) => h.action === 'summary_planner_resolved')?.payload;
+    const candidatePayload = snapshot.mutationHistory.find((h) => h.action === 'candidate_records_resolved')?.payload;
+    const typeSchemaPayload = snapshot.mutationHistory.find((h) => h.action === 'type_schemas_resolved')?.payload;
+
+    const candidateCount = Number(candidatePayload?.candidateCount ?? 0);
+    const schemaCount = Array.isArray(typeSchemaPayload?.schemaIds) ? (typeSchemaPayload as Record<string, unknown>).schemaIds as string[] : [];
+
+    if (totalPreviewLen <= 0 && candidateCount <= 0) {
+        return '';
+    }
+
+    return `
+                <div class="stx-memory-workbench__card">
+                    <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('prompt_size_stats'))}</div>
+                    <div class="stx-memory-workbench__info-list">
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('systemText'))}字符数</span><strong>${escapeHtml(String(systemTextLen))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('roleText'))}字符数</span><strong>${escapeHtml(String(roleTextLen))}</strong></div>
+                        <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptBlockTitle('finalText'))}字符数</span><strong>${escapeHtml(String(finalTextLen))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('preview_total_chars'))}</span><strong>${escapeHtml(String(totalPreviewLen))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('candidate_count'))}</span><strong>${escapeHtml(String(candidateCount))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('active_schema_count'))}</span><strong>${escapeHtml(String(schemaCount.length))}</strong></div>
+                ${schemaCount.length > 0 ? `<div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePromptStatsLabel('schema_list'))}</span><strong>${escapeHtml(schemaCount.join('、'))}</strong></div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染最近一次摘要的统一落盘诊断摘要。
+ * @param snapshot 工作台快照
+ * @returns HTML 片段
+ */
+function buildMutationApplyDiagnosticsMarkup(snapshot: WorkbenchSnapshot): string {
+    const latestSummary = [...(snapshot.summaries ?? [])]
+        .sort((left, right): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0];
+    const diagnostics = latestSummary?.mutationApplyDiagnostics;
+    if (!diagnostics) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('apply_diagnostics'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_apply_diagnostics'))}</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('apply_diagnostics'))}</div>
+            <div class="stx-memory-workbench__info-list">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('mutation_source'))}</span><strong>${escapeHtml(latestSummary?.title || resolvePreviewWorkbenchText('structured_round_summary'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('total_mutations'))}</span><strong>${escapeHtml(String(diagnostics.counts.input ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('noop_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.noop ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('add_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.add ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('update_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.update ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('merge_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.merge ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('invalidate_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.invalidate ?? 0))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('delete_count'))}</span><strong>${escapeHtml(String(diagnostics.counts.delete ?? 0))}</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建动作分布统计卡片。
+ * @param snapshot 工作台快照。
+ * @returns HTML 片段。
+ */
+function buildActionDistributionMarkup(snapshot: WorkbenchSnapshot): string {
+    const actionCounts: Record<string, number> = {};
+    const validatedRecords = snapshot.mutationHistory.filter((h) => h.action === 'mutation_validated');
+    const appliedRecords = snapshot.mutationHistory.filter((h) => h.action === 'mutation_applied');
+    const failedRecords = snapshot.mutationHistory.filter((h) => h.action === 'summary_failed');
+
+    for (const audit of snapshot.entryAuditRecords ?? []) {
+        const actionType = String(audit.actionType ?? '').trim() || 'UNKNOWN';
+        actionCounts[actionType] = (actionCounts[actionType] || 0) + 1;
+    }
+
+    const totalActions = Object.values(actionCounts).reduce((sum, count) => sum + count, 0);
+    if (totalActions <= 0 && failedRecords.length <= 0) {
+        return '';
+    }
+
+    const actionColorMap: Record<string, string> = {
+        ADD: '#2dd4bf',
+        UPDATE: '#38bdf8',
+        MERGE: '#a78bfa',
+        INVALIDATE: '#f59e0b',
+        DELETE: '#ef4444',
+        NOOP: '#64748b',
+    };
+
+    const actionBars = Object.entries(actionCounts)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([action, count]) => {
+            const color = actionColorMap[action] || '#94a3b8';
+            const actionLabel = resolveEntryActionTypeLabel(action);
+            return `
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0;">
+                    <span style="width: 80px; min-width: 0; color: ${color}; font-weight: 600; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(actionLabel)}</span>
+                    <div style="flex: 1; min-width: 0; height: 16px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden;">
+                        <div style="height: 100%; width: ${totalActions > 0 ? Math.round((count / totalActions) * 100) : 0}%; background: ${color}; border-radius: 4px; opacity: 0.7;"></div>
+                    </div>
+                    <span style="color: var(--mw-text); min-width: 24px; text-align: right; white-space: normal; word-break: break-word;">${escapeHtml(String(count))}</span>
+                </div>`;
+        }).join('');
+
+    const failedSummary = failedRecords.length > 0
+        ? `<div style="margin-top: 10px; padding: 8px 10px; background: rgba(239,68,68,0.1); border-left: 3px solid var(--mw-warn); border-radius: 0 4px 4px 0; font-size: 12px; color: var(--mw-warn); white-space: normal; word-break: break-word; overflow-wrap: anywhere;">
+            共 ${escapeHtml(String(failedRecords.length))} 次总结链路失败${failedRecords.map((r) => {
+                const reason = String(r.payload.reasonCode ?? '').trim();
+                return reason ? `（${escapeHtml(reason)}）` : '';
+            }).join('')}
+           </div>`
+        : '';
+
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('action_stats'))}</div>
+            <div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 0; min-width: 0;">
+                ${actionBars || `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_action_records'))}</div>`}
+            </div>
+            ${failedSummary}
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建总结阶段详情卡片。
+ * @param snapshot 工作台快照。
+ * @returns HTML 片段。
+ */
+function buildSummaryStageDetailsMarkup(snapshot: WorkbenchSnapshot): string {
+    const plannerRecord = snapshot.mutationHistory.find((h) => h.action === 'summary_planner_resolved');
+    const validatedRecord = snapshot.mutationHistory.find((h) => h.action === 'mutation_validated');
+    const appliedRecord = snapshot.mutationHistory.find((h) => h.action === 'mutation_applied');
+    const failedRecords = snapshot.mutationHistory.filter((h) => h.action === 'summary_failed');
+
+    if (!plannerRecord && !validatedRecord && failedRecords.length <= 0) {
+        return '';
+    }
+
+    const plannerSection = plannerRecord ? `
+        <div style="padding: 8px 10px; background: rgba(196,160,98,0.08); border-left: 3px solid #c4a062; border-radius: 0 4px 4px 0;">
+            <div style="font-size: 12px; font-weight: 600; color: #c4a062; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('planner'))}</div>
+            <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6; min-width: 0; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('shouldUpdate'))}：<strong>${escapeHtml(String(plannerRecord.payload.shouldUpdate ?? '-'))}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('focusTypes'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.focusTypes) ? (plannerRecord.payload.focusTypes as string[]).join('、') : '-')}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('entities'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.entities) ? (plannerRecord.payload.entities as string[]).join('、') : '-')}</strong></div>
+                <div>${escapeHtml(resolveSummaryPlannerFieldLabel('topics'))}：<strong>${escapeHtml(Array.isArray(plannerRecord.payload.topics) ? (plannerRecord.payload.topics as string[]).join('、') : '-')}</strong></div>
+                ${buildNarrativeStyleDebugMarkup(plannerRecord.payload.narrativeStyle)}
+            </div>
+        </div>
+    ` : '';
+
+    const validatedSection = validatedRecord ? `
+        <div style="padding: 8px 10px; background: rgba(167,139,250,0.08); border-left: 3px solid #a78bfa; border-radius: 0 4px 4px 0;">
+            <div style="font-size: 12px; font-weight: 600; color: #a78bfa; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('mutation'))}</div>
+            <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
+                <div>${escapeHtml(resolvePreviewWorkbenchText('action_count'))}：<strong>${escapeHtml(String(validatedRecord.payload.actionCount ?? 0))}</strong></div>
+                ${validatedRecord.payload.plannerNoop ? `<div style="color: var(--mw-muted);">${escapeHtml(resolvePreviewWorkbenchText('planner_noop'))}</div>` : ''}
+            </div>
+        </div>
+    ` : '';
+
+    const appliedSection = appliedRecord ? `
+        <div style="padding: 8px 10px; background: rgba(45,212,191,0.08); border-left: 3px solid #2dd4bf; border-radius: 0 4px 4px 0;">
+            <div style="font-size: 12px; font-weight: 600; color: #2dd4bf; margin-bottom: 4px;">${escapeHtml(resolveSummaryStageLabel('apply'))}</div>
+            <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
+                <div>${escapeHtml(resolvePreviewWorkbenchText('summary_id'))}：<strong style="font-family:'Fira Code',monospace; font-size:11px;">${escapeHtml(String(appliedRecord.payload.summaryId ?? '-'))}</strong></div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('action_count'))}：<strong>${escapeHtml(String(appliedRecord.payload.actionCount ?? 0))}</strong></div>
+            </div>
+        </div>
+    ` : '';
+
+    const failedSection = failedRecords.map((record) => {
+        const reasonCode = String(record.payload.reasonCode ?? '').trim();
+        const validationErrors = Array.isArray(record.payload.validationErrors)
+            ? (record.payload.validationErrors as string[]).map((e: string) => String(e ?? '').trim()).filter(Boolean)
+            : [];
+        const isSchemaFail = reasonCode.startsWith('validation_failed');
+        const stageLabel = isSchemaFail ? resolvePreviewWorkbenchText('stage_validation_failed') : resolvePreviewWorkbenchText('stage_summary_failed');
+
+        return `
+        <div style="padding: 8px 10px; background: rgba(239,68,68,0.08); border-left: 3px solid var(--mw-warn); border-radius: 0 4px 4px 0;">
+            <div style="font-size: 12px; font-weight: 600; color: var(--mw-warn); margin-bottom: 4px;">${escapeHtml(stageLabel)}</div>
+            <div style="font-size: 12px; color: var(--mw-text); line-height: 1.6;">
+                <div>${escapeHtml(resolvePreviewWorkbenchText('reason_prefix'))}<strong>${escapeHtml(resolveFailureReasonLabel(reasonCode || 'unknown'))}</strong></div>
+                <div>失败阶段：<strong>${escapeHtml(resolveSummaryFailureStageLabel(reasonCode))}</strong></div>
+                ${validationErrors.length > 0 ? `<div>${escapeHtml(resolvePreviewWorkbenchText('validation_errors'))}<strong>${escapeHtml(validationErrors.join('；'))}</strong></div>` : ''}
+            </div>
+        </div>
+    `;
+    }).join('');
+
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('summary_stage_details'))}</div>
+            <div class="stx-memory-workbench__stack" style="gap: 8px;">
+                ${plannerSection}
+                ${validatedSection}
+                ${appliedSection}
+                ${failedSection}
+                ${!plannerSection && !validatedSection && !appliedSection && !failedSection ? `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_summary_stage_info'))}</div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建统一的词条更新记录卡片。
+ * @param snapshot 工作台快照。
+ * @returns 卡片 HTML。
+ */
+/**
+ * 功能：渲染当前轮次叙事风格调试信息。
+ * @param value 叙事风格 payload。
+ * @returns HTML 片段。
+ */
+function buildNarrativeStyleDebugMarkup(value: unknown): string {
+    const payload = normalizeRecord(value);
+    const primaryStyle = String(payload.primaryStyle ?? '').trim();
+    const secondaryStyles = Array.isArray(payload.secondaryStyles)
+        ? (payload.secondaryStyles as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    const source = String(payload.source ?? '').trim();
+    const isStable = payload.isStable === true;
+    if (!primaryStyle && secondaryStyles.length <= 0 && !source) {
+        return '';
+    }
+    return `
+        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.12);">
+            <div>${escapeHtml(resolvePreviewWorkbenchText('current_style'))}：<strong>${escapeHtml(resolveNarrativeStyleLabel(primaryStyle || ''))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('secondary_style'))}：<strong>${escapeHtml(secondaryStyles.length > 0 ? secondaryStyles.map((item: string): string => resolveNarrativeStyleLabel(item)).join('、') : resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('style_source'))}：<strong>${escapeHtml(resolveNarrativeStyleSourceLabel(source || ''))}</strong></div>
+            <div>${escapeHtml(resolvePreviewWorkbenchText('style_stability'))}：<strong>${escapeHtml(isStable ? resolvePreviewWorkbenchText('style_stable') : resolvePreviewWorkbenchText('style_pending'))}</strong></div>
+        </div>
+    `;
+}
+
+function buildEntryUpdateCards(snapshot: WorkbenchSnapshot): string {
+    const successRecords: EntryUpdateRecord[] = (snapshot.entryAuditRecords ?? []).map((audit): EntryUpdateRecord => ({
+        key: `audit:${audit.auditId}`,
+        ts: audit.ts,
+        status: 'success',
+        mode: resolveAuditMode(audit.actionType),
+        title: String(audit.entryTitle ?? resolvePreviewWorkbenchText('unknown_entry')).trim() || resolvePreviewWorkbenchText('unknown_entry'),
+        entryType: String(audit.entryType ?? 'other').trim() || 'other',
+        entryId: String(audit.entryId ?? '').trim(),
+        sourceLabel: String(audit.sourceLabel ?? '').trim()
+            || (String(audit.summaryId ?? '').trim() ? resolvePreviewWorkbenchText('structured_round_summary') : resolvePreviewWorkbenchText('direct_workbench_edit')),
+        detailText: resolveAuditDetailText(audit as unknown as Record<string, unknown>),
+        payload: {
+            actionType: audit.actionType,
+            summaryId: audit.summaryId,
+            reasonCodes: audit.reasonCodes ?? [],
+        },
+        actionType: audit.actionType,
+        changedFields: (audit.changedFields ?? []).map((item) => ({
+            label: item.label,
+            beforeText: formatAuditFieldValue(item.before),
+            afterText: formatAuditFieldValue(item.after),
+        })),
+        beforeSnapshot: audit.beforeEntry ? normalizeRecord(audit.beforeEntry as unknown) : null,
+        afterSnapshot: audit.afterEntry ? normalizeRecord(audit.afterEntry as unknown) : null,
+        rawAuditRecord: normalizeRecord(audit as unknown),
+    }));
+
+    const failedRecords: EntryUpdateRecord[] = snapshot.mutationHistory
+        .filter((history): boolean => history.action === 'summary_failed')
+        .map((history, index): EntryUpdateRecord => ({
+            key: `failed:${history.historyId}:${index}`,
+            ts: history.ts,
+            status: 'failed',
+            mode: resolvePreviewWorkbenchText('update_failed'),
+            title: resolveFailureTitle(history.payload),
+            entryType: String(history.payload.targetKind ?? history.payload.schemaId ?? 'unknown').trim() || 'unknown',
+            entryId: String(history.payload.recordId ?? history.payload.entryId ?? '').trim(),
+            sourceLabel: resolvePreviewWorkbenchText('stage_summary_failed'),
+            detailText: buildFailureDetail(history.payload),
+            payload: normalizeRecord(history.payload),
+            actionType: 'summary_failed',
+            failureReason: resolveFailureReasonLabel(String(history.payload.reasonCode ?? '').trim() || 'unknown'),
+        }));
+
+    return [...failedRecords, ...successRecords]
+        .sort((left, right): number => right.ts - left.ts)
+        .slice(0, 18)
+        .map(renderEntryUpdateCard)
+        .join('');
+}
+
+/**
+ * 功能：渲染单条词条更新记录。
+ * @param record 更新记录。
+ * @returns 卡片 HTML。
+ */
+function renderEntryUpdateCard(record: EntryUpdateRecord): string {
+    const isFailed = record.status === 'failed';
+    const typeColor = isFailed ? 'var(--mw-warn)' : 'var(--mw-accent-cyan)';
+    const typeBg = isFailed ? 'rgba(239, 68, 68, 0.15)' : 'rgba(6, 182, 212, 0.12)';
+    
+    // 生成唯一随机ID规避闭包捕获与ID重复
+    const diffId = 'diff_' + Math.random().toString(36).slice(2, 9);
+    const sourceId = 'src_' + Math.random().toString(36).slice(2, 9);
+    
+    const changedFieldsCount = (record.changedFields ?? []).length;
+    const changedFieldsMarkup = changedFieldsCount > 0
+        ? `
+            <style>#${diffId}:checked ~ .content-${diffId} { display: flex !important; }</style>
+            <div style="margin-top: 10px;">
+                <input type="checkbox" id="${diffId}" style="display:none;" />
+                <label for="${diffId}" style="cursor: pointer; user-select: none; font-size: 12px; background: rgba(255,255,255,0.08); border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); padding: 8px 10px; font-weight: 600; color: var(--mw-text); display: flex; align-items: center; gap: 6px; transition: background 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                    <span style="opacity: 0.8;">共发生 </span><span style="color: ${typeColor}; font-size: 13px;">${changedFieldsCount}</span><span style="opacity: 0.8;"> 个字段变更 (点击展开对比) ▼</span>
+                </label>
+                <div class="content-${diffId}" style="display: none; flex-direction: column; gap: 8px; margin-top: 8px;">
+                    ${(record.changedFields ?? []).map((field) => `
+                        <div style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column;">
+                            <div style="padding: 6px 10px; background: rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--mw-text); font-weight: 600; font-family: monospace; font-size: 11px;">
+                                字段: ${escapeHtml(field.label)}
+                            </div>
+                            <div style="display: flex; flex-direction: column; font-size: 11px;">
+                                <div style="display: flex; border-bottom: 1px dashed rgba(255,255,255,0.08);">
+                                    <div style="width: 28px; text-align: center; padding: 6px 0; background: rgba(239, 68, 68, 0.15); color: var(--mw-warn); font-weight: 600; flex-shrink: 0; user-select: none; font-size: 14px;">-</div>
+                                    <div style="padding: 6px 10px; color: #aaa; flex: 1; word-wrap: break-word; white-space: pre-wrap; font-family: 'Fira Code', monospace; line-height: 1.5; text-decoration: line-through;">${escapeHtml(field.beforeText || '无内容')}</div>
+                                </div>
+                                <div style="display: flex;">
+                                    <div style="width: 28px; text-align: center; padding: 6px 0; background: rgba(6, 182, 212, 0.15); color: var(--mw-accent-cyan); font-weight: 600; flex-shrink: 0; user-select: none; font-size: 14px;">+</div>
+                                    <div style="padding: 6px 10px; color: #fff; flex: 1; word-wrap: break-word; white-space: pre-wrap; font-family: 'Fira Code', monospace; line-height: 1.5;">${escapeHtml(field.afterText || '无内容')}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `
+        : '';
+    
+    return `
+        <article data-entry-update-key="${escapeAttr(record.key)}" style="flex-shrink: 0; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; margin-bottom: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.2);">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: rgba(0,0,0,0.2); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                    <span style="background: ${typeBg}; color: ${typeColor}; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid ${typeBg};">${escapeHtml(record.mode)}</span>
+                    <span style="font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;" title="${escapeAttr(record.title)}">${escapeHtml(record.title)}</span>
+                    ${record.entryId ? `<span style="font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;" title="${escapeAttr(record.entryId)}">${escapeHtml(record.entryId)}</span>` : ''}
+                </div>
+                <div style="font-size: 11px; color: rgba(255,255,255,0.5); white-space: nowrap; padding-left: 12px; flex-shrink: 0;">
+                    ${escapeHtml(formatTimestamp(record.ts))}
+                </div>
+            </div>
+            
+            <div style="padding: 10px 12px;">
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: ${(record.detailText || changedFieldsMarkup) ? '10px' : '0'}; min-width: 0;">
+                    <div style="display: flex; gap: 4px; align-items: center;"><span>类型：</span><span style="color:#ddd;">${escapeHtml(resolveEntryTypeLabel(record.entryType || 'unknown'))}</span></div>
+                    <div style="display: flex; gap: 4px; align-items: center;"><span>来源:</span><span style="color:#ddd;">${escapeHtml(record.sourceLabel)}</span></div>
+                    <div style="display: flex; gap: 4px; align-items: center;"><span>动作：</span><strong style="color:#ddd;">${escapeHtml(resolveEntryActionTypeLabel(record.actionType || ''))}</strong></div>
+                    ${record.failureReason ? `<div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start; color: var(--mw-warn); flex: 1 1 100%; min-width: 0;"><span>失败原因:</span><strong style="display:block; width:100%; white-space: normal; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(record.failureReason)}</strong></div>` : ''}
+                </div>
+
+                ${record.detailText ? `
+                <div style="font-size: 12px; color: #ddd; line-height: 1.6; padding: 8px 10px; background: rgba(0,0,0,0.25); border-left: 3px solid ${typeColor}; border-radius: 0 4px 4px 0; word-wrap: break-word; white-space: pre-wrap; font-weight: 500;">${escapeHtml(record.detailText)}</div>
+                ` : ''}
+
+                ${changedFieldsMarkup}
+
+                <style>#${sourceId}:checked ~ .content-${sourceId} { display: flex !important; }</style>
+                <div style="margin-top: 12px;">
+                    <input type="checkbox" id="${sourceId}" style="display:none;" />
+                    <label for="${sourceId}" style="cursor: pointer; user-select: none; display: inline-block; padding: 2px 4px; border-radius: 4px; font-size: 11px; color: var(--mw-accent-cyan); border: 1px solid rgba(6, 182, 212, 0.2); background: rgba(6, 182, 212, 0.05);">查看源数据 ▼</label>
+                    <div class="content-${sourceId}" style="display: none; flex-direction: column; gap: 10px; margin-top: 8px;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                            ${record.beforeSnapshot ? `
+                            <div style="flex: 1; min-width: 200px;">
+                                <div style="color: rgba(255,255,255,0.7); margin-bottom: 4px; font-size: 11px; font-weight:600;">更新前</div>
+                                <pre style="max-height: 120px; overflow-y: auto; padding: 8px; background: rgba(0,0,0,0.4); border-radius: 4px; font-size: 11px; margin: 0; border: 1px solid rgba(255,255,255,0.1); font-family: 'Fira Code', monospace; color: #bbb;">${escapeHtml(stringifyData(record.beforeSnapshot))}</pre>
+                            </div>
+                            ` : ''}
+                            ${record.afterSnapshot ? `
+                            <div style="flex: 1; min-width: 200px;">
+                                <div style="color: rgba(255,255,255,0.7); margin-bottom: 4px; font-size: 11px; font-weight:600;">更新后</div>
+                                <pre style="max-height: 120px; overflow-y: auto; padding: 8px; background: rgba(0,0,0,0.4); border-radius: 4px; font-size: 11px; margin: 0; border: 1px solid rgba(255,255,255,0.1); font-family: 'Fira Code', monospace; color: #ddd;">${escapeHtml(stringifyData(record.afterSnapshot))}</pre>
+                            </div>
+                            ` : ''}
+                        </div>
+                        <div style="margin-top: ${(record.beforeSnapshot || record.afterSnapshot) ? '4px' : '0'};">
+                            <div style="color: rgba(255,255,255,0.7); margin-bottom: 4px; font-size: 11px; font-weight:600;">原始记录</div>
+                            <pre style="max-height: 120px; overflow-y: auto; padding: 8px; background: rgba(0,0,0,0.4); border-radius: 4px; font-size: 11px; margin: 0; border: 1px solid rgba(255,255,255,0.1); font-family: 'Fira Code', monospace; color: #bbb;">${escapeHtml(stringifyData(record.rawAuditRecord ?? record.payload))}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </article>
+    `;
+}
+
+/**
+ * 功能：构建 trace 列表展示。
+ * @param records trace 记录。
+ * @param emptyText 空状态文案。
+ * @returns HTML。
+ */
+function buildTraceMarkup(records: PreviewTraceRecord[], emptyText: string): string {
+    if (!Array.isArray(records) || records.length <= 0) {
+        return `<div class="stx-memory-workbench__empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+        <div style="display: flex; flex-direction: column; gap: 8px; font-family: 'Fira Code', monospace; font-size: 11px;">
+            ${records.map((record): string => {
+                const isError = record.level === 'error';
+                const isWarn = record.level === 'warn';
+                const color = isError ? 'var(--mw-warn)' : isWarn ? 'var(--mw-accent)' : 'var(--mw-accent-cyan)';
+                const bgColor = isError ? 'rgba(239,68,68,0.05)' : isWarn ? 'rgba(196,160,98,0.05)' : 'rgba(56,189,248,0.05)';
+                const stageLabel = resolveTraceStageLabel(record.stage || '');
+                const levelLabel = resolveTraceLevelLabel(record.level || '');
+                return `
+                    <div style="border-left: 2px solid ${color}; padding: 6px 10px; background: ${bgColor}; border-radius: 0 4px 4px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
+                            <strong style="color: ${color}; font-size: 12px;">[${escapeHtml(stageLabel)}] ${escapeHtml(record.title || '未命名日志')}</strong>
+                            <span style="color: var(--mw-muted); font-size: 10px; flex-shrink: 0;">${escapeHtml(formatTimestamp(record.ts))}</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--mw-muted); margin-bottom: ${record.message ? '4px' : '0'};">级别：${escapeHtml(levelLabel)}</div>
+                        ${record.message ? `<div style="color: var(--mw-text); white-space: pre-wrap; word-break: break-all; opacity: 0.9;">${escapeHtml(record.message)}</div>` : ''}
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+/**
+ * 功能：把变更记录整理成一段中文摘要。
+ * @param action 动作名。
+ * @param payload 变更 payload。
+ * @returns 摘要文本。
+ */
+function buildHistorySummary(action: string, payload: Record<string, unknown>): string {
+    const fields: string[] = [];
+    const fieldMap: Array<{ key: string; label: string }> = [
+        { key: 'reasonCode', label: '原因' },
+        { key: 'summaryId', label: '总结' },
+        { key: 'actorKey', label: '角色' },
+        { key: 'worldProfile', label: '世界画像' },
+        { key: 'primaryProfile', label: '主画像' },
+        { key: 'candidateCount', label: '候选数' },
+        { key: 'matchedEntryCount', label: '命中数' },
+        { key: 'messageCount', label: '消息数' },
+        { key: 'actionCount', label: '动作数' },
+    ];
+    fieldMap.forEach((field): void => {
+        const rawText = formatDisplayValue(payload[field.key]);
+        const text = rawText !== '暂无'
+            ? resolveMutationSummaryFieldValue(field.key, payload[field.key]) || rawText
+            : rawText;
+        if (text !== '暂无') {
+            fields.push(`${field.label}：${text}`);
+        }
+    });
+    return fields.length > 0 ? fields.join('；') : `${resolveMutationActionLabel(action)}已记录，但没有额外可读摘要。`;
+}
+
+/**
+ * 功能：归一化对象。
+ * @param value 原始值。
+ * @returns 安全对象。
+ */
+function normalizeRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：解析失败卡片标题。
+ * @param payload 失败 payload。
+ * @returns 标题文本。
+ */
+function resolveFailureTitle(payload: Record<string, unknown>): string {
+    const reasonCode = String(payload.reasonCode ?? '').trim();
+    return reasonCode ? `${resolvePreviewWorkbenchText('summary_failed_prefix')}${resolveFailureReasonLabel(reasonCode)}` : resolvePreviewWorkbenchText('structured_summary_failed');
+}
+
+/**
+ * 功能：构建失败详情摘要。
+ * @param payload 失败 payload。
+ * @returns 摘要文本。
+ */
+function buildFailureDetail(payload: Record<string, unknown>): string {
+    const validationErrors = Array.isArray(payload.validationErrors)
+        ? payload.validationErrors.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    if (validationErrors.length > 0) {
+        return `${resolvePreviewWorkbenchText('validation_failed_prefix')}${validationErrors.join('；')}`;
+    }
+    const reasonCode = String(payload.reasonCode ?? '').trim();
+    if (reasonCode) {
+        return `${resolvePreviewWorkbenchText('reason_prefix')}${resolveFailureReasonLabel(reasonCode)}`;
+    }
+    return resolvePreviewWorkbenchText('summary_chain_failed');
+}
+
+/**
+ * 功能：将动作类型转换为中文标签。
+ * @param actionType 动作类型。
+ * @returns 中文模式名。
+ */
+function resolveAuditMode(actionType: string): string {
+    const mapping: Record<string, string> = {
+        ADD: '新增成功',
+        UPDATE: resolvePreviewWorkbenchText('success_update'),
+        MERGE: '合并成功',
+        INVALIDATE: '失效成功',
+        DELETE: '删除成功',
+    };
+    return mapping[String(actionType ?? '').trim()] || resolvePreviewWorkbenchText('success_update');
+}
+
+/**
+ * 功能：生成审计卡片摘要。
+ * @param audit 审计记录。
+ * @returns 摘要文本。
+ */
+function resolveAuditDetailText(audit: Record<string, unknown>): string {
+    const changedFields = Array.isArray(audit.changedFields) ? audit.changedFields : [];
+    if (changedFields.length > 0) {
+        // 当发生字段变更时，UI中已有独立的结构化折叠视图展示(changedFieldsMarkup)，为避免冗余纯文本输出，这里直接返回空。
+        return '';
+    }
+    const afterEntry = normalizeRecord(audit.afterEntry);
+    const beforeEntry = normalizeRecord(audit.beforeEntry);
+    const summary = sanitizeWorkbenchDisplayText(afterEntry.summary ?? beforeEntry.summary);
+    const detail = sanitizeWorkbenchDisplayText(afterEntry.detail ?? beforeEntry.detail);
+    return summary || detail || resolvePreviewWorkbenchText('no_direct_summary');
+}
+
+/**
+ * 功能：格式化审计字段值。
+ * @param value 字段值。
+ * @returns 展示文本。
+ */
+function formatAuditFieldValue(value: unknown): string {
+    if (value === undefined || value === null || value === '') {
+        return resolvePreviewWorkbenchText('empty_text');
+    }
+    if (typeof value === 'string') {
+        return truncateText(sanitizeWorkbenchDisplayText(value), 80);
+    }
+    return truncateText(formatDisplayValue(value), 80);
+}

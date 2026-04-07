@@ -1,0 +1,203 @@
+/**
+ * 功能：定义冷启动输入中的角色卡信息。
+ */
+export interface ColdStartCharacterCardSource {
+    name: string;
+    description: string;
+    personality: string;
+    scenario: string;
+    firstMessage: string;
+    messageExample: string;
+    creatorNotes: string;
+    tags: string[];
+}
+
+/**
+ * 功能：定义冷启动输入中的 Tavern 语义快照。
+ */
+export interface ColdStartSemanticSource {
+    systemPrompt: string;
+    firstMessage: string;
+    authorNote: string;
+    jailbreak: string;
+    instruct: string;
+    activeLorebooks: string[];
+}
+
+/**
+ * 功能：定义冷启动输入中的用户画像信息。
+ */
+export interface ColdStartUserSource {
+    userName: string;
+    counterpartName: string;
+    personaDescription: string;
+    metadataPersona: string;
+}
+
+/**
+ * 功能：定义冷启动输入中的世界书条目。
+ */
+export interface ColdStartWorldbookEntrySource {
+    book: string;
+    entryId: string;
+    entry: string;
+    keywords: string[];
+    content: string;
+}
+
+/**
+ * 功能：定义冷启动输入的统一数据包。
+ */
+export interface ColdStartSourceBundle {
+    reason: string;
+    characterCard: ColdStartCharacterCardSource;
+    semantic: ColdStartSemanticSource;
+    user: ColdStartUserSource;
+    worldbooks: {
+        mainBook: string;
+        extraBooks: string[];
+        activeBooks: string[];
+        entries: ColdStartWorldbookEntrySource[];
+    };
+    recentEvents: string[];
+}
+
+/**
+ * 功能：定义冷启动身份对象。
+ */
+export interface ColdStartIdentity {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    traits: string[];
+}
+
+/**
+ * 功能：定义冷启动候选记忆类型。
+ */
+export type ColdStartMemoryType =
+    | 'preference'
+    | 'world_rule'
+    | 'identity_constraint'
+    | 'persistent_goal'
+    | 'initial_state'
+    | 'location_fact'
+    | 'timeline_fact';
+
+/**
+ * 功能：定义冷启动来源引用。
+ */
+export interface ColdStartSourceRef {
+    sourceType: 'message' | 'character_card' | 'lorebook' | 'manual_input' | 'summary';
+    sourceId: string;
+    excerpt?: string;
+}
+
+/**
+ * 功能：定义冷启动关系角色卡对象。
+ */
+export interface ColdStartActorCard {
+    actorKey: string;
+    displayName: string;
+    aliases: string[];
+    identityFacts: string[];
+    originFacts: string[];
+    traits: string[];
+}
+
+/**
+ * 功能：定义冷启动世界基础条目。
+ */
+export interface ColdStartWorldBaseEntry {
+    schemaId: string;
+    title: string;
+    summary: string;
+    scope: string;
+}
+
+/**
+ * 功能：定义冷启动关系条目。
+ */
+export interface ColdStartRelationshipEntry {
+    sourceActorKey: string;
+    targetActorKey: string;
+    participants: string[];
+    relationTag: string;
+    state: string;
+    summary: string;
+    trust: number;
+    affection: number;
+    tension: number;
+}
+
+/**
+ * 功能：定义冷启动记忆条目。
+ */
+export interface ColdStartMemoryRecord {
+    schemaId: string;
+    title: string;
+    summary: string;
+    importance?: number;
+}
+
+/**
+ * 功能：定义冷启动候选项。
+ */
+export interface ColdStartCandidate {
+    id: string;
+    type: ColdStartMemoryType;
+    entryType: string;
+    title: string;
+    summary: string;
+    entityKeys: string[];
+    confidence: number;
+    sourceRefs: ColdStartSourceRef[];
+    status: 'candidate';
+    reason: string;
+    detailPayload?: Record<string, unknown>;
+    tags?: string[];
+    actorBindings?: string[];
+}
+
+/**
+ * 功能：定义冷启动实体卡对象。
+ */
+export interface ColdStartEntityCardEntry {
+    entityType: string;
+    compareKey?: string;
+    title: string;
+    aliases?: string[];
+    summary: string;
+    fields?: Record<string, unknown>;
+}
+
+/**
+ * 功能：定义冷启动实体卡集合。
+ */
+export interface ColdStartEntityCards {
+    organizations?: ColdStartEntityCardEntry[];
+    cities?: ColdStartEntityCardEntry[];
+    nations?: ColdStartEntityCardEntry[];
+    locations?: ColdStartEntityCardEntry[];
+}
+
+/**
+ * 功能：定义冷启动输出文档。
+ */
+export interface ColdStartDocument {
+    schemaVersion: string;
+    identity: ColdStartIdentity;
+    actorCards: ColdStartActorCard[];
+    entityCards?: ColdStartEntityCards;
+    worldProfileDetection?: {
+        primaryProfile: string;
+        secondaryProfiles: string[];
+        confidence: number;
+        reasonCodes: string[];
+    };
+    worldBase: ColdStartWorldBaseEntry[];
+    relationships: ColdStartRelationshipEntry[];
+    memoryRecords: ColdStartMemoryRecord[];
+}

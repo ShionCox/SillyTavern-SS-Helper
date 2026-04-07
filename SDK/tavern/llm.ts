@@ -758,6 +758,9 @@ function extractResultText(result: unknown): string {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
     }
+    if (candidate && typeof candidate === "object") {
+      try { return JSON.stringify(candidate); } catch { /* skip */ }
+    }
   }
 
   const choices = resultRecord.choices;
@@ -771,6 +774,9 @@ function extractResultText(result: unknown): string {
         if (typeof messageRecord.content === "string" && messageRecord.content.trim()) {
           return messageRecord.content.trim();
         }
+        if (messageRecord.content && typeof messageRecord.content === "object") {
+          try { return JSON.stringify(messageRecord.content); } catch { /* skip */ }
+        }
       }
       if (typeof firstChoiceRecord.text === "string" && firstChoiceRecord.text.trim()) {
         return firstChoiceRecord.text.trim();
@@ -778,6 +784,7 @@ function extractResultText(result: unknown): string {
     }
   }
 
+  try { return JSON.stringify(result); } catch { /* skip */ }
   return String(result ?? "").trim();
 }
 
@@ -832,6 +839,66 @@ function resolveJsonSchema(options?: TavernRawRequestOptions): TavernResolvedJso
   }
 
   return undefined;
+}
+
+/**
+ * 功能：判断传入 schema 是否满足 OpenAI 严格 json_schema 响应格式要求。
+ * 参数：
+ *   schema (unknown)：待检查的 schema。
+ * 返回：
+ *   boolean：兼容时返回 true，否则返回 false。
+ */
+function isStrictJsonSchemaCompatible(schema: unknown): boolean {
+  return checkStrictJsonSchemaNode(schema, 0);
+}
+
+/**
+ * 功能：递归检查 schema 节点是否显式声明 additionalProperties=false。
+ * 参数：
+ *   node (unknown)：当前 schema 节点。
+ *   depth (number)：当前递归深度。
+ * 返回：
+ *   boolean：节点兼容时返回 true，否则返回 false。
+ */
+function checkStrictJsonSchemaNode(node: unknown, depth: number): boolean {
+  if (!node || typeof node !== "object" || Array.isArray(node)) {
+    return true;
+  }
+  if (depth >= 12) {
+    return true;
+  }
+
+  const record = node as Record<string, unknown>;
+  if (record.type === "object") {
+    if (!("additionalProperties" in record) || record.additionalProperties !== false) {
+      return false;
+    }
+  }
+
+  if (record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)) {
+    for (const child of Object.values(record.properties as Record<string, unknown>)) {
+      if (!checkStrictJsonSchemaNode(child, depth + 1)) {
+        return false;
+      }
+    }
+  }
+
+  if (record.items !== undefined && !checkStrictJsonSchemaNode(record.items, depth + 1)) {
+    return false;
+  }
+
+  const compositeKeys = ["anyOf", "oneOf", "allOf", "prefixItems"];
+  for (const key of compositeKeys) {
+    if (record[key] !== undefined) {
+      return false;
+    }
+  }
+
+  if (record.additionalProperties && typeof record.additionalProperties === "object" && !Array.isArray(record.additionalProperties)) {
+    return checkStrictJsonSchemaNode(record.additionalProperties, depth + 1);
+  }
+
+  return true;
 }
 
 /**
@@ -926,9 +993,10 @@ function buildChatCompletionRequestBody(
   }
 
   const jsonSchema = resolveJsonSchema(options);
-  if (stage === "structured_schema" && jsonSchema) {
+  const canUseStrictJsonSchema = jsonSchema ? isStrictJsonSchemaCompatible(jsonSchema.value) : false;
+  if (stage === "structured_schema" && jsonSchema && canUseStrictJsonSchema) {
     body.json_schema = jsonSchema;
-  } else if (stage === "structured_json_object" && options?.jsonMode) {
+  } else if ((stage === "structured_schema" || stage === "structured_json_object") && options?.jsonMode) {
     body.response_format = { type: "json_object" };
   }
 

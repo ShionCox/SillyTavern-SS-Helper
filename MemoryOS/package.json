@@ -17,6 +17,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "dexie": "^4.3.0"
+    "dexie": "^4.3.0",
+    "js-tiktoken": "^1.0.21"
   }
 }

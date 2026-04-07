@@ -1,92 +1,107 @@
 import Dexie from 'dexie';
 import {
+    appendSdkPluginChatRecord,
     db,
-    readSdkPluginChatState,
     deleteSdkPluginChatRecords,
     deleteSdkPluginChatState,
     patchSdkChatShared,
+    queryLatestSdkPluginChatRecords,
+    querySdkPluginChatRecords,
+    rebuildSSHelperDatabase,
+    readSdkPluginChatState,
     writeSdkPluginChatState,
 } from '../../../SDK/db';
 import type {
-    DBChatPluginRecord,
-    DBChatPluginState,
     ChatSharedPatch,
     DBAudit,
+    DBChatPluginRecord,
+    DBChatPluginState,
     DBEvent,
-    DBFact,
-    DBFactProvenance,
-    DBDerivationSource,
+    DBMemoryEntry,
+    DBMemoryEntryType,
+    DBActorMemoryProfile,
+    DBRoleEntryMemory,
+    DBMemoryRelationship,
+    DBMemoryMutationHistory,
+    DBMemoryEntryFieldDiff,
+    DBMemoryEntryAuditRecord,
     DBMeta,
-    DBSummary,
-    DBSummarySource,
+    DBSummarySnapshot,
+    DBWorldProfileBinding,
     DBTemplate,
     DBTemplateBinding,
-    DBVectorChunkMetadata,
-    DBMemoryCard,
-    DBMemoryCardEmbedding,
-    DBMemoryCardMeta,
-    DBRelationshipMemory,
-    DBMemoryMutationHistory,
-    DBMemoryRecallLog,
-    DBWorldInfoCache,
-    DBWorldState,
 } from '../../../SDK/db';
 import { SSHelperDatabase } from '../../../SDK/db';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
+import { clearAllVectorDataForChat } from './vector-db';
+import type {
+    MemoryTakeoverActiveSnapshot,
+    MemoryTakeoverBaseline,
+    MemoryTakeoverBatch,
+    MemoryTakeoverBatchFailureState,
+    MemoryTakeoverBatchResult,
+    MemoryTakeoverCandidateActorMention,
+    MemoryTakeoverConsolidationResult,
+    MemoryTakeoverPlan,
+} from '../types';
+import type { MemoryTimelineProfile } from '../memory-time/time-types';
 
-export { db, patchSdkChatShared };
+export { db, patchSdkChatShared, rebuildSSHelperDatabase };
 export type {
-    DBChatPluginRecord,
-    DBChatPluginState,
     ChatSharedPatch,
     DBAudit,
+    DBChatPluginRecord,
+    DBChatPluginState,
     DBEvent,
-    DBFact,
-    DBFactProvenance,
-    DBDerivationSource,
+    DBMemoryEntry,
+    DBMemoryEntryType,
+    DBActorMemoryProfile,
+    DBRoleEntryMemory,
+    DBMemoryRelationship,
+    DBMemoryMutationHistory,
+    DBMemoryEntryFieldDiff,
+    DBMemoryEntryAuditRecord,
     DBMeta,
-    DBSummary,
-    DBSummarySource,
+    DBSummarySnapshot,
+    DBWorldProfileBinding,
     DBTemplate,
     DBTemplateBinding,
-    DBVectorChunkMetadata,
-    DBMemoryCard,
-    DBMemoryCardEmbedding,
-    DBMemoryCardMeta,
-    DBRelationshipMemory,
-    DBMemoryMutationHistory,
-    DBMemoryRecallLog,
-    DBWorldInfoCache,
-    DBWorldState,
 };
 export { SSHelperDatabase as MemoryOSDatabase };
 
+/**
+ * 功能：定义聊天级清理参数。
+ */
 export interface ClearMemoryChatDataOptions {
     includeAudit?: boolean;
 }
 
+/**
+ * 功能：定义统一数据库快照结构。
+ */
 export interface MemoryChatDatabaseSnapshot {
     chatKey: string;
     generatedAt: number;
     events: DBEvent[];
-    facts: DBFact[];
-    worldState: DBWorldState[];
-    summaries: DBSummary[];
     templates: DBTemplate[];
     audit: DBAudit[];
     meta: DBMeta | null;
-    worldinfoCache: DBWorldInfoCache[];
-    templateBindings: DBTemplateBinding[];
-    memoryCards: DBMemoryCard[];
-    memoryCardEmbeddings: DBMemoryCardEmbedding[];
-    memoryCardMeta: DBMemoryCardMeta[];
-    relationshipMemory: DBRelationshipMemory[];
-    memoryRecallLog: DBMemoryRecallLog[];
     memoryMutationHistory: DBMemoryMutationHistory[];
+    memoryEntryAuditRecords: DBMemoryEntryAuditRecord[];
+    memoryEntries: DBMemoryEntry[];
+    memoryEntryTypes: DBMemoryEntryType[];
+    actorMemoryProfiles: DBActorMemoryProfile[];
+    roleEntryMemory: DBRoleEntryMemory[];
+    memoryRelationships: DBMemoryRelationship[];
+    summarySnapshots: DBSummarySnapshot[];
+    worldProfileBindings: DBWorldProfileBinding[];
     pluginState: DBChatPluginState | null;
     pluginRecords: DBChatPluginRecord[];
 }
 
+/**
+ * 功能：定义 Prompt 测试包。
+ */
 export interface MemoryPromptTestBundle {
     version: '1.0.0';
     exportedAt: number;
@@ -106,9 +121,25 @@ export interface MemoryPromptTestBundle {
         shouldInject?: boolean;
         requiredKeywords?: string[];
     };
+    parityBaseline?: MemoryPromptParityBaseline;
     runResult?: Record<string, unknown>;
 }
 
+/**
+ * 功能：定义严格一致性对比的基准数据结构。
+ */
+export interface MemoryPromptParityBaseline {
+    finalPromptText: string;
+    insertIndex: number;
+    insertedMemoryBlock: string;
+    reasonCodes: string[];
+    matchedActorKeys: string[];
+    matchedEntryIds: string[];
+}
+
+/**
+ * 功能：定义 PromptReady 快照结构。
+ */
 export interface PromptReadyCaptureSnapshot {
     promptFixture: Array<Record<string, unknown>>;
     query: string;
@@ -117,6 +148,9 @@ export interface PromptReadyCaptureSnapshot {
     requestMeta?: Record<string, unknown>;
 }
 
+/**
+ * 功能：定义测试包导入结果。
+ */
 export interface ImportMemoryPromptTestBundleResult {
     chatKey: string;
     importedAt: number;
@@ -124,160 +158,651 @@ export interface ImportMemoryPromptTestBundleResult {
 }
 
 /**
- * 功能：将未知值转换为可用字符串，空值回退为默认值。
- * @param value 待转换值。
- * @param fallback 默认字符串。
- * @returns 规范化后的字符串。
+ * 功能：定义接管记录集合名称。
  */
-function toSafeString(value: unknown, fallback: string): string {
-    const text = String(value ?? '').trim();
-    return text || fallback;
+export type MemoryTakeoverRecordCollection =
+    | 'takeover_batch_meta'
+    | 'takeover_batch_result'
+    | 'candidate_actor_mentions'
+    | 'takeover_logs'
+    | 'takeover_preview_runtime'
+    | 'takeover_preview_draft'
+    | 'comparekey_index';
+
+/**
+ * 功能：定义梦境记录集合名称。
+ */
+export type MemoryDreamRecordCollection =
+    | 'dream_session_meta'
+    | 'dream_session_recall'
+    | 'dream_session_output'
+    | 'dream_session_approval'
+    | 'dream_session_rollback';
+
+/**
+ * 功能：定义 compareKey 索引记录。
+ */
+export interface MemoryCompareKeyIndexRecord {
+    chatKey: string;
+    entryId: string;
+    entityKey: string;
+    entryType: string;
+    compareKey: string;
+    matchKeys: string[];
+    schemaVersion: string;
+    canonicalName: string;
+    legacyCompareKeys?: string[];
+    title: string;
+    updatedAt: number;
 }
 
 /**
- * 功能：将未知值转换为有限数值，非法值回退为默认值。
- * @param value 待转换值。
- * @param fallback 默认数值。
- * @returns 有限数值。
+ * 功能：定义接管日志记录。
  */
-function toSafeNumber(value: unknown, fallback: number): number {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : fallback;
+export interface MemoryTakeoverLogRecord {
+    takeoverId: string;
+    level: 'info' | 'warn' | 'error';
+    stage: string;
+    message: string;
+    detail?: Record<string, unknown>;
+    ts: number;
 }
 
 /**
- * 功能：归一化 summary level，兼容旧导出中的非标准值。
- * @param value 待归一化值。
- * @returns 合法 level。
+ * 功能：读取 MemoryOS 当前聊天的插件状态。
+ * @param chatKey 聊天键。
+ * @returns 插件状态；不存在时返回 null。
  */
-function normalizeSummaryLevel(value: unknown): DBSummary['level'] {
-    const level = String(value ?? '').trim().toLowerCase();
-    if (level === 'message' || level === 'scene' || level === 'arc') {
-        return level;
+export async function readMemoryOSChatState(chatKey: string): Promise<DBChatPluginState | null> {
+    return readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey));
+}
+
+/**
+ * 功能：写入 MemoryOS 当前聊天的插件状态。
+ * @param chatKey 聊天键。
+ * @param state 状态补丁。
+ * @returns 异步完成。
+ */
+export async function writeMemoryOSChatState(chatKey: string, state: Record<string, unknown>): Promise<void> {
+    await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), state);
+}
+
+/**
+ * 功能：读取当前聊天保存的时间画像。
+ * @param chatKey 聊天键。
+ * @returns 时间画像；不存在时返回 null。
+ */
+export async function readMemoryTimelineProfile(chatKey: string): Promise<MemoryTimelineProfile | null> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    const profile = toRecord(state.timelineProfile);
+    if (Object.keys(profile).length <= 0) {
+        return null;
     }
-    return 'scene';
+    return profile as unknown as MemoryTimelineProfile;
 }
 
 /**
- * 功能：归一化 summary 行，避免导入时因主键或索引字段缺失导致事务中断。
- * @param rows 原始 summary 列表。
- * @param targetChatKey 目标 chatKey。
- * @returns 过滤后的可写入 summary 列表。
+ * 功能：写入当前聊天的时间画像。
+ * @param chatKey 聊天键。
+ * @param profile 时间画像。
+ * @returns 异步完成。
  */
-function normalizeSummaryRows(rows: unknown[], targetChatKey: string): DBSummary[] {
-    const now = Date.now();
-    const normalized: DBSummary[] = [];
+export async function writeMemoryTimelineProfile(chatKey: string, profile: MemoryTimelineProfile): Promise<void> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    await writeMemoryOSChatState(chatKey, {
+        ...state,
+        timelineProfile: profile as unknown as Record<string, unknown>,
+    });
+}
+
+/**
+ * 功能：读取旧聊天接管总状态。
+ * @param chatKey 聊天键。
+ * @returns 接管计划；不存在时返回 null。
+ */
+export async function readMemoryTakeoverPlan(chatKey: string): Promise<MemoryTakeoverPlan | null> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const takeover = toRecord(toRecord(stateRow?.state).takeover);
+    if (Object.keys(takeover).length <= 0) {
+        return null;
+    }
+    return takeover as unknown as MemoryTakeoverPlan;
+}
+
+/**
+ * 功能：写入旧聊天接管总状态。
+ * @param chatKey 聊天键。
+ * @param plan 接管计划。
+ * @returns 异步完成。
+ */
+export async function writeMemoryTakeoverPlan(chatKey: string, plan: MemoryTakeoverPlan): Promise<void> {
+    const stateRow = await readMemoryOSChatState(chatKey);
+    const state = toRecord(stateRow?.state);
+    await writeMemoryOSChatState(chatKey, {
+        ...state,
+        takeover: plan,
+    });
+}
+
+/**
+ * 功能：写入接管批次元数据。
+ * @param chatKey 聊天键。
+ * @param batch 批次元数据。
+ * @returns 异步完成。
+ */
+export async function saveMemoryTakeoverBatchMeta(chatKey: string, batch: MemoryTakeoverBatch): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        recordId: String(batch.batchId ?? '').trim(),
+        payload: batch as unknown as Record<string, unknown>,
+        ts: batch.finishedAt ?? batch.startedAt ?? Date.now(),
+    });
+}
+
+/**
+ * 功能：读取接管批次元数据列表。
+ * @param chatKey 聊天键。
+ * @returns 批次元数据列表。
+ */
+export async function loadMemoryTakeoverBatchMetas(chatKey: string): Promise<MemoryTakeoverBatch[]> {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        order: 'asc',
+        limit: 2000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatch => {
+        return row.payload as unknown as MemoryTakeoverBatch;
+    });
+}
+
+/**
+ * 功能：聚合当前聊天所有批次的失败与重试状态。
+ * @param chatKey 聊天键。
+ * @returns 批次聚合状态映射。
+ */
+export async function loadMemoryTakeoverBatchFailureStates(chatKey: string): Promise<Map<string, MemoryTakeoverBatchFailureState>> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_meta', {
+        order: 'asc',
+        limit: 4000,
+    });
+    const stateMap = new Map<string, MemoryTakeoverBatchFailureState>();
     for (const row of rows) {
-        if (!row || typeof row !== 'object') {
+        const payload = row.payload as unknown as MemoryTakeoverBatch;
+        const batchId = normalizeText(payload?.batchId);
+        if (!batchId) {
             continue;
         }
-        const source = row as Record<string, unknown>;
-        const content = String(source.content ?? '').trim();
-        if (!content) {
-            continue;
+        const current = stateMap.get(batchId) ?? {
+            batchId,
+            failureCount: 0,
+            consecutiveFailureCount: 0,
+            retryable: true,
+            requiresManualReview: false,
+            quarantined: false,
+            attemptCount: 0,
+        };
+        const nextAttemptCount = Math.max(
+            current.attemptCount,
+            Math.trunc(Number(payload?.attemptCount) || 0),
+        );
+        const status = normalizeText(payload?.status);
+        if (status === 'failed') {
+            current.failureCount += 1;
+            current.consecutiveFailureCount += 1;
+            current.lastFailureAt = Number(payload?.finishedAt ?? payload?.startedAt ?? row.ts ?? Date.now()) || Date.now();
+            current.lastErrorMessage = normalizeText(payload?.error) || current.lastErrorMessage;
+            current.lastErrorKind = normalizeTakeoverBatchErrorKind(payload?.lastErrorKind) ?? inferTakeoverBatchErrorKind(current.lastErrorMessage);
+            current.retryable = payload?.retryable !== false;
+            current.requiresManualReview = payload?.requiresManualReview === true;
+            current.quarantined = payload?.quarantined === true;
+        } else if (status === 'isolated') {
+            current.lastErrorMessage = normalizeText(payload?.error) || current.lastErrorMessage;
+            current.lastErrorKind = normalizeTakeoverBatchErrorKind(payload?.lastErrorKind) ?? inferTakeoverBatchErrorKind(current.lastErrorMessage) ?? 'admission_failed';
+            current.retryable = payload?.retryable !== false;
+            current.requiresManualReview = payload?.requiresManualReview === true;
+            current.quarantined = payload?.quarantined === true;
+            current.lastFailureAt = Number(payload?.finishedAt ?? payload?.startedAt ?? row.ts ?? Date.now()) || Date.now();
+        } else if (status === 'completed') {
+            current.consecutiveFailureCount = 0;
+            current.retryable = true;
+            current.requiresManualReview = false;
+            current.quarantined = false;
         }
-        normalized.push({
-            ...(source as unknown as DBSummary),
-            summaryId: toSafeString(source.summaryId, `summary::${targetChatKey}::${crypto.randomUUID()}`),
-            chatKey: targetChatKey,
-            level: normalizeSummaryLevel(source.level),
-            createdAt: toSafeNumber(source.createdAt, now),
-            content,
-        });
+        current.attemptCount = nextAttemptCount;
+        stateMap.set(batchId, current);
     }
-    return normalized;
+    return stateMap;
 }
 
 /**
- * 功能：归一化 event 行，确保 eventId/ts/type 存在并可索引。
- * @param rows 原始 event 列表。
- * @param targetChatKey 目标 chatKey。
- * @returns 可写入 event 列表。
+ * 功能：写入接管批次分析结果。
+ * @param chatKey 聊天键。
+ * @param result 批次分析结果。
+ * @returns 异步完成。
  */
-function normalizeEventRows(rows: unknown[], targetChatKey: string): DBEvent[] {
-    const now = Date.now();
-    const normalized: DBEvent[] = [];
-    for (const row of rows) {
-        if (!row || typeof row !== 'object') {
-            continue;
-        }
-        const source = row as Record<string, unknown>;
-        const payload = source.payload ?? {};
-        normalized.push({
-            ...(source as unknown as DBEvent),
-            eventId: toSafeString(source.eventId, `event::${targetChatKey}::${crypto.randomUUID()}`),
-            chatKey: targetChatKey,
-            ts: toSafeNumber(source.ts, now),
-            type: toSafeString(source.type, 'imported_event'),
-            payload,
-        });
-    }
-    return normalized;
+export async function saveMemoryTakeoverBatchResult(chatKey: string, result: MemoryTakeoverBatchResult): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
+        recordId: String(result.batchId ?? '').trim(),
+        payload: result as unknown as Record<string, unknown>,
+        ts: result.generatedAt || Date.now(),
+    });
 }
 
 /**
- * 功能：归一化事实行，兼容缺失主键或更新时间的旧数据。
- * @param rows 原始事实列表。
- * @param targetChatKey 目标 chatKey。
- * @returns 可写入事实列表。
+ * 功能：写入候选角色提及记录。
+ * @param chatKey 聊天键。
+ * @param mentions 候选角色提及列表。
+ * @returns 异步完成。
  */
-function normalizeFactRows(rows: unknown[], targetChatKey: string): DBFact[] {
-    const now = Date.now();
-    const normalized: DBFact[] = [];
-    for (const row of rows) {
-        if (!row || typeof row !== 'object') {
-            continue;
-        }
-        const source = row as Record<string, unknown>;
-        normalized.push({
-            ...(source as unknown as DBFact),
-            factKey: toSafeString(source.factKey, `fact::${targetChatKey}::${crypto.randomUUID()}`),
-            chatKey: targetChatKey,
-            type: toSafeString(source.type, 'imported_fact'),
-            updatedAt: toSafeNumber(source.updatedAt, now),
-            value: source.value ?? '',
+export async function saveCandidateActorMentions(
+    chatKey: string,
+    mentions: MemoryTakeoverCandidateActorMention[],
+): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    await Promise.all((mentions ?? []).map((mention: MemoryTakeoverCandidateActorMention): Promise<void> => {
+        const recordId = `${String(mention.sourceBatchId ?? '').trim()}::${String(mention.actorKey ?? mention.name ?? '').trim()}`;
+        return appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'candidate_actor_mentions', {
+            recordId,
+            payload: {
+                ...mention,
+                chatKey: normalizedChatKey,
+            } as unknown as Record<string, unknown>,
+            ts: Date.now(),
         });
-    }
-    return normalized;
+    }));
 }
 
 /**
- * 功能：归一化世界状态行，确保 stateKey/path 可用。
- * @param rows 原始世界状态列表。
- * @param targetChatKey 目标 chatKey。
- * @returns 可写入世界状态列表。
+ * 功能：读取候选角色提及记录。
+ * @param chatKey 聊天键。
+ * @returns 候选角色提及列表。
  */
-function normalizeWorldStateRows(rows: unknown[], targetChatKey: string): DBWorldState[] {
-    const now = Date.now();
-    const normalized: DBWorldState[] = [];
-    for (const row of rows) {
-        if (!row || typeof row !== 'object') {
-            continue;
-        }
-        const source = row as Record<string, unknown>;
-        normalized.push({
-            ...(source as unknown as DBWorldState),
-            stateKey: toSafeString(source.stateKey, `state::${targetChatKey}::${crypto.randomUUID()}`),
-            chatKey: targetChatKey,
-            path: toSafeString(source.path, 'imported/unknown'),
-            updatedAt: toSafeNumber(source.updatedAt, now),
-            value: source.value ?? '',
-        });
-    }
-    return normalized;
+export async function loadCandidateActorMentions(chatKey: string): Promise<MemoryTakeoverCandidateActorMention[]> {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'candidate_actor_mentions', {
+        order: 'asc',
+        limit: 4000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverCandidateActorMention => {
+        return row.payload as unknown as MemoryTakeoverCandidateActorMention;
+    });
 }
 
 /**
- * 功能：将指定聊天的 MemoryOS 状态标记为归档。
- * 参数：
- *   chatKey (string)：聊天键。
- *   reason (string)：归档原因。
- * 返回：
- *   Promise<void>：异步完成。
+ * 功能：读取接管批次分析结果列表。
+ * @param chatKey 聊天键。
+ * @returns 批次分析结果列表。
+ */
+export async function loadMemoryTakeoverBatchResults(chatKey: string): Promise<MemoryTakeoverBatchResult[]> {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_batch_result', {
+        order: 'asc',
+        limit: 2000,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverBatchResult => {
+        return row.payload as unknown as MemoryTakeoverBatchResult;
+    });
+}
+
+/**
+ * 功能：写入接管预览数据。
+ * @param chatKey 聊天键。
+ * @param recordId 记录标识。
+ * @param payload 预览数据。
+ * @param scope 预览作用域。
+ * @returns 异步完成。
+ */
+export async function saveMemoryTakeoverPreview(
+    chatKey: string,
+    recordId: 'baseline' | 'active_snapshot' | 'latest_batch' | 'consolidation',
+    payload: MemoryTakeoverBaseline | MemoryTakeoverActiveSnapshot | MemoryTakeoverBatchResult | MemoryTakeoverConsolidationResult,
+    scope: 'runtime' | 'draft' = 'runtime',
+): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection(scope), {
+        recordId,
+        payload: payload as unknown as Record<string, unknown>,
+        ts: Date.now(),
+    });
+}
+
+/**
+ * 功能：清空指定聊天的接管预览缓存。
+ * @param chatKey 聊天键。
+ * @returns 清理完成。
+ */
+export async function clearMemoryTakeoverPreview(chatKey: string): Promise<void> {
+    await deleteSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection('runtime'));
+}
+
+/**
+ * 功能：按作用域解析接管预览集合名称。
+ * @param scope 预览作用域。
+ * @returns 对应集合名。
+ */
+function resolveTakeoverPreviewCollection(scope: 'runtime' | 'draft'): 'takeover_preview_runtime' | 'takeover_preview_draft' {
+    return scope === 'draft' ? 'takeover_preview_draft' : 'takeover_preview_runtime';
+}
+
+/**
+ * 功能：读取最新接管预览数据。
+ * @param chatKey 聊天键。
+ * @param scope 预览作用域。
+ * @returns 预览映射。
+ */
+export async function loadMemoryTakeoverPreview(chatKey: string, scope: 'runtime' | 'draft' = 'runtime'): Promise<{
+    baseline: MemoryTakeoverBaseline | null;
+    activeSnapshot: MemoryTakeoverActiveSnapshot | null;
+    latestBatch: MemoryTakeoverBatchResult | null;
+    consolidation: MemoryTakeoverConsolidationResult | null;
+}> {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), resolveTakeoverPreviewCollection(scope), {
+        order: 'desc',
+        limit: 2000,
+    });
+    const result = {
+        baseline: null as MemoryTakeoverBaseline | null,
+        activeSnapshot: null as MemoryTakeoverActiveSnapshot | null,
+        latestBatch: null as MemoryTakeoverBatchResult | null,
+        consolidation: null as MemoryTakeoverConsolidationResult | null,
+    };
+    for (const row of rows) {
+        if (row.recordId === 'baseline' && !result.baseline) {
+            result.baseline = row.payload as unknown as MemoryTakeoverBaseline;
+        }
+        if (row.recordId === 'active_snapshot' && !result.activeSnapshot) {
+            result.activeSnapshot = row.payload as unknown as MemoryTakeoverActiveSnapshot;
+        }
+        if (row.recordId === 'latest_batch' && !result.latestBatch) {
+            result.latestBatch = row.payload as unknown as MemoryTakeoverBatchResult;
+        }
+        if (row.recordId === 'consolidation' && !result.consolidation) {
+            result.consolidation = row.payload as unknown as MemoryTakeoverConsolidationResult;
+        }
+    }
+    return result;
+}
+
+/**
+ * 功能：写入 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @param record compareKey 索引记录。
+ * @returns 异步完成。
+ */
+export async function saveMemoryCompareKeyIndexRecord(chatKey: string, record: MemoryCompareKeyIndexRecord): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'comparekey_index', {
+        recordId: String(record.entryId ?? '').trim(),
+        payload: ({
+            ...record,
+            chatKey: normalizedChatKey,
+            entryId: String(record.entryId ?? '').trim(),
+            entityKey: String(record.entityKey ?? '').trim(),
+            entryType: String(record.entryType ?? '').trim(),
+            compareKey: String(record.compareKey ?? '').trim(),
+            matchKeys: Array.from(new Set((record.matchKeys ?? []).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean))),
+            schemaVersion: String(record.schemaVersion ?? '').trim(),
+            canonicalName: String(record.canonicalName ?? '').trim(),
+            legacyCompareKeys: Array.from(new Set((record.legacyCompareKeys ?? []).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean))),
+            title: String(record.title ?? '').trim(),
+            updatedAt: Number(record.updatedAt ?? Date.now()) || Date.now(),
+        }) as unknown as Record<string, unknown>,
+        ts: Number(record.updatedAt ?? Date.now()) || Date.now(),
+    });
+}
+
+/**
+ * 功能：读取当前聊天的 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @returns 索引记录列表。
+ */
+export async function loadMemoryCompareKeyIndexRecords(chatKey: string): Promise<MemoryCompareKeyIndexRecord[]> {
+    const rows = await queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'comparekey_index', {
+        order: 'asc',
+        limit: 5000,
+    });
+    return rows
+        .map((row: DBChatPluginRecord): MemoryCompareKeyIndexRecord | null => {
+            const payload = toRecord(row.payload);
+            const entryId = normalizeText(payload.entryId);
+            if (!entryId) {
+                return null;
+            }
+            return {
+                chatKey: normalizeText(payload.chatKey) || normalizeText(chatKey),
+                entryId,
+                entityKey: normalizeText(payload.entityKey),
+                entryType: normalizeText(payload.entryType),
+                compareKey: normalizeText(payload.compareKey),
+                matchKeys: normalizeStringArray(payload.matchKeys),
+                schemaVersion: normalizeText(payload.schemaVersion),
+                canonicalName: normalizeText(payload.canonicalName),
+                legacyCompareKeys: normalizeStringArray(payload.legacyCompareKeys),
+                title: normalizeText(payload.title),
+                updatedAt: Number(payload.updatedAt ?? row.ts ?? 0) || 0,
+            };
+        })
+        .filter((item: MemoryCompareKeyIndexRecord | null): item is MemoryCompareKeyIndexRecord => Boolean(item));
+}
+
+/**
+ * 功能：按 entryId 删除 compareKey 索引记录。
+ * @param chatKey 聊天键。
+ * @param entryId 条目 ID。
+ * @returns 异步完成。
+ */
+export async function deleteMemoryCompareKeyIndexRecord(chatKey: string, entryId: string): Promise<void> {
+    const normalizedChatKey = normalizeText(chatKey);
+    const normalizedEntryId = String(entryId ?? '').trim();
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizedChatKey, 'comparekey_index', {
+        order: 'asc',
+        limit: 5000,
+    });
+    const targetIds = rows
+        .filter((row: DBChatPluginRecord): boolean => String(row.recordId ?? '').trim() === normalizedEntryId)
+        .map((row: DBChatPluginRecord): number => Number(row.id))
+        .filter((id: number): boolean => Number.isFinite(id));
+    if (targetIds.length <= 0) {
+        return;
+    }
+    await db.chat_plugin_records.bulkDelete(targetIds);
+}
+
+/**
+ * 功能：写入接管日志。
+ * @param chatKey 聊天键。
+ * @param record 日志记录。
+ * @returns 异步完成。
+ */
+export async function appendMemoryTakeoverLog(chatKey: string, record: MemoryTakeoverLogRecord): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_logs', {
+        recordId: `${record.takeoverId}:${record.stage}:${record.ts}`,
+        payload: record as unknown as Record<string, unknown>,
+        ts: record.ts,
+    });
+}
+
+/**
+ * 功能：读取接管日志。
+ * @param chatKey 聊天键。
+ * @param limit 限制数量。
+ * @returns 日志列表。
+ */
+export async function loadMemoryTakeoverLogs(chatKey: string, limit: number = 120): Promise<MemoryTakeoverLogRecord[]> {
+    const rows = await querySdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), 'takeover_logs', {
+        order: 'desc',
+        limit,
+    });
+    return rows.map((row: DBChatPluginRecord): MemoryTakeoverLogRecord => row.payload as unknown as MemoryTakeoverLogRecord);
+}
+
+/**
+ * 功能：写入单条梦境记录。
+ * @param chatKey 聊天键。
+ * @param collection 梦境集合名。
+ * @param recordId 记录标识。
+ * @param payload 记录载荷。
+ * @param ts 记录时间戳。
+ * @returns 异步完成。
+ */
+export async function saveMemoryDreamRecord(
+    chatKey: string,
+    collection: MemoryDreamRecordCollection,
+    recordId: string,
+    payload: Record<string, unknown>,
+    ts: number = Date.now(),
+): Promise<void> {
+    await appendSdkPluginChatRecord(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), collection, {
+        recordId: normalizeText(recordId),
+        payload,
+        ts: Number(ts ?? Date.now()) || Date.now(),
+    });
+}
+
+/**
+ * 功能：读取梦境记录列表。
+ * @param chatKey 聊天键。
+ * @param collection 梦境集合名。
+ * @param limit 返回数量。
+ * @returns 记录列表。
+ */
+export async function loadMemoryDreamRecords(
+    chatKey: string,
+    collection: MemoryDreamRecordCollection,
+    limit: number = 200,
+): Promise<DBChatPluginRecord[]> {
+    return queryLatestSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, normalizeText(chatKey), collection, {
+        order: 'desc',
+        limit,
+    });
+}
+
+/**
+ * 功能：安全归一化文本。
+ * @param value 原始值。
+ * @returns 归一化结果。
+ */
+function normalizeText(value: unknown): string {
+    return String(value ?? '').trim();
+}
+
+/**
+ * 功能：将未知输入归一化为字符串数组并去重。
+ * @param value 原始值。
+ * @returns 字符串数组。
+ */
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const row of value) {
+        const normalized = normalizeText(row);
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化接管批次错误类型。
+ * @param value 原始值。
+ * @returns 错误类型。
+ */
+function normalizeTakeoverBatchErrorKind(value: unknown): MemoryTakeoverBatchFailureState['lastErrorKind'] | undefined {
+    const normalized = normalizeText(value);
+    if (!normalized) {
+        return undefined;
+    }
+    const allowedKinds: MemoryTakeoverBatchFailureState['lastErrorKind'][] = [
+        'llm_unavailable',
+        'llm_timeout',
+        'rate_limit',
+        'schema_invalid',
+        'admission_failed',
+        'manual_abort',
+        'unknown',
+    ];
+    return allowedKinds.includes(normalized as MemoryTakeoverBatchFailureState['lastErrorKind'])
+        ? normalized as MemoryTakeoverBatchFailureState['lastErrorKind']
+        : undefined;
+}
+
+/**
+ * 功能：从错误消息中推断接管批次错误类型。
+ * @param errorMessage 错误消息。
+ * @returns 错误类型。
+ */
+function inferTakeoverBatchErrorKind(errorMessage: string | undefined): MemoryTakeoverBatchFailureState['lastErrorKind'] | undefined {
+    const normalized = normalizeText(errorMessage).toLowerCase();
+    if (!normalized) {
+        return undefined;
+    }
+    if (normalized.includes('admission_isolated')) {
+        return 'admission_failed';
+    }
+    if (normalized.includes('rate limit') || normalized.includes('too many requests') || normalized.includes('429')) {
+        return 'rate_limit';
+    }
+    if (normalized.includes('timeout') || normalized.includes('timed out')) {
+        return 'llm_timeout';
+    }
+    if (normalized.includes('unavailable') || normalized.includes('overloaded') || normalized.includes('service')) {
+        return 'llm_unavailable';
+    }
+    if (normalized.includes('schema') || normalized.includes('json') || normalized.includes('parse')) {
+        return 'schema_invalid';
+    }
+    if (normalized.includes('manual_abort')) {
+        return 'manual_abort';
+    }
+    return 'unknown';
+}
+
+/**
+ * 功能：安全归一化对象。
+ * @param value 原始值。
+ * @returns 对象结果。
+ */
+function toRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value as Record<string, unknown>;
+}
+
+/**
+ * 功能：归一化严格一致性基准结构。
+ * @param value 原始基准值。
+ * @returns 归一化后的基准，无法识别时返回 undefined。
+ */
+function normalizeMemoryPromptParityBaseline(value: unknown): MemoryPromptParityBaseline | undefined {
+    const record = toRecord(value);
+    const finalPromptText = normalizeText(record.finalPromptText);
+    if (!finalPromptText) {
+        return undefined;
+    }
+    const insertIndex = Number(record.insertIndex);
+    return {
+        finalPromptText,
+        insertIndex: Number.isFinite(insertIndex) ? Math.trunc(insertIndex) : -1,
+        insertedMemoryBlock: normalizeText(record.insertedMemoryBlock),
+        reasonCodes: normalizeStringArray(record.reasonCodes),
+        matchedActorKeys: normalizeStringArray(record.matchedActorKeys),
+        matchedEntryIds: normalizeStringArray(record.matchedEntryIds),
+    };
+}
+
+/**
+ * 功能：归档指定聊天。
+ * @param chatKey 聊天键。
+ * @param reason 原因。
+ * @returns 执行结果。
  */
 export async function archiveMemoryChat(chatKey: string, reason: string = 'soft_delete'): Promise<void> {
     const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey);
-    const state = (row?.state ?? {}) as Record<string, unknown>;
+    const state = toRecord(row?.state);
     await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey, {
         ...state,
         archived: true,
@@ -287,15 +812,13 @@ export async function archiveMemoryChat(chatKey: string, reason: string = 'soft_
 }
 
 /**
- * 功能：恢复指定聊天的归档状态。
- * 参数：
- *   chatKey (string)：聊天键。
- * 返回：
- *   Promise<void>：异步完成。
+ * 功能：恢复指定聊天归档状态。
+ * @param chatKey 聊天键。
+ * @returns 执行结果。
  */
 export async function restoreArchivedMemoryChat(chatKey: string): Promise<void> {
     const row = await readSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey);
-    const state = (row?.state ?? {}) as Record<string, unknown>;
+    const state = toRecord(row?.state);
     await writeSdkPluginChatState(MEMORY_OS_PLUGIN_ID, chatKey, {
         ...state,
         archived: false,
@@ -305,119 +828,66 @@ export async function restoreArchivedMemoryChat(chatKey: string): Promise<void> 
 }
 
 /**
- * 功能：执行聊天级立即清理。
- * 参数：
- *   chatKey (string)：聊天键。
- *   options ({ includeAudit?: boolean })：是否连审计一起删除。
- * 返回：
- *   Promise<void>：异步完成。
- */
-export async function purgeMemoryChat(
-    chatKey: string,
-    options: { includeAudit?: boolean } = {},
-): Promise<void> {
-    await clearMemoryChatData(chatKey, {
-        includeAudit: options.includeAudit ?? false,
-    });
-}
-
-/**
- * 功能：清空指定聊天下的 MemoryOS 数据，并同步删除插件级状态与记录。
- *
- * 参数：
- *   chatKey (string)：要清理的聊天键。
- *   options (ClearMemoryChatDataOptions)：清理选项，可控制是否保留审计记录。
- *
- * 返回：
- *   Promise<void>：清理完成后结束。
+ * 功能：按聊天清理统一记忆数据。
+ * @param chatKey 聊天键。
+ * @param options 清理参数。
+ * @returns 执行结果。
  */
 export async function clearMemoryChatData(
     chatKey: string,
     options: ClearMemoryChatDataOptions = {},
 ): Promise<void> {
-    const includeAudit = options.includeAudit ?? true;
-    const writableTables = includeAudit
+    const includeAudit = options.includeAudit !== false;
+    const txTables = includeAudit
         ? [
             db.events,
-            db.facts,
-            db.world_state,
-            db.summaries,
             db.templates,
             db.audit,
             db.meta,
-            db.worldinfo_cache,
-            db.template_bindings,
-            db.memory_cards,
-            db.memory_card_embeddings,
-            db.memory_card_meta,
-            db.relationship_memory,
-            db.memory_recall_log,
             db.memory_mutation_history,
+            db.memory_entry_audit_records,
+            db.memory_entries,
+            db.memory_entry_types,
+            db.actor_memory_profiles,
+            db.role_entry_memory,
+            db.memory_relationships,
+            db.summary_snapshots,
+            db.world_profile_bindings,
         ]
         : [
             db.events,
-            db.facts,
-            db.world_state,
-            db.summaries,
             db.templates,
             db.meta,
-            db.worldinfo_cache,
-            db.template_bindings,
-            db.memory_cards,
-            db.memory_card_embeddings,
-            db.memory_card_meta,
-            db.relationship_memory,
-            db.memory_recall_log,
             db.memory_mutation_history,
+            db.memory_entry_audit_records,
+            db.memory_entries,
+            db.memory_entry_types,
+            db.actor_memory_profiles,
+            db.role_entry_memory,
+            db.memory_relationships,
+            db.summary_snapshots,
+            db.world_profile_bindings,
         ];
 
-    await db.transaction('rw', writableTables, async (): Promise<void> => {
-        const deleteTasks: Array<Promise<unknown>> = [
-            db.events
-                .where('[chatKey+ts]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
-            db.facts
-                .where('[chatKey+updatedAt]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
-            db.world_state
-                .where('[chatKey+path]')
-                .between([chatKey, ''], [chatKey, '\uffff'])
-                .delete(),
-            db.summaries
-                .where('[chatKey+level+createdAt]')
-                .between([chatKey, '', Dexie.minKey], [chatKey, '\uffff', Dexie.maxKey])
-                .delete(),
-            db.templates
-                .where('[chatKey+createdAt]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
+    await db.transaction('rw', txTables, async (): Promise<void> => {
+        const tasks: Array<Promise<unknown>> = [
+            db.events.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
+            db.templates.where('[chatKey+createdAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
             db.meta.delete(chatKey),
-            db.worldinfo_cache.where('chatKey').equals(chatKey).delete(),
-            db.template_bindings.where('chatKey').equals(chatKey).delete(),
-            db.memory_cards.where('[chatKey+updatedAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
-            db.memory_card_embeddings.where('chatKey').equals(chatKey).delete(),
-            db.memory_card_meta.where('[chatKey+updatedAt]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
-            db.relationship_memory
-                .where('[chatKey+updatedAt]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
-            db.memory_recall_log
-                .where('[chatKey+ts]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
-            db.memory_mutation_history
-                .where('[chatKey+ts]')
-                .between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey])
-                .delete(),
+            db.memory_mutation_history.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
+            db.memory_entry_audit_records.where('[chatKey+ts]').between([chatKey, Dexie.minKey], [chatKey, Dexie.maxKey]).delete(),
+            db.memory_entries.where('chatKey').equals(chatKey).delete(),
+            db.memory_entry_types.where('chatKey').equals(chatKey).delete(),
+            db.actor_memory_profiles.where('chatKey').equals(chatKey).delete(),
+            db.role_entry_memory.where('chatKey').equals(chatKey).delete(),
+            db.memory_relationships.where('chatKey').equals(chatKey).delete(),
+            db.summary_snapshots.where('chatKey').equals(chatKey).delete(),
+            db.world_profile_bindings.where('chatKey').equals(chatKey).delete(),
         ];
-
         if (includeAudit) {
-            deleteTasks.push(db.audit.where('chatKey').equals(chatKey).delete());
+            tasks.push(db.audit.where('chatKey').equals(chatKey).delete());
         }
-
-        await Promise.all(deleteTasks);
+        await Promise.all(tasks);
     });
 
     await Promise.all([
@@ -433,66 +903,52 @@ export async function clearMemoryChatData(
                 },
             },
         }),
+        clearAllVectorDataForChat(chatKey),
     ]);
-    const chatData = await db.chat_documents.get(chatKey);
-    if (chatData?.shared?.signals?.[MEMORY_OS_PLUGIN_ID]) {
-        const nextSignals = { ...(chatData.shared.signals ?? {}) };
-        delete nextSignals[MEMORY_OS_PLUGIN_ID];
-        await db.chat_documents.update(chatKey, {
-            shared: {
-                ...chatData.shared,
-                signals: nextSignals,
-            },
-        } as unknown as ChatSharedPatch);
-    }
 }
 
 /**
- * 功能：导出指定聊天在 MemoryOS 全部表中的快照，供测试与诊断使用。
+ * 功能：导出聊天数据库快照。
  * @param chatKey 聊天键。
- * @returns 当前聊天数据库快照。
+ * @returns 快照结果。
  */
 export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise<MemoryChatDatabaseSnapshot> {
-    const normalizedChatKey = String(chatKey ?? '').trim();
+    const normalizedChatKey = normalizeText(chatKey);
     const [
         events,
-        facts,
-        worldState,
-        summaries,
         templates,
         audit,
         meta,
-        worldinfoCache,
-        templateBindings,
-        memoryCards,
-        memoryCardEmbeddings,
-        memoryCardMeta,
-        relationshipMemory,
-        memoryRecallLog,
         memoryMutationHistory,
+        memoryEntryAuditRecords,
+        memoryEntries,
+        memoryEntryTypes,
+        actorMemoryProfiles,
+        roleEntryMemory,
+        memoryRelationships,
+        summarySnapshots,
+        worldProfileBindings,
         pluginState,
         pluginRecords,
     ] = await Promise.all([
         db.events.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.facts.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.world_state.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.summaries.where('chatKey').equals(normalizedChatKey).toArray(),
         db.templates.where('chatKey').equals(normalizedChatKey).toArray(),
         db.audit.where('chatKey').equals(normalizedChatKey).toArray(),
         db.meta.get(normalizedChatKey),
-        db.worldinfo_cache.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.template_bindings.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.memory_cards.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.memory_card_embeddings.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.memory_card_meta.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.relationship_memory.where('chatKey').equals(normalizedChatKey).toArray(),
-        db.memory_recall_log.where('chatKey').equals(normalizedChatKey).toArray(),
         db.memory_mutation_history.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_entry_audit_records.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_entries.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_entry_types.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.actor_memory_profiles.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.role_entry_memory.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.memory_relationships.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.summary_snapshots.where('chatKey').equals(normalizedChatKey).toArray(),
+        db.world_profile_bindings.where('chatKey').equals(normalizedChatKey).toArray(),
         db.chat_plugin_state.get([MEMORY_OS_PLUGIN_ID, normalizedChatKey]),
         db.chat_plugin_records
             .where('pluginId')
             .equals(MEMORY_OS_PLUGIN_ID)
-            .and((row: DBChatPluginRecord): boolean => String(row.chatKey ?? '').trim() === normalizedChatKey)
+            .and((row: DBChatPluginRecord): boolean => normalizeText(row.chatKey) === normalizedChatKey)
             .toArray(),
     ]);
 
@@ -500,30 +956,28 @@ export async function exportMemoryChatDatabaseSnapshot(chatKey: string): Promise
         chatKey: normalizedChatKey,
         generatedAt: Date.now(),
         events,
-        facts,
-        worldState,
-        summaries,
         templates,
         audit,
         meta: meta ?? null,
-        worldinfoCache,
-        templateBindings,
-        memoryCards,
-        memoryCardEmbeddings,
-        memoryCardMeta,
-        relationshipMemory,
-        memoryRecallLog,
         memoryMutationHistory,
+        memoryEntryAuditRecords,
+        memoryEntries,
+        memoryEntryTypes,
+        actorMemoryProfiles,
+        roleEntryMemory,
+        memoryRelationships,
+        summarySnapshots,
+        worldProfileBindings,
         pluginState: pluginState ?? null,
         pluginRecords,
     };
 }
 
 /**
- * 功能：导出完整提示词测试包，便于在 memory:test 页面复现当前聊天。
+ * 功能：导出 Prompt 测试包。
  * @param chatKey 聊天键。
- * @param options 导出附加信息（prompt、设置、期望）。
- * @returns 可导入的测试包 JSON 对象。
+ * @param options 导出参数。
+ * @returns 测试包结果。
  */
 export async function exportMemoryPromptTestBundle(
     chatKey: string,
@@ -534,27 +988,22 @@ export async function exportMemoryPromptTestBundle(
         sourceMessageId?: string;
         settings?: Record<string, unknown>;
         expectation?: MemoryPromptTestBundle['expectation'];
+        parityBaseline?: MemoryPromptParityBaseline;
         runResult?: Record<string, unknown>;
     } = {},
 ): Promise<MemoryPromptTestBundle> {
-    const normalizedChatKey = String(chatKey ?? '').trim();
+    const normalizedChatKey = normalizeText(chatKey);
     const database = await exportMemoryChatDatabaseSnapshot(normalizedChatKey);
     const hasOverridePromptFixture = Array.isArray(options.promptFixture);
     const snapshot = options.captureSnapshot;
-    const snapshotPromptFixture = Array.isArray(snapshot?.promptFixture) ? snapshot!.promptFixture : [];
+    const snapshotPromptFixture = Array.isArray(snapshot?.promptFixture) ? snapshot.promptFixture : [];
     const resolvedPromptFixture = hasOverridePromptFixture
         ? (options.promptFixture as Array<Record<string, unknown>>)
         : snapshotPromptFixture;
-    const resolvedQuery = String(
-        options.query
-        ?? (hasOverridePromptFixture ? '' : snapshot?.query ?? '')
-        ?? '',
-    ).trim();
-    const resolvedSourceMessageId = String(
-        options.sourceMessageId
-        ?? (hasOverridePromptFixture ? '' : snapshot?.sourceMessageId ?? '')
-        ?? '',
-    ).trim() || undefined;
+    const resolvedQuery = normalizeText(options.query ?? (hasOverridePromptFixture ? '' : snapshot?.query ?? ''));
+    const resolvedSourceMessageId = normalizeText(
+        options.sourceMessageId ?? (hasOverridePromptFixture ? '' : snapshot?.sourceMessageId ?? ''),
+    ) || undefined;
     const captureMeta: MemoryPromptTestBundle['captureMeta'] = (!hasOverridePromptFixture && snapshot && resolvedPromptFixture.length > 0)
         ? {
             mode: 'exact_replay',
@@ -565,6 +1014,12 @@ export async function exportMemoryPromptTestBundle(
             mode: 'simulated_prompt',
             note: resolvedPromptFixture.length > 0 ? 'manual_prompt_fixture' : 'missing_prompt_fixture',
         };
+    const parityBaseline = normalizeMemoryPromptParityBaseline(
+        options.parityBaseline
+        ?? toRecord(options.runResult).parityBaseline
+        ?? options.runResult,
+    );
+
     return {
         version: '1.0.0',
         exportedAt: Date.now(),
@@ -576,120 +1031,101 @@ export async function exportMemoryPromptTestBundle(
         settings: options.settings && typeof options.settings === 'object' ? options.settings : {},
         captureMeta,
         expectation: options.expectation,
+        parityBaseline,
         runResult: options.runResult,
     };
 }
 
 /**
- * 功能：导入完整提示词测试包并写入测试 chatKey，避免污染原聊天数据。
- * @param bundle 测试包对象。
- * @param options 导入选项。
- * @returns 导入结果与实际使用的 chatKey。
+ * 功能：导入 Prompt 测试包。
+ * @param bundle 测试包。
+ * @param options 导入参数。
+ * @returns 导入结果。
  */
 export async function importMemoryPromptTestBundle(
     bundle: MemoryPromptTestBundle,
     options: { targetChatKey?: string; skipClear?: boolean } = {},
 ): Promise<ImportMemoryPromptTestBundleResult> {
     const sourceDatabase = bundle?.database;
-    const targetChatKey = String(options.targetChatKey ?? `memory_test::${Date.now()}`).trim();
-    if (!sourceDatabase || !String(sourceDatabase.chatKey ?? '').trim()) {
+    const targetChatKey = normalizeText(options.targetChatKey ?? `memory_test::${Date.now()}`);
+    if (!sourceDatabase || !normalizeText(sourceDatabase.chatKey)) {
         throw new Error('invalid_bundle_database');
     }
 
-    const mapChatKey = <T extends Record<string, unknown>>(row: T): T => {
-        if (row && typeof row === 'object') {
-            return {
-                ...row,
-                chatKey: targetChatKey,
-            } as T;
-        }
-        return ({
+    const mapChatKey = (row: unknown): Record<string, unknown> => {
+        const record = toRecord(row);
+        return {
+            ...record,
             chatKey: targetChatKey,
-            value: row,
-        } as unknown) as T;
+        };
     };
 
     if (options.skipClear !== true) {
         await clearMemoryChatData(targetChatKey, { includeAudit: true });
     }
 
-    const normalizedEvents = normalizeEventRows(sourceDatabase.events ?? [], targetChatKey);
-    const normalizedFacts = normalizeFactRows(sourceDatabase.facts ?? [], targetChatKey);
-    const normalizedWorldState = normalizeWorldStateRows(sourceDatabase.worldState ?? [], targetChatKey);
-    const normalizedSummaries = normalizeSummaryRows(sourceDatabase.summaries ?? [], targetChatKey);
-    const normalizedPluginState = sourceDatabase.pluginState
-        ? {
-            ...(sourceDatabase.pluginState as Record<string, unknown>),
+    await db.transaction('rw', [
+        db.events,
+        db.templates,
+        db.audit,
+        db.meta,
+        db.memory_mutation_history,
+        db.memory_entry_audit_records,
+        db.memory_entries,
+        db.memory_entry_types,
+        db.actor_memory_profiles,
+        db.role_entry_memory,
+        db.memory_relationships,
+        db.summary_snapshots,
+        db.world_profile_bindings,
+    ], async (): Promise<void> => {
+        await Promise.all([
+            db.events.bulkPut((sourceDatabase.events ?? []).map((row: DBEvent): DBEvent => ({ ...row, chatKey: targetChatKey }))),
+            db.templates.bulkPut((sourceDatabase.templates ?? []).map((row) => mapChatKey(row) as unknown as DBTemplate)),
+            db.audit.bulkPut((sourceDatabase.audit ?? []).map((row) => mapChatKey(row) as unknown as DBAudit)),
+            sourceDatabase.meta
+                ? db.meta.put({ ...toRecord(sourceDatabase.meta), chatKey: targetChatKey } as DBMeta)
+                : Promise.resolve(),
+            db.memory_mutation_history.bulkPut((sourceDatabase.memoryMutationHistory ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryMutationHistory)),
+            db.memory_entry_audit_records.bulkPut((sourceDatabase.memoryEntryAuditRecords ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntryAuditRecord)),
+            db.memory_entries.bulkPut((sourceDatabase.memoryEntries ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntry)),
+            db.memory_entry_types.bulkPut((sourceDatabase.memoryEntryTypes ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryEntryType)),
+            db.actor_memory_profiles.bulkPut((sourceDatabase.actorMemoryProfiles ?? []).map((row) => mapChatKey(row) as unknown as DBActorMemoryProfile)),
+            db.role_entry_memory.bulkPut((sourceDatabase.roleEntryMemory ?? []).map((row) => mapChatKey(row) as unknown as DBRoleEntryMemory)),
+            db.memory_relationships.bulkPut((sourceDatabase.memoryRelationships ?? []).map((row) => mapChatKey(row) as unknown as DBMemoryRelationship)),
+            db.summary_snapshots.bulkPut((sourceDatabase.summarySnapshots ?? []).map((row) => mapChatKey(row) as unknown as DBSummarySnapshot)),
+            db.world_profile_bindings.bulkPut((sourceDatabase.worldProfileBindings ?? []).map((row) => mapChatKey(row) as unknown as DBWorldProfileBinding)),
+        ]);
+    });
+
+    const pluginStateRecord = toRecord(sourceDatabase.pluginState);
+    if (Object.keys(pluginStateRecord).length > 0) {
+        await db.chat_plugin_state.put({
+            ...(pluginStateRecord as unknown as DBChatPluginState),
             pluginId: MEMORY_OS_PLUGIN_ID,
             chatKey: targetChatKey,
-            updatedAt: toSafeNumber((sourceDatabase.pluginState as Record<string, unknown>).updatedAt, Date.now()),
-        } as DBChatPluginState
-        : null;
-    const normalizedPluginRecords = (sourceDatabase.pluginRecords ?? [])
+            updatedAt: Number(pluginStateRecord.updatedAt ?? Date.now()),
+        });
+    }
+
+    const pluginRecords = (sourceDatabase.pluginRecords ?? [])
         .filter((row: unknown): boolean => Boolean(row) && typeof row === 'object')
         .map((row: unknown): DBChatPluginRecord => {
             const record = row as Record<string, unknown>;
             return {
-                ...(record as DBChatPluginRecord),
+                ...(record as unknown as DBChatPluginRecord),
                 id: undefined,
                 pluginId: MEMORY_OS_PLUGIN_ID,
                 chatKey: targetChatKey,
-                collection: toSafeString(record.collection, 'imported'),
-                recordId: toSafeString(record.recordId, `record::${crypto.randomUUID()}`),
-                ts: toSafeNumber(record.ts, Date.now()),
-                updatedAt: toSafeNumber(record.updatedAt, Date.now()),
-                payload: (record.payload && typeof record.payload === 'object')
-                    ? (record.payload as Record<string, unknown>)
-                    : {},
+                collection: normalizeText(record.collection) || 'imported',
+                recordId: normalizeText(record.recordId) || `record::${crypto.randomUUID()}`,
+                ts: Number(record.ts ?? Date.now()),
+                updatedAt: Number(record.updatedAt ?? Date.now()),
+                payload: toRecord(record.payload),
             };
         });
-
-    await db.transaction('rw', [
-        db.events,
-        db.facts,
-        db.world_state,
-        db.summaries,
-        db.templates,
-        db.audit,
-        db.meta,
-        db.worldinfo_cache,
-        db.template_bindings,
-        db.memory_cards,
-        db.memory_card_embeddings,
-        db.memory_card_meta,
-        db.relationship_memory,
-        db.memory_recall_log,
-        db.memory_mutation_history,
-    ], async (): Promise<void> => {
-        await Promise.all([
-            db.events.bulkPut(normalizedEvents),
-            db.facts.bulkPut(normalizedFacts),
-            db.world_state.bulkPut(normalizedWorldState),
-            db.summaries.bulkPut(normalizedSummaries),
-            db.templates.bulkPut((sourceDatabase.templates ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBTemplate)),
-            db.audit.bulkPut((sourceDatabase.audit ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBAudit)),
-            sourceDatabase.meta
-                ? db.meta.put({
-                    ...(sourceDatabase.meta as Record<string, unknown>),
-                    chatKey: targetChatKey,
-                } as DBMeta)
-                : Promise.resolve(),
-            db.worldinfo_cache.bulkPut((sourceDatabase.worldinfoCache ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBWorldInfoCache)),
-            db.template_bindings.bulkPut((sourceDatabase.templateBindings ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBTemplateBinding)),
-            db.memory_cards.bulkPut((sourceDatabase.memoryCards ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBMemoryCard)),
-            db.memory_card_embeddings.bulkPut((sourceDatabase.memoryCardEmbeddings ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBMemoryCardEmbedding)),
-            db.memory_card_meta.bulkPut((sourceDatabase.memoryCardMeta ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBMemoryCardMeta)),
-            db.relationship_memory.bulkPut((sourceDatabase.relationshipMemory ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBRelationshipMemory)),
-            db.memory_recall_log.bulkPut((sourceDatabase.memoryRecallLog ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBMemoryRecallLog)),
-            db.memory_mutation_history.bulkPut((sourceDatabase.memoryMutationHistory ?? []).map((row) => mapChatKey(row as unknown as Record<string, unknown>) as DBMemoryMutationHistory)),
-        ]);
-    });
-
-    if (normalizedPluginState) {
-        await db.chat_plugin_state.put(normalizedPluginState);
-    }
-    if (normalizedPluginRecords.length > 0) {
-        await db.chat_plugin_records.bulkPut(normalizedPluginRecords);
+    if (pluginRecords.length > 0) {
+        await db.chat_plugin_records.bulkPut(pluginRecords);
     }
 
     return {
@@ -697,6 +1133,7 @@ export async function importMemoryPromptTestBundle(
         importedAt: Date.now(),
         bundle: {
             ...bundle,
+            parityBaseline: normalizeMemoryPromptParityBaseline(bundle.parityBaseline),
             database: {
                 ...sourceDatabase,
                 chatKey: targetChatKey,
@@ -706,56 +1143,43 @@ export async function importMemoryPromptTestBundle(
 }
 
 /**
- * 功能：清空整个 MemoryOS 数据分区，用于彻底重置或重建。
- *
- * 参数：
- *   无。
- *
- * 返回：
- *   Promise<void>：清理完成后结束。
+ * 功能：清空全部统一记忆数据。
+ * @returns 执行结果。
  */
 export async function clearAllMemoryData(): Promise<void> {
-    await db.transaction(
-        'rw',
-        [
-            db.events,
-            db.facts,
-            db.world_state,
-            db.summaries,
-            db.templates,
-            db.audit,
-            db.meta,
-            db.worldinfo_cache,
-            db.template_bindings,
-            db.memory_cards,
-            db.memory_card_embeddings,
-            db.memory_card_meta,
-            db.relationship_memory,
-            db.memory_recall_log,
-            db.memory_mutation_history,
-            db.chat_plugin_state,
-            db.chat_plugin_records,
-        ],
-        async (): Promise<void> => {
-            await Promise.all([
-                db.events.clear(),
-                db.facts.clear(),
-                db.world_state.clear(),
-                db.summaries.clear(),
-                db.templates.clear(),
-                db.audit.clear(),
-                db.meta.clear(),
-                db.worldinfo_cache.clear(),
-                db.template_bindings.clear(),
-                db.memory_cards.clear(),
-                db.memory_card_embeddings.clear(),
-                db.memory_card_meta.clear(),
-                db.relationship_memory.clear(),
-                db.memory_recall_log.clear(),
-                db.memory_mutation_history.clear(),
-                db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
-                db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
-            ]);
-        },
-    );
+    await db.transaction('rw', [
+        db.events,
+        db.templates,
+        db.audit,
+        db.meta,
+        db.memory_mutation_history,
+        db.memory_entry_audit_records,
+        db.memory_entries,
+        db.memory_entry_types,
+        db.actor_memory_profiles,
+        db.role_entry_memory,
+        db.memory_relationships,
+        db.summary_snapshots,
+        db.world_profile_bindings,
+        db.chat_plugin_state,
+        db.chat_plugin_records,
+    ], async (): Promise<void> => {
+        await Promise.all([
+            db.events.clear(),
+            db.templates.clear(),
+            db.audit.clear(),
+            db.meta.clear(),
+            db.memory_mutation_history.clear(),
+            db.memory_entry_audit_records.clear(),
+            db.memory_entries.clear(),
+            db.memory_entry_types.clear(),
+            db.actor_memory_profiles.clear(),
+            db.role_entry_memory.clear(),
+            db.memory_relationships.clear(),
+            db.summary_snapshots.clear(),
+            db.world_profile_bindings.clear(),
+            db.chat_plugin_state.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
+            db.chat_plugin_records.where('pluginId').equals(MEMORY_OS_PLUGIN_ID).delete(),
+        ]);
+    });
 }

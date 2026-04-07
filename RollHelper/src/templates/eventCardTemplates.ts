@@ -13,28 +13,11 @@ import eventListItemTemplateHtml from "./html/roll-cards/event-list-item.html?ra
 import eventListItemMobileTemplateHtml from "./html/roll-cards/event-list-item.mobile.html?raw";
 import eventRollResultCardTemplateHtml from "./html/roll-cards/event-roll-result-card.html?raw";
 import eventRollResultCardMobileTemplateHtml from "./html/roll-cards/event-roll-result-card.mobile.html?raw";
+import { ensureSdkSharedRuntimeStyles } from "../../../SDK/runtime-styles";
 
 const EVENT_CARD_STYLE_ID_Event = "st-rh-event-card-styles-v1";
-const EVENT_CARD_EXTERNAL_STYLE_LINK_ID_PREFIX_Event = "st-rh-event-card-external-style-v1";
 const EVENT_CARD_CUSTOM_CLASS_PREFIX_Event = "custom-";
 const EVENT_CARD_CUSTOM_CLASS_SELECTOR_PATTERN_Event = /\.(?=[A-Za-z_\\])((?:\\.|[A-Za-z0-9_%@/\-[\]:])+)/g;
-const EVENT_CARD_EXTERNAL_STYLE_URLS_Event = [
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/all.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/sharp-solid.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/sharp-regular.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/sharp-light.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/duotone.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/sharp-duotone-solid.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/chisel-regular.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/etch-solid.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/graphite-thin.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/jelly-regular.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/notdog-solid.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/slab-regular.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/thumbprint-light.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/utility-semibold.css",
-  "https://site-assets.fontawesome.com/releases/v7.2.0/css/whiteboard-semibold.css",
-];
 const fontFaceCssText = `@font-face {
   font-family: "STRHSourceSong";
   src: url("${new URL(/* @vite-ignore */ "./assets/font/思源宋体.otf", import.meta.url).href}") format("opentype");
@@ -72,27 +55,20 @@ export function buildEventCardStylesCssTextEvent(): string {
   return eventCardRuntimeCssText;
 }
 
+/**
+ * 功能：兼容旧入口，转为调用 SDK 的全局 Font Awesome 样式挂载器。
+ * @param doc 目标文档对象，默认使用当前页面文档
+ * @returns void：无返回值
+ */
 export function ensureEventCardExternalStylesEvent(doc: Document = document): void {
-  if (!doc?.head) return;
-
-  EVENT_CARD_EXTERNAL_STYLE_URLS_Event.forEach((href, index) => {
-    const id = `${EVENT_CARD_EXTERNAL_STYLE_LINK_ID_PREFIX_Event}-${index}`;
-    const existing = doc.getElementById(id) as HTMLLinkElement | null;
-    if (existing) {
-      if (existing.href !== href) {
-        existing.href = href;
-      }
-      return;
-    }
-
-    const link = doc.createElement("link");
-    link.id = id;
-    link.rel = "stylesheet";
-    link.href = href;
-    doc.head.appendChild(link);
-  });
+  ensureSdkSharedRuntimeStyles(doc);
 }
 
+/**
+ * 功能：确保事件卡片样式与共享图标样式已经注入页面。
+ * @param doc 目标文档对象，默认使用当前页面文档
+ * @returns void：无返回值
+ */
 export function ensureEventCardStylesEvent(doc: Document = document): void {
   if (!doc?.head) return;
 

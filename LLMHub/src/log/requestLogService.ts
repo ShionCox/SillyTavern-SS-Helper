@@ -6,21 +6,64 @@ import {
 } from '../../../SDK/db';
 import { logger } from '../index';
 import type {
+    CapabilityKind,
     LLMRequestLogEntry,
     LLMRequestLogQueryOptions,
     LLMRequestLogRequestSnapshot,
     LLMRequestLogResponseSnapshot,
+    LLMRunResult,
     RequestRecord,
     RequestState,
 } from '../schema/types';
 
 const REQUEST_LOG_MAX_RECORDS = 2000;
-const ARCHIVABLE_STATES = new Set<RequestState>(['completed', 'failed', 'cancelled', 'overlay_waiting']);
+const ARCHIVABLE_STATES = new Set<RequestState>(['cancelled']);
 const FALLBACK_SOURCE_PLUGIN_ID = 'stx_llmhub';
 
 function normalizeOptionalText(value: unknown): string | undefined {
     const normalized = String(value || '').trim();
     return normalized || undefined;
+}
+
+/**
+ * 功能：将数据库中的任务类型值归一化为受控类型。
+ * @param value 原始任务类型
+ * @returns 归一化后的任务类型
+ */
+function normalizeTaskKind(value: unknown): CapabilityKind {
+    const normalized = String(value || '').trim();
+    if (normalized === 'embedding' || normalized === 'rerank') {
+        return normalized;
+    }
+    return 'generation';
+}
+
+/**
+ * 功能：将日志中的中间状态归一化为最终展示状态。
+ * @param value 原始状态值。
+ * @returns 归一化后的状态。
+ */
+function normalizeLogState(value: unknown): RequestState {
+    const normalized = String(value || '').trim();
+    if (normalized === 'overlay_waiting' || normalized === 'result_ready') {
+        return 'completed';
+    }
+    if (normalized === 'queued' || normalized === 'running' || normalized === 'completed' || normalized === 'failed' || normalized === 'cancelled') {
+        return normalized;
+    }
+    return 'completed';
+}
+
+type AttemptTag = LLMRequestLogEntry['attemptTag'];
+type AttemptOutcome = LLMRequestLogEntry['attemptOutcome'];
+
+export interface RecordAttemptInput {
+    record: RequestRecord;
+    requestId: string;
+    result: LLMRunResult<unknown>;
+    attemptTag: AttemptTag;
+    attemptOutcome: AttemptOutcome;
+    isFinalAttempt: boolean;
 }
 
 export class RequestLogService {
@@ -35,19 +78,24 @@ export class RequestLogService {
                 return {
                     ...payload,
                     logId: payload.logId,
+                    llmTaskId: payload.llmTaskId || row.llmTaskId,
                     requestId: payload.requestId,
                     sourcePluginId: payload.sourcePluginId || row.sourcePluginId || row.consumer || FALLBACK_SOURCE_PLUGIN_ID,
                     consumer: payload.consumer || row.consumer,
-                    taskId: payload.taskId || row.taskId,
-                    taskKind: payload.taskKind || row.taskKind,
-                    state: (payload.state || row.state) as RequestState,
+                    taskKey: payload.taskKey || row.taskKey,
+                    taskKind: normalizeTaskKind(payload.taskKind || row.taskKind),
+                    state: normalizeLogState(payload.state || row.state),
+                    attemptIndex: Number(payload.attemptIndex || row.attemptIndex || 1),
+                    attemptTag: (payload.attemptTag || row.attemptTag || '初次请求') as AttemptTag,
+                    attemptOutcome: (payload.attemptOutcome || row.attemptOutcome || '失败') as AttemptOutcome,
+                    isFinalAttempt: Boolean(payload.isFinalAttempt ?? row.isFinalAttempt),
                     chatKey: payload.chatKey || row.chatKey,
                     sessionId: payload.sessionId || row.sessionId,
                     queuedAt: Number(payload.queuedAt || row.queuedAt || 0),
                     startedAt: payload.startedAt || row.startedAt,
                     finishedAt: payload.finishedAt || row.finishedAt,
                     latencyMs: payload.latencyMs || row.latencyMs,
-                    request: (payload.request || { taskKind: row.taskKind }) as LLMRequestLogRequestSnapshot,
+                    request: (payload.request || { taskKind: normalizeTaskKind(row.taskKind) }) as LLMRequestLogRequestSnapshot,
                     response: (payload.response || {}) as LLMRequestLogResponseSnapshot,
                 };
             })
@@ -58,12 +106,52 @@ export class RequestLogService {
         return clearLlmRequestLogs();
     }
 
+    async recordAttempt(input: RecordAttemptInput): Promise<void> {
+        const { record, requestId, result, attemptTag, attemptOutcome, isFinalAttempt } = input;
+        const sourcePluginId = normalizeOptionalText(record.scope?.pluginId) || normalizeOptionalText(record.consumer) || FALLBACK_SOURCE_PLUGIN_ID;
+        const chatKey = normalizeOptionalText(record.chatKey);
+        const sessionId = normalizeOptionalText(record.scope?.sessionId);
+        const requestSnapshot = {
+            ...(record.requestLogSnapshot || {
+                taskKind: record.taskKind,
+                taskDescription: record.taskDescription,
+            }),
+        } as LLMRequestLogRequestSnapshot;
+        const responseSnapshot = this.buildResultResponseSnapshot(record, result);
+        const latencyMs = record.finishedAt && record.startedAt ? Math.max(0, record.finishedAt - record.startedAt) : undefined;
+        const logEntry: LLMRequestLogEntry = {
+            logId: `${requestId}_${record.finishedAt || Date.now()}`,
+            llmTaskId: record.llmTaskId,
+            requestId,
+            sourcePluginId,
+            consumer: record.consumer,
+            taskKey: record.taskKey,
+            taskDescription: record.taskDescription,
+            taskKind: record.taskKind,
+            state: result.ok ? 'completed' : 'failed',
+            attemptIndex: Math.max(1, Number(record.attemptIndex || 1)),
+            attemptTag,
+            attemptOutcome,
+            isFinalAttempt,
+            chatKey,
+            sessionId,
+            queuedAt: record.queuedAt,
+            startedAt: record.startedAt,
+            finishedAt: record.finishedAt,
+            latencyMs,
+            request: requestSnapshot,
+            response: responseSnapshot,
+        };
+        await this.persistLogEntry(logEntry);
+    }
+
     async archiveRecord(record: RequestRecord): Promise<void> {
         if (!ARCHIVABLE_STATES.has(record.state as RequestState)) {
             logger.info('[RequestLog][PersistSkip]', {
+                llmTaskId: record.llmTaskId,
                 requestId: record.requestId,
                 consumer: record.consumer,
-                taskId: record.taskId,
+                taskKey: record.taskKey,
                 state: record.state,
                 reason: 'state_not_archivable',
             });
@@ -83,13 +171,18 @@ export class RequestLogService {
         const latencyMs = record.finishedAt && record.startedAt ? Math.max(0, record.finishedAt - record.startedAt) : undefined;
         const logEntry: LLMRequestLogEntry = {
             logId: `${record.requestId}_${record.finishedAt || Date.now()}`,
+            llmTaskId: record.llmTaskId,
             requestId: record.requestId,
             sourcePluginId,
             consumer: record.consumer,
-            taskId: record.taskId,
+            taskKey: record.taskKey,
             taskDescription: record.taskDescription,
             taskKind: record.taskKind,
             state: record.state as RequestState,
+            attemptIndex: Math.max(1, Number(record.attemptIndex || 1)),
+            attemptTag: record.attemptIndex > 1 ? '重试' : '初次请求',
+            attemptOutcome: '取消',
+            isFinalAttempt: true,
             chatKey,
             sessionId,
             queuedAt: record.queuedAt,
@@ -100,55 +193,7 @@ export class RequestLogService {
             response: responseSnapshot,
         };
 
-        logger.info('[RequestLog][PersistStart]', {
-            requestId: record.requestId,
-            logId: logEntry.logId,
-            sourcePluginId,
-            consumer: record.consumer,
-            taskId: record.taskId,
-            state: record.state,
-            chatKey: chatKey || '(none)',
-            reasonCode: record.debug?.reasonCode,
-        });
-
-        try {
-            await appendLlmRequestLog({
-                logId: logEntry.logId,
-                requestId: logEntry.requestId,
-                sourcePluginId: logEntry.sourcePluginId,
-                consumer: logEntry.consumer,
-                taskId: logEntry.taskId,
-                taskKind: logEntry.taskKind,
-                state: logEntry.state,
-                taskDescription: logEntry.taskDescription,
-                chatKey: logEntry.chatKey,
-                sessionId: logEntry.sessionId,
-                reasonCode: logEntry.response?.reasonCode,
-                queuedAt: logEntry.queuedAt,
-                startedAt: logEntry.startedAt,
-                finishedAt: logEntry.finishedAt,
-                latencyMs: logEntry.latencyMs,
-                payload: logEntry as unknown as Record<string, unknown>,
-            });
-            await trimLlmRequestLogs(REQUEST_LOG_MAX_RECORDS);
-            logger.success('[RequestLog][PersistSuccess]', {
-                requestId: record.requestId,
-                logId: logEntry.logId,
-                sourcePluginId,
-                state: record.state,
-                taskId: record.taskId,
-            });
-        } catch (error: unknown) {
-            logger.error('[RequestLog][PersistFail]', {
-                requestId: record.requestId,
-                logId: logEntry.logId,
-                sourcePluginId,
-                state: record.state,
-                taskId: record.taskId,
-                error: String((error as Error)?.message || error),
-            });
-            throw error;
-        }
+        await this.persistLogEntry(logEntry);
     }
 
     private buildLogResponseSnapshot(record: RequestRecord): LLMRequestLogResponseSnapshot {
@@ -176,5 +221,97 @@ export class RequestLogService {
             parsedResponse: record.debug?.parsedResponse,
             normalizedResponse: record.debug?.normalizedResponse,
         };
+    }
+
+    private buildResultResponseSnapshot(record: RequestRecord, result: LLMRunResult<unknown>): LLMRequestLogResponseSnapshot {
+        const meta = result.meta
+            ? {
+                requestId: result.meta.requestId,
+                resourceId: result.meta.resourceId,
+                model: result.meta.model,
+                capabilityKind: result.meta.capabilityKind,
+                queuedAt: result.meta.queuedAt,
+                startedAt: result.meta.startedAt,
+                finishedAt: result.meta.finishedAt,
+                latencyMs: result.meta.latencyMs,
+                fallbackUsed: result.meta.fallbackUsed,
+            }
+            : undefined;
+
+        return {
+            meta,
+            finalError: result.ok ? undefined : result.error,
+            reasonCode: result.ok ? undefined : result.reasonCode,
+            validationErrors: Array.isArray(record.debug?.validationErrors) ? record.debug?.validationErrors.slice(0, 50) : undefined,
+            rawResponseText: record.debug?.rawResponseText,
+            providerResponse: record.debug?.providerResponse,
+            parsedResponse: record.debug?.parsedResponse,
+            normalizedResponse: record.debug?.normalizedResponse,
+        };
+    }
+
+    private async persistLogEntry(logEntry: LLMRequestLogEntry): Promise<void> {
+        logger.info('[RequestLog][PersistStart]', {
+            llmTaskId: logEntry.llmTaskId,
+            requestId: logEntry.requestId,
+            logId: logEntry.logId,
+            sourcePluginId: logEntry.sourcePluginId,
+            consumer: logEntry.consumer,
+            taskKey: logEntry.taskKey,
+            state: logEntry.state,
+            attemptIndex: logEntry.attemptIndex,
+            attemptTag: logEntry.attemptTag,
+            attemptOutcome: logEntry.attemptOutcome,
+            chatKey: logEntry.chatKey || '(none)',
+            reasonCode: logEntry.response?.reasonCode,
+        });
+
+        try {
+            await appendLlmRequestLog({
+                logId: logEntry.logId,
+                llmTaskId: logEntry.llmTaskId,
+                requestId: logEntry.requestId,
+                sourcePluginId: logEntry.sourcePluginId,
+                consumer: logEntry.consumer,
+                taskKey: logEntry.taskKey,
+                taskKind: logEntry.taskKind,
+                state: logEntry.state,
+                taskDescription: logEntry.taskDescription,
+                attemptIndex: logEntry.attemptIndex,
+                attemptTag: logEntry.attemptTag,
+                attemptOutcome: logEntry.attemptOutcome,
+                isFinalAttempt: logEntry.isFinalAttempt,
+                chatKey: logEntry.chatKey,
+                sessionId: logEntry.sessionId,
+                reasonCode: logEntry.response?.reasonCode,
+                queuedAt: logEntry.queuedAt,
+                startedAt: logEntry.startedAt,
+                finishedAt: logEntry.finishedAt,
+                latencyMs: logEntry.latencyMs,
+                payload: logEntry as unknown as Record<string, unknown>,
+            });
+            await trimLlmRequestLogs(REQUEST_LOG_MAX_RECORDS);
+            logger.success('[RequestLog][PersistSuccess]', {
+                llmTaskId: logEntry.llmTaskId,
+                requestId: logEntry.requestId,
+                logId: logEntry.logId,
+                state: logEntry.state,
+                taskKey: logEntry.taskKey,
+                attemptIndex: logEntry.attemptIndex,
+                attemptTag: logEntry.attemptTag,
+                attemptOutcome: logEntry.attemptOutcome,
+            });
+        } catch (error: unknown) {
+            logger.error('[RequestLog][PersistFail]', {
+                llmTaskId: logEntry.llmTaskId,
+                requestId: logEntry.requestId,
+                logId: logEntry.logId,
+                state: logEntry.state,
+                taskKey: logEntry.taskKey,
+                attemptIndex: logEntry.attemptIndex,
+                error: String((error as Error)?.message || error),
+            });
+            throw error;
+        }
     }
 }

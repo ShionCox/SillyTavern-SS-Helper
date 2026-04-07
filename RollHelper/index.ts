@@ -51,7 +51,13 @@ function buildPingPayload(): RollHelperPingPayload {
  * @returns void：注册完成后结束。
  */
 function registerRollHelperManifest(): void {
-  const globalSTX = window.STX;
+  const globalSTX = (window as Window & {
+    STX?: {
+      registry?: {
+        register?: (manifest: PluginManifest) => void;
+      };
+    };
+  }).STX;
   globalSTX?.registry?.register?.(ROLLHELPER_MANIFEST);
 }
 
