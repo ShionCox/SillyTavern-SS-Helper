@@ -1,6 +1,7 @@
 import {
     appendSdkPluginChatRecord,
     db,
+    deleteSdkPluginChatRecords,
     queryLatestSdkPluginChatRecords,
     querySdkPluginChatRecords,
     type DBChatPluginRecord,
@@ -134,6 +135,31 @@ export class DreamSessionRepository {
             return;
         }
         await db.chat_plugin_records.bulkDelete(Array.from(new Set(deleteIds)));
+    }
+
+    /**
+     * 功能：清理当前聊天下的全部梦境系统记录。
+     * @returns 已删除的记录数量。
+     */
+    async clearAllDreamRecords(): Promise<number> {
+        const collections: DreamRecordCollection[] = [
+            'dream_session_meta',
+            'dream_session_recall',
+            'dream_session_output',
+            'dream_session_approval',
+            'dream_session_rollback',
+            'dream_session_diagnostics',
+            'dream_session_graph_snapshot',
+            'dream_maintenance_proposal',
+            'dream_quality_report',
+            'dream_rollback_metadata',
+            'dream_scheduler_state',
+        ];
+        let deletedCount = 0;
+        for (const collection of collections) {
+            deletedCount += await deleteSdkPluginChatRecords(MEMORY_OS_PLUGIN_ID, this.chatKey, collection);
+        }
+        return deletedCount;
     }
 
     async getDreamSessionById(dreamId: string): Promise<DreamSessionRecord> {

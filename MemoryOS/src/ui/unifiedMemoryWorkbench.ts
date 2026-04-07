@@ -876,6 +876,23 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await render();
                 return;
             }
+            if (action === 'dream-workbench-clear-all') {
+                const confirmed = window.confirm(resolveDreamWorkbenchText('clear_all_dream_records_confirm'));
+                if (!confirmed) {
+                    return;
+                }
+                try {
+                    const deletedCount = await memory.unifiedMemory.diagnostics.clearAllDreamRecords();
+                    toast.success(formatDreamWorkbenchText('clear_all_dream_records_success', { count: deletedCount }));
+                } catch (error) {
+                    toast.error(formatDreamWorkbenchText('clear_all_dream_records_failed', {
+                        reason: String((error as Error)?.message ?? error),
+                    }));
+                }
+                await loadCoreSnapshot();
+                await render();
+                return;
+            }
             if (action === 'dream-workbench-manual-dream') {
                 const result = await memory.chatState.startDreamSession('manual');
                 if (!result.ok) {

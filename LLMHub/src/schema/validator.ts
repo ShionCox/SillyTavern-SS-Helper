@@ -32,7 +32,10 @@ export function validateZodSchema<T>(data: any, schema: ZodType<T>): ValidationR
  * 尝试从 LLM 混沌输出中提取最纯净的 JSON
  * 对于部分附带反思过程 `<think>` 或者包裹在 \`\`\`json 里面的格式，进行强力清洗
  */
-export function parseJsonOutput(raw: string): { ok: boolean; data: any; error?: string } {
+export function parseJsonOutput(raw: string | object): { ok: boolean; data: any; error?: string } {
+    if (raw && typeof raw === 'object') {
+        return { ok: true, data: raw };
+    }
     if (!raw || typeof raw !== 'string') {
         return { ok: false, data: null, error: '返回内容为空或格式非字符串' };
     }

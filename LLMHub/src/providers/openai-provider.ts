@@ -72,6 +72,9 @@ export class OpenAIProvider implements LLMProvider {
     private extractMessageContent(choice: any): string {
         const content = choice?.message?.content;
         if (typeof content === 'string') return content;
+        if (content && typeof content === 'object') {
+            try { return JSON.stringify(content); } catch { /* skip */ }
+        }
         if (Array.isArray(content)) {
             return content
                 .map((item: any) => (typeof item?.text === 'string' ? item.text : typeof item?.content === 'string' ? item.content : ''))

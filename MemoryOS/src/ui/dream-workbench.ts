@@ -266,6 +266,7 @@ export function openDreamWorkbench(): void {
                                 <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('pipeline_title'))}</div>
                                 <div style="display:flex;gap:8px;">
                                     <button type="button" data-dream-workbench-action="refresh">${escapeHtml(resolveDreamWorkbenchText('refresh'))}</button>
+                                    <button type="button" class="stx-btn-danger" data-dream-workbench-action="clear-all">${escapeHtml(resolveDreamWorkbenchText('clear_all_dream_records'))}</button>
                                     <button type="button" data-dream-workbench-action="manual-dream">${escapeHtml(resolveDreamWorkbenchText('manual_dream'))}</button>
                                 </div>
                             </div>
@@ -410,6 +411,33 @@ export function openDreamWorkbench(): void {
                     root.querySelector('[data-dream-workbench-action="manual-dream"]')?.addEventListener('click', (): void => {
                         void memory.chatState.startDreamSession('manual').then(() => render());
                     });
+                    /**
+                     * 功能：清理当前聊天的全部梦境系统记录并刷新工作台。
+                     * @returns 异步完成。
+                     */
+                    const clearAllDreamRecordsForWorkbench = async (): Promise<void> => {
+                        const confirmed = window.confirm(resolveDreamWorkbenchText('clear_all_dream_records_confirm'));
+                        if (!confirmed) {
+                            return;
+                        }
+                        try {
+                            const deletedCount = await memory.unifiedMemory.diagnostics.clearAllDreamRecords();
+                            toast.success(formatDreamWorkbenchText('clear_all_dream_records_success', { count: deletedCount }));
+                            await render();
+                        } catch (error) {
+                            toast.error(formatDreamWorkbenchText('clear_all_dream_records_failed', {
+                                reason: String((error as Error)?.message ?? error),
+                            }));
+                        }
+                    };
+                    /**
+                     * 功能：响应清理全部梦境信息按钮点击。
+                     * @returns 无返回值。
+                     */
+                    const handleClearAllDreamRecordsClick = (): void => {
+                        void clearAllDreamRecordsForWorkbench();
+                    };
+                    root.querySelector('[data-dream-workbench-action="clear-all"]')?.addEventListener('click', handleClearAllDreamRecordsClick);
                     root.querySelectorAll('[data-dream-workbench-action="rollback"]').forEach((button: Element): void => {
                         button.addEventListener('click', (): void => {
                             const dreamId = String((button as HTMLElement).getAttribute('data-dream-id') ?? '').trim();

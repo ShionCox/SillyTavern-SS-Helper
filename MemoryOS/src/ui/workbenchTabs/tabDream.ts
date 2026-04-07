@@ -411,6 +411,7 @@ const approvedSessions = visibleSessions.filter((item: DreamSessionRecord): bool
                                 <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('pipeline_title'))}</div>
                                 <div style="display:flex;gap:8px;">
                                     <button type="button" class="stx-memory-workbench__ghost-btn" data-action="dream-workbench-refresh">${escapeHtml(resolveDreamWorkbenchText('refresh'))}</button>
+                                    <button type="button" class="stx-memory-workbench__ghost-btn stx-btn-danger" data-action="dream-workbench-clear-all">${escapeHtml(resolveDreamWorkbenchText('clear_all_dream_records'))}</button>
                                     <button type="button" class="stx-memory-workbench__button" data-action="dream-workbench-manual-dream">${escapeHtml(resolveDreamWorkbenchText('manual_dream'))}</button>
                                 </div>
                             </div>

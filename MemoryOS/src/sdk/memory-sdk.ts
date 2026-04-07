@@ -475,6 +475,11 @@ export class MemorySDKImpl {
              listDreamMaintenanceProposals: (limit?: number) => Promise<DreamMaintenanceProposalRecord[]>;
              listDreamQualityReports: (limit?: number) => Promise<DreamQualityReport[]>;
              getDreamSchedulerState: () => Promise<DreamSchedulerStateRecord | null>;
+             /**
+              * 功能：清理当前聊天的全部梦境系统记录。
+              * @returns 已删除的记录数量。
+              */
+             clearAllDreamRecords: () => Promise<number>;
          };
         prompts: {
             preview: (input?: Parameters<PromptAssemblyService['buildPromptAssembly']>[0]) => ReturnType<PromptAssemblyService['buildPromptAssembly']>;
@@ -1227,6 +1232,14 @@ export class MemorySDKImpl {
                 getDreamSchedulerState: async (): Promise<DreamSchedulerStateRecord | null> => {
                     const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
                     return repository.getDreamSchedulerState();
+                },
+                /**
+                 * 功能：清理当前聊天的全部梦境系统记录。
+                 * @returns 已删除的记录数量。
+                 */
+                clearAllDreamRecords: async (): Promise<number> => {
+                    const repository = new (await import('../services/dream-session-repository')).DreamSessionRepository(this.chatKey_);
+                    return repository.clearAllDreamRecords();
                 },
             },
             prompts: {

@@ -75,6 +75,7 @@ function buildRecallTitleMap(recall: DreamSessionRecallRecord): Map<string, stri
                 return;
             }
             titleMap.set(entryId, title);
+            titleMap.set(normalizeDreamDiagnosticEntryId(entryId), title);
         });
     });
     return titleMap;
@@ -116,6 +117,34 @@ function humanizeDreamDiagnosticKey(key: string, titleMap: Map<string, string>):
     return truncateText(normalized, 24);
 }
 
+/**
+ * 功能：根据条目标识读取梦境来源记忆标题。
+ * @param entryId 条目标识。
+ * @param titleMap 来源记忆标题映射。
+ * @returns 条目标题，无法匹配时返回空字符串。
+ */
+function resolveDreamSourceEntryTitle(entryId: string, titleMap: Map<string, string>): string {
+    const normalized = String(entryId ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    return titleMap.get(normalized) || titleMap.get(normalizeDreamDiagnosticEntryId(normalized)) || '';
+}
+
+/**
+ * 功能：渲染来源记忆标题，缺少标题时回退到短标识。
+ * @param entryId 条目标识。
+ * @param titleMap 来源记忆标题映射。
+ * @returns 可读的来源记忆标签。
+ */
+function renderDreamSourceEntryLabel(entryId: string, titleMap: Map<string, string>): string {
+    const normalized = String(entryId ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+    return resolveDreamSourceEntryTitle(normalized, titleMap) || `记忆 ${truncateText(normalizeDreamDiagnosticEntryId(normalized), 18)}`;
+}
+
 function renderDreamDiagnosticChips(items: string[], titleMap: Map<string, string>, emptyText = '无'): string {
     const normalized = items
         .map((item: string): string => humanizeDreamDiagnosticKey(item, titleMap))
@@ -153,7 +182,7 @@ function renderDreamMutationSourceRefs(sourceEntryIds: string[], titleMap: Map<s
     }
     return normalized
         .slice(0, 3)
-        .map((entryId: string): string => titleMap.get(entryId) || entryId)
+        .map((entryId: string): string => renderDreamSourceEntryLabel(entryId, titleMap))
         .join('、');
 }
 
@@ -166,7 +195,7 @@ function renderDreamMaintenanceSourceRefs(sourceEntryIds: string[], titleMap: Ma
     }
     return normalized
         .slice(0, 4)
-        .map((entryId: string): string => titleMap.get(entryId) || entryId)
+        .map((entryId: string): string => renderDreamSourceEntryLabel(entryId, titleMap))
         .join('、');
 }
 
@@ -225,6 +254,15 @@ function ensureDreamReviewStyle(): void {
             background: rgba(218, 186, 116, 0.55) !important;
         }
 
+        /* ========== Dialog Surface Customization ========== */
+        #${DREAM_REVIEW_DIALOG_ID} .stx-shared-dialog-surface {
+            background: rgba(10, 8, 14, 0.92) !important;
+            backdrop-filter: blur(28px) saturate(130%) !important;
+            -webkit-backdrop-filter: blur(28px) saturate(130%) !important;
+            box-shadow: 0 40px 100px rgba(0, 0, 0, 0.9), inset 0 1px 1px rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        }
+
         /* ========== Main Container ========== */
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review {
             --dr-bg: var(--ss-theme-panel-bg, #0f0a14);
@@ -252,54 +290,6 @@ function ensureDreamReviewStyle(): void {
             height: min(86vh, 1080px);
             overflow: hidden;
             color: var(--dr-text);
-        }
-
-        /* ========== Stars & Moon Background (on dialog surface) ========== */
-        #${DREAM_REVIEW_DIALOG_ID} .stx-shared-dialog-surface::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border-radius: inherit;
-            pointer-events: none;
-            z-index: 0;
-            background-image:
-                /* Crescent Moon */
-                radial-gradient(circle at 88% 8%, rgba(250,245,220,0.92) 0%, rgba(250,245,220,0.6) 2%, transparent 2.8%),
-                radial-gradient(circle at 86.8% 6.8%, var(--ss-theme-panel-bg, #0f0a14) 0%, var(--ss-theme-panel-bg, #0f0a14) 2.5%, transparent 3%),
-                /* Bright stars */
-                radial-gradient(2px 2px at 8% 12%, #fff 100%, transparent),
-                radial-gradient(2.5px 2.5px at 22% 8%, rgba(218,186,116,1) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 38% 22%, rgba(255,255,255,0.8) 100%, transparent),
-                radial-gradient(2.5px 2.5px at 52% 11%, rgba(126,87,194,0.9) 100%, transparent),
-                radial-gradient(2px 2px at 72% 28%, rgba(255,255,255,0.85) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 5% 45%, rgba(255,255,255,0.7) 100%, transparent),
-                radial-gradient(2px 2px at 18% 55%, rgba(218,186,116,0.8) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 42% 50%, rgba(255,255,255,0.7) 100%, transparent),
-                radial-gradient(2.5px 2.5px at 65% 62%, rgba(126,87,194,0.75) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 80% 52%, rgba(255,255,255,0.9) 100%, transparent),
-                radial-gradient(2px 2px at 92% 38%, rgba(255,255,255,0.8) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 30% 75%, rgba(255,255,255,0.65) 100%, transparent),
-                radial-gradient(2px 2px at 60% 82%, rgba(218,186,116,0.7) 100%, transparent),
-                radial-gradient(1.5px 1.5px at 75% 88%, rgba(126,87,194,0.6) 100%, transparent),
-                /* Dim star field */
-                radial-gradient(1px 1px at 15% 35%, rgba(255,255,255,0.4) 100%, transparent),
-                radial-gradient(1px 1px at 48% 20%, rgba(255,255,255,0.35) 100%, transparent),
-                radial-gradient(1px 1px at 85% 70%, rgba(255,255,255,0.4) 100%, transparent),
-                radial-gradient(1px 1px at 33% 92%, rgba(255,255,255,0.3) 100%, transparent),
-                radial-gradient(1px 1px at 70% 45%, rgba(218,186,116,0.35) 100%, transparent),
-                radial-gradient(1px 1px at 95% 15%, rgba(255,255,255,0.45) 100%, transparent),
-                radial-gradient(1px 1px at 55% 38%, rgba(126,87,194,0.35) 100%, transparent);
-            animation: dr-twinkle 6s ease-in-out infinite alternate;
-        }
-
-        #${DREAM_REVIEW_DIALOG_ID} .stx-shared-dialog-chrome {
-            position: relative;
-            z-index: 1;
-        }
-
-        @keyframes dr-twinkle {
-            0% { opacity: 0.75; }
-            100% { opacity: 1; }
         }
 
         /* ========== Grid Systems ========== */
@@ -919,6 +909,36 @@ function ensureDreamReviewStyle(): void {
             background:color-mix(in srgb, var(--dr-success) 30%, transparent);
             box-shadow: 0 4px 10px rgba(0,0,0,0.3), 0 0 12px color-mix(in srgb, var(--dr-success) 40%, transparent);
         }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions {
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:2px;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions button {
+            border:1px solid color-mix(in srgb, var(--dr-line) 80%, transparent);
+            border-radius:10px;
+            padding:6px 12px;
+            background:color-mix(in srgb, var(--dr-panel-2) 80%, transparent);
+            color:inherit;
+            font-size:11px;
+            font-weight:700;
+            cursor:pointer;
+            transition:all .2s ease;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions button.is-active[data-dream-maintenance-choice="approve"] {
+            border-color:color-mix(in srgb, var(--dr-success) 55%, transparent);
+            background:color-mix(in srgb, var(--dr-success) 24%, transparent);
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions button.is-active[data-dream-maintenance-choice="reject"] {
+            border-color:color-mix(in srgb, #ef5350 55%, transparent);
+            background:color-mix(in srgb, #ef5350 18%, transparent);
+            color:#ffcdd2;
+        }
         
         /* ========== Payload & JSON Syntax Highlighting ========== */
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__payload {
@@ -1113,7 +1133,13 @@ function renderFieldChips(label: string, values: string[]): string {
     `;
 }
 
-function renderMutationPayloadVisual(mutation: DreamMutationProposal): string {
+/**
+ * 功能：渲染变更提案的结构化内容预览。
+ * @param mutation 变更提案。
+ * @param titleMap 来源记忆标题映射。
+ * @returns HTML 片段。
+ */
+function renderMutationPayloadVisual(mutation: DreamMutationProposal, titleMap: Map<string, string>): string {
     const payload = toRecord(mutation.payload);
     if (mutation.mutationType === 'relationship_patch') {
         return `
@@ -1132,15 +1158,18 @@ function renderMutationPayloadVisual(mutation: DreamMutationProposal): string {
         `;
     }
     const detailPayload = toRecord(payload.detailPayload);
+    const payloadEntryId = String(payload.entryId ?? '').trim();
+    const payloadEntryTitle = resolveDreamSourceEntryTitle(payloadEntryId, titleMap);
     return `
         <div class="stx-memory-dream-review__field-grid">
             ${renderField('标题', String(payload.title ?? payload.candidateTitle ?? mutation.preview ?? '').trim(), true)}
+            ${renderField('对应内容标题', payloadEntryTitle, true)}
             ${renderField('类型', String(payload.entryType ?? '').trim())}
             ${renderField('摘要', String(payload.summary ?? mutation.reason ?? '').trim())}
             ${renderField('详情', String(payload.detail ?? '').trim())}
             ${renderFieldWithOptions('比较键', String(payload.compareKey ?? '').trim(), { truncate: true })}
             ${renderFieldWithOptions('实体键', String(payload.entityKey ?? '').trim(), { truncate: true })}
-            ${renderFieldWithOptions('条目标识', String(payload.entryId ?? '').trim(), { truncate: true })}
+            ${renderFieldWithOptions('条目标识', payloadEntryId, { truncate: true })}
             ${renderFieldChips('标签', toStringArray(payload.tags))}
             ${renderFieldChips('角色绑定', toStringArray(payload.actorBindings))}
             ${renderFieldChips('匹配键', toStringArray(payload.matchKeys))}
@@ -1150,8 +1179,11 @@ function renderMutationPayloadVisual(mutation: DreamMutationProposal): string {
 }
 
 /**
- * Render a mutation card with type-based styling.
- * Adds data-mutation-type attribute for CSS-based color coding.
+ * 功能：渲染带类型样式标记的变更提案卡片。
+ * @param mutation 变更提案。
+ * @param checked 当前是否选中。
+ * @param titleMap 来源记忆标题映射。
+ * @returns HTML 片段。
  */
 function renderMutationCard(mutation: DreamMutationProposal, checked: boolean, titleMap: Map<string, string>): string {
     const payload = toRecord(mutation.payload);
@@ -1176,7 +1208,7 @@ function renderMutationCard(mutation: DreamMutationProposal, checked: boolean, t
                 <div class="stx-memory-dream-review__hint">${escapeHtml(localizeDreamDisplayText(mutation.reason || '无理由说明'))}</div>
                 <div class="stx-memory-dream-review__meta">应用后：${escapeHtml(resolveDreamMutationActionHint(mutation))}</div>
                 <div class="stx-memory-dream-review__meta">来源记忆：${escapeHtml(renderDreamMutationSourceRefs(mutation.sourceEntryIds, titleMap))}</div>
-                ${renderMutationPayloadVisual(mutation)}
+                ${renderMutationPayloadVisual(mutation, titleMap)}
                 ${renderDreamReviewExplainPanel(mutation.explain)}
             </div>
         </article>
@@ -1201,11 +1233,13 @@ function renderMaintenanceCard(
         preview: proposal.preview,
         reason: proposal.reason,
         payload,
-        sourceEntryLabels: proposal.sourceEntryIds.map((entryId: string): string => titleMap.get(entryId) || entryId),
+        sourceEntryLabels: proposal.sourceEntryIds.map((entryId: string): string => renderDreamSourceEntryLabel(entryId, titleMap)),
         actorLabels: toStringArray(payload.participants),
     });
     const impactItemsText = (display.impactItems ?? []).join('、');
     const impactText = String(display.impactText ?? '').trim();
+    const payloadEntryId = String(payload.entryId ?? payload.primaryEntryId ?? '').trim();
+    const payloadEntryTitle = resolveDreamSourceEntryTitle(payloadEntryId, titleMap);
     const shouldShowImpactItems = Boolean(impactItemsText.trim());
     const shouldShowImpactText = Boolean(impactText)
         && normalizeDreamReviewDisplayText(impactText) !== normalizeDreamReviewDisplayText(impactItemsText)
@@ -1213,7 +1247,7 @@ function renderMaintenanceCard(
     return `
         <article class="stx-memory-dream-review__mutation${checked ? ' is-selected' : ''}" data-maintenance-card="${escapeAttr(proposal.proposalId)}" data-mutation-type="${escapeAttr(proposal.proposalType)}">
             <div class="stx-memory-dream-review__mutation-head">
-                <input type="checkbox" data-dream-maintenance="${escapeAttr(proposal.proposalId)}" ${checked ? 'checked' : ''}>
+                <input type="checkbox" data-dream-maintenance="${escapeAttr(proposal.proposalId)}" ${checked ? 'checked' : ''} hidden aria-hidden="true" tabindex="-1">
                 <div class="stx-memory-dream-review__mutation-body">
                     <div class="stx-memory-dream-review__mutation-title">${escapeHtml(localizeDreamDisplayText(display.title || proposal.preview || proposal.proposalType))}</div>
                     <div class="stx-memory-dream-review__secondary">${escapeHtml(localizeDreamDisplayText(display.summary || proposal.reason || '无预览文案'))}</div>
@@ -1228,13 +1262,20 @@ function renderMaintenanceCard(
                 <div class="stx-memory-dream-review__hint">${escapeHtml(localizeDreamDisplayText(proposal.reason || '无理由说明'))}</div>
                 <div class="stx-memory-dream-review__meta">应用后：${escapeHtml(display.resultHint || '会按这条维护建议更新相关记忆内容。')}</div>
                 <div class="stx-memory-dream-review__meta">来源记忆：${escapeHtml(renderDreamMaintenanceSourceRefs(proposal.sourceEntryIds, titleMap))}</div>
+                <div class="stx-memory-dream-review__maintenance-actions">
+                    <button type="button" data-dream-maintenance-choice="approve" data-proposal-id="${escapeAttr(proposal.proposalId)}">通过</button>
+                    <button type="button" data-dream-maintenance-choice="reject" data-proposal-id="${escapeAttr(proposal.proposalId)}">拒绝</button>
+                    <span class="stx-memory-dream-review__secondary">这里只是预选，点击底部“应用”后才会真正执行。</span>
+                </div>
                 ${shouldShowImpactItems ? `<div class="stx-memory-dream-review__meta">影响对象：${escapeHtml(impactItemsText)}</div>` : ''}
                 ${shouldShowImpactText ? `<div class="stx-memory-dream-review__meta">补充说明：${escapeHtml(impactText)}</div>` : ''}
                 <div class="stx-memory-dream-review__field-grid">
                     ${renderField('标题', display.title || proposal.preview || proposal.proposalType, true)}
+                    ${renderField('对应内容标题', payloadEntryTitle, true)}
                     ${renderField('类型', resolveDreamProposalTypeLabel(proposal.proposalType))}
                     ${renderField('摘要', display.summary || proposal.reason || '')}
                     ${renderField('提案时间', new Date(proposal.createdAt).toLocaleString('zh-CN'))}
+                    ${renderFieldWithOptions('条目标识', payloadEntryId, { truncate: true })}
                     ${renderFieldWithOptions('提案标识', proposal.proposalId, { truncate: true })}
                     ${renderFieldWithOptions('梦境标识', proposal.dreamId, { truncate: true })}
                 </div>
@@ -1302,6 +1343,42 @@ export async function openDreamReviewDialog(input: {
             id: DREAM_REVIEW_DIALOG_ID,
             size: 'xl',
             chrome: { title: '梦境审批' },
+            backdropBackground: [
+                /* Realistic SVG Moon with extended glow (no clip) */
+                `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'%3E%3Cdefs%3E%3Cfilter id='g' x='-100%25' y='-100%25' width='300%25' height='300%25'%3E%3CfeDropShadow dx='0' dy='0' stdDeviation='50' flood-color='%23e5d38a' flood-opacity='0.4'/%3E%3CfeDropShadow dx='0' dy='0' stdDeviation='100' flood-color='%237e57c2' flood-opacity='0.2'/%3E%3C/filter%3E%3ClinearGradient id='m' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23ffffff'/%3E%3Cstop offset='30%25' stop-color='%23fffbef'/%3E%3Cstop offset='100%25' stop-color='%23eac775'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg filter='url(%23g)' transform='translate(250,250) rotate(-35) translate(-100,-100)'%3E%3Cpath d='M100 0 A100 100 0 1 1 0 100 A85 85 0 0 0 100 0 Z' fill='url(%23m)' opacity='0.8'/%3E%3C/g%3E%3C/svg%3E") calc(100% - 20px) -20px / 400px 400px no-repeat`,
+                /* Milky Way */
+                'linear-gradient(55deg, transparent 35%, rgba(126, 87, 194, 0.06) 45%, rgba(218, 186, 116, 0.04) 50%, rgba(126, 87, 194, 0.03) 58%, transparent 65%)',
+                /* Nebula / Glow Effects / Clouds */
+                'radial-gradient(ellipse at 85% 15%, rgba(218, 186, 116, 0.1) 0%, transparent 45%)',
+                'radial-gradient(ellipse at 20% 85%, rgba(126, 87, 194, 0.08) 0%, transparent 55%)',
+                'radial-gradient(circle at 65% 75%, rgba(80, 150, 220, 0.06) 0%, transparent 35%)',
+                'radial-gradient(circle at 10% 20%, rgba(200, 100, 150, 0.05) 0%, transparent 40%)',
+                'radial-gradient(ellipse at 45% 45%, rgba(126, 87, 194, 0.04) 0%, transparent 40%)',
+                /* Large Stars & Constellations */
+                'radial-gradient(2.5px 2.5px at 15% 25%, rgba(255,255,255,0.4) 100%, transparent)',
+                'radial-gradient(3.5px 3.5px at 32% 12%, rgba(218,186,116,0.3) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 45% 28%, rgba(255,255,255,0.3) 100%, transparent)',
+                'radial-gradient(4px 4px at 62% 18%, rgba(126,87,194,0.3) 100%, transparent)',
+                'radial-gradient(2.5px 2.5px at 82% 35%, rgba(255,255,255,0.4) 100%, transparent)',
+                'radial-gradient(2.5px 2.5px at 10% 55%, rgba(255,255,255,0.3) 100%, transparent)',
+                'radial-gradient(3.5px 3.5px at 28% 65%, rgba(218,186,116,0.35) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 52% 60%, rgba(255,255,255,0.25) 100%, transparent)',
+                'radial-gradient(4px 4px at 75% 72%, rgba(126,87,194,0.25) 100%, transparent)',
+                'radial-gradient(2.5px 2.5px at 88% 85%, rgba(255,255,255,0.3) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 40% 88%, rgba(255,255,255,0.25) 100%, transparent)',
+                'radial-gradient(3px 3px at 60% 45%, rgba(218,186,116,0.25) 100%, transparent)',
+                'radial-gradient(2px 2px at 92% 25%, rgba(255,255,255,0.3) 100%, transparent)',
+                /* Deep Starfield base */
+                'radial-gradient(1.5px 1.5px at 22% 38%, rgba(255,255,255,0.2) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 38% 82%, rgba(255,255,255,0.2) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 82% 58%, rgba(255,255,255,0.2) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 78% 15%, rgba(255,255,255,0.2) 100%, transparent)',
+                'radial-gradient(1px 1px at 12% 85%, rgba(255,255,255,0.15) 100%, transparent)',
+                'radial-gradient(1.5px 1.5px at 48% 50%, rgba(255,255,255,0.2) 100%, transparent)',
+                /* Base Ambient Darkness */
+                'linear-gradient(160deg, rgba(8, 6, 14, 0.65), rgba(2, 2, 4, 0.75))',
+                'color-mix(in srgb, var(--ss-theme-backdrop, rgba(0, 0, 0, 0.8)) 60%, transparent)',
+            ].join(', '),
             bodyHtml: `
                 <div class="stx-memory-dream-review">
                     <div class="stx-memory-dream-review__hero">
@@ -1402,7 +1479,6 @@ export async function openDreamReviewDialog(input: {
                     </div>
                     <div class="stx-memory-dream-review__actions">
                         <button type="button" data-action="defer">稍后</button>
-                        <button type="button" data-action="reject">全拒</button>
                         <button type="button" data-action="approve">应用</button>
                     </div>
                 </div>
@@ -1424,7 +1500,10 @@ export async function openDreamReviewDialog(input: {
                     });
                     maintenanceInputs().forEach((inputEl: HTMLInputElement): void => {
                         const proposalId = String(inputEl.dataset.dreamMaintenance ?? '').trim();
-                        root.querySelector(`[data-maintenance-card="${proposalId}"]`)?.classList.toggle('is-selected', inputEl.checked);
+                        const card = root.querySelector(`[data-maintenance-card="${proposalId}"]`);
+                        card?.classList.toggle('is-selected', inputEl.checked);
+                        card?.querySelector('[data-dream-maintenance-choice="approve"]')?.classList.toggle('is-active', inputEl.checked);
+                        card?.querySelector('[data-dream-maintenance-choice="reject"]')?.classList.toggle('is-active', !inputEl.checked);
                     });
                 };
                 const readSelection = (): {
@@ -1462,6 +1541,21 @@ export async function openDreamReviewDialog(input: {
                 maintenanceInputs().forEach((inputEl: HTMLInputElement): void => {
                     inputEl.addEventListener('change', syncCards);
                 });
+                root.querySelectorAll('[data-dream-maintenance-choice]').forEach((button: Element): void => {
+                    button.addEventListener('click', (): void => {
+                        const buttonEl = button as HTMLElement;
+                        const proposalId = String(buttonEl.dataset.proposalId ?? '').trim();
+                        const choice = String(buttonEl.dataset.dreamMaintenanceChoice ?? '').trim();
+                        const targetInput = maintenanceInputs().find((inputEl: HTMLInputElement): boolean => {
+                            return String(inputEl.dataset.dreamMaintenance ?? '').trim() === proposalId;
+                        });
+                        if (!targetInput) {
+                            return;
+                        }
+                        targetInput.checked = choice === 'approve';
+                        syncCards();
+                    });
+                });
                 root.querySelector('[data-select-all="true"]')?.addEventListener('click', (): void => {
                     mutationInputs().forEach((item: HTMLInputElement): void => {
                         item.checked = true;
@@ -1489,20 +1583,6 @@ export async function openDreamReviewDialog(input: {
                         rejectedMutationIds: selection.rejectedMutations,
                         approvedMaintenanceProposalIds: selection.approvedMaintenanceProposalIds,
                         rejectedMaintenanceProposalIds: selection.rejectedMaintenanceProposalIds,
-                    });
-                });
-                root.querySelector('[data-action="reject"]')?.addEventListener('click', (): void => {
-                    instance.close();
-                    finish({
-                        decision: 'rejected',
-                        approvedMutationIds: [],
-                        rejectedMutationIds: input.output.proposedMutations.map(
-                            (item: DreamMutationProposal): string => item.mutationId,
-                        ),
-                        approvedMaintenanceProposalIds: [],
-                        rejectedMaintenanceProposalIds: input.maintenanceProposals.map(
-                            (item: DreamMaintenanceProposalRecord): string => item.proposalId,
-                        ),
                     });
                 });
                 root.querySelector('[data-action="approve"]')?.addEventListener('click', (): void => {

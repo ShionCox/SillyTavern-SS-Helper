@@ -758,6 +758,9 @@ function extractResultText(result: unknown): string {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
     }
+    if (candidate && typeof candidate === "object") {
+      try { return JSON.stringify(candidate); } catch { /* skip */ }
+    }
   }
 
   const choices = resultRecord.choices;
@@ -771,6 +774,9 @@ function extractResultText(result: unknown): string {
         if (typeof messageRecord.content === "string" && messageRecord.content.trim()) {
           return messageRecord.content.trim();
         }
+        if (messageRecord.content && typeof messageRecord.content === "object") {
+          try { return JSON.stringify(messageRecord.content); } catch { /* skip */ }
+        }
       }
       if (typeof firstChoiceRecord.text === "string" && firstChoiceRecord.text.trim()) {
         return firstChoiceRecord.text.trim();
@@ -778,6 +784,7 @@ function extractResultText(result: unknown): string {
     }
   }
 
+  try { return JSON.stringify(result); } catch { /* skip */ }
   return String(result ?? "").trim();
 }
 
