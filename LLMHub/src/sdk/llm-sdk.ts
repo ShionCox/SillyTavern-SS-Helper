@@ -508,6 +508,15 @@ export class LLMSDKImpl {
                 if (!this.isGenerationArgs(args)) {
                     return { ok: false, error: 'generation 请求参数不合法', reasonCode: 'unknown' };
                 }
+                if (this.readSettings().enabled === false) {
+                    this.emitLifecycle(args, record, {
+                        stage: 'failed',
+                        message: 'LLMHub 未启用，请先在设置中启用 LLMHub。',
+                        error: 'LLMHub 未启用',
+                        reasonCode: 'llmhub_disabled',
+                    });
+                    return { ok: false, error: 'LLMHub 未启用', retryable: false, reasonCode: 'llmhub_disabled' };
+                }
                 this.emitLifecycle(args, record, {
                     stage: 'running',
                     message: '任务开始执行',
@@ -518,6 +527,15 @@ export class LLMSDKImpl {
                 if (!this.isEmbedArgs(args)) {
                     return { ok: false, error: 'embedding 请求参数不合法', reasonCode: 'unknown' };
                 }
+                if (this.readSettings().enabled === false) {
+                    this.emitLifecycle(args, record, {
+                        stage: 'failed',
+                        message: 'LLMHub 未启用，请先在设置中启用 LLMHub。',
+                        error: 'LLMHub 未启用',
+                        reasonCode: 'llmhub_disabled',
+                    });
+                    return { ok: false, error: 'LLMHub 未启用', retryable: false, reasonCode: 'llmhub_disabled' };
+                }
                 this.emitLifecycle(args, record, {
                     stage: 'running',
                     message: '向量任务开始执行',
@@ -527,6 +545,15 @@ export class LLMSDKImpl {
             case 'rerank':
                 if (!this.isRerankArgs(args)) {
                     return { ok: false, error: 'rerank 请求参数不合法', reasonCode: 'unknown' };
+                }
+                if (this.readSettings().enabled === false) {
+                    this.emitLifecycle(args, record, {
+                        stage: 'failed',
+                        message: 'LLMHub 未启用，请先在设置中启用 LLMHub。',
+                        error: 'LLMHub 未启用',
+                        reasonCode: 'llmhub_disabled',
+                    });
+                    return { ok: false, error: 'LLMHub 未启用', retryable: false, reasonCode: 'llmhub_disabled' };
                 }
                 this.emitLifecycle(args, record, {
                     stage: 'running',

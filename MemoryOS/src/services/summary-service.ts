@@ -32,7 +32,7 @@ export class SummaryService {
      */
     async captureSummaryFromChat(input: CaptureSummaryFromChatInput): Promise<SummarySnapshot | null> {
         const normalizedMessages = Array.isArray(input.messages)
-            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system').slice(-40)
+            ? input.messages.filter((item: { role?: string }): boolean => this.normalizeText(item.role) !== 'system')
             : [];
         if (normalizedMessages.length <= 0) {
             return null;

@@ -1,12 +1,14 @@
 import { escapeHtml } from '../editorShared';
-import { resolveDreamWorkbenchText, formatDreamWorkbenchText } from '../workbenchLocale';
+import { resolveDreamWorkbenchText } from '../workbenchLocale';
 import { formatTimestamp, truncateText, escapeAttr, type WorkbenchSnapshot } from './shared';
-import type { DreamSessionRecord, DreamSchedulerStateRecord, DreamSessionMetaRecord } from '../../services/dream-types';
+import type { DreamSessionRecord } from '../../services/dream-types';
+import type { DreamUiStateSnapshot } from '../dream-ui-state-service';
 
 /**
  * 功能：运行态映射文案。
  */
 function resolvePhaseLabel(status?: string, schedulerActive?: boolean): string {
+    if (status === 'waiting_approval') return resolveDreamWorkbenchText('pending');
     if (status === 'running') return resolveDreamWorkbenchText('phase_running');
     if (status === 'queued') return resolveDreamWorkbenchText('phase_queued');
     if (status === 'generated') return resolveDreamWorkbenchText('phase_completed');
@@ -21,6 +23,10 @@ function resolveExecutionModeLabel(mode?: string): string {
     if (mode === 'manual_review') return resolveDreamWorkbenchText('mode_manual_review');
     if (mode === 'silent') return resolveDreamWorkbenchText('mode_silent');
     return '';
+}
+
+function resolveUiState(snapshot: WorkbenchSnapshot): DreamUiStateSnapshot | null {
+    return snapshot.dreamSnapshot.uiState;
 }
 
 function resolveRunProfileLabel(profile?: string): string {
@@ -41,17 +47,17 @@ function resolveTriggerLabel(trigger?: string): string {
  * 功能：构建「当前梦境状态」区域标记。
  */
 export function buildDreamRuntimeStatusMarkup(snapshot: WorkbenchSnapshot): string {
-    const { schedulerState, sessions } = snapshot.dreamSnapshot;
-    const activeMeta = sessions.find((s) => s.meta?.status === 'running' || s.meta?.status === 'queued')?.meta;
-    const isActive = Boolean(activeMeta) || Boolean(schedulerState?.active);
+    const uiState = resolveUiState(snapshot);
+    const activeTask = uiState?.activeTask;
+    const isActive = Boolean(activeTask?.exists && activeTask.phase && activeTask.phase !== 'completed');
 
     if (!isActive) return '';
 
-    const phaseText = resolvePhaseLabel(activeMeta?.status, schedulerState?.active);
-    const triggerLabel = resolveTriggerLabel(activeMeta?.triggerReason ?? schedulerState?.lastTriggerSource);
-    const modeLabel = resolveExecutionModeLabel(activeMeta?.executionMode);
-    const profileLabel = resolveRunProfileLabel(activeMeta?.runProfile);
-    const startTime = activeMeta?.createdAt ? formatTimestamp(activeMeta.createdAt) : '';
+    const phaseText = resolvePhaseLabel(activeTask?.phase);
+    const triggerLabel = resolveTriggerLabel(activeTask?.triggerReason);
+    const modeLabel = resolveExecutionModeLabel(activeTask?.executionMode);
+    const profileLabel = resolveRunProfileLabel(activeTask?.runProfile);
+    const startTime = activeTask?.startedAt ? formatTimestamp(activeTask.startedAt) : '';
 
     return `
         <div class="stx-memory-workbench__card stx-memory-dream__runtime-status" style="border-left:3px solid rgba(100,181,246,.5); margin-bottom:12px;">
@@ -78,8 +84,13 @@ export function buildDreamRuntimeStatusMarkup(snapshot: WorkbenchSnapshot): stri
  * 功能：构建「待审批梦境」入口区域标记。
  */
 export function buildDreamPendingInboxMarkup(snapshot: WorkbenchSnapshot): string {
-    const { sessions } = snapshot.dreamSnapshot;
-    const pendingSessions = sessions.filter((s) => s.approval?.status === 'pending');
+    const uiState = resolveUiState(snapshot);
+    const sessionMap = new Map(snapshot.dreamSnapshot.sessions.map((session: DreamSessionRecord): [string, DreamSessionRecord] => {
+        return [String(session.meta?.dreamId ?? '').trim(), session];
+    }).filter(([dreamId]: [string, DreamSessionRecord]): boolean => Boolean(dreamId)));
+    const pendingSessions = (uiState?.inbox.pendingDreamIds ?? [])
+        .map((dreamId: string): DreamSessionRecord | undefined => sessionMap.get(dreamId))
+        .filter((session: DreamSessionRecord | undefined): session is DreamSessionRecord => Boolean(session));
     if (pendingSessions.length === 0) return '';
 
     const cards = pendingSessions.slice(0, 5).map((session) => {
@@ -129,7 +140,7 @@ export function buildDreamPendingInboxMarkup(snapshot: WorkbenchSnapshot): strin
                     </div>
                     <div class="stx-memory-workbench__meta">点击进入审核以查看梦境提案详情</div>
                 </div>
-                <span class="stx-memory-workbench__badge is-warn">${pendingSessions.length} ${escapeHtml(resolveDreamWorkbenchText('pending'))}</span>
+                <span class="stx-memory-workbench__badge is-warn">${uiState?.inbox.pendingApprovalCount ?? pendingSessions.length} ${escapeHtml(resolveDreamWorkbenchText('pending'))}</span>
             </div>
             <div class="stx-memory-dream__list" style="margin-top:10px;">
                 ${cards}
@@ -142,44 +153,32 @@ export function buildDreamPendingInboxMarkup(snapshot: WorkbenchSnapshot): strin
  * 功能：构建「最近梦境结果」概览区标记（最近完成/失败/回滚）。
  */
 export function buildDreamRecentResultsMarkup(snapshot: WorkbenchSnapshot): string {
-    const { sessions } = snapshot.dreamSnapshot;
-    const latestCompleted = sessions.find((s) =>
-        s.meta?.status === 'approved' || (s.meta?.status === 'generated' && s.approval?.status !== 'pending'),
-    );
-    const latestFailed = sessions.find((s) => s.meta?.status === 'failed');
-    const latestRolledBack = sessions.find((s) => s.meta?.status === 'rolled_back');
+    const uiState = resolveUiState(snapshot);
+    const latestCompleted = uiState?.latestCompleted;
+    const latestFailed = uiState?.latestFailed;
+    const latestRolledBack = uiState?.latestRolledBack;
 
     if (!latestCompleted && !latestFailed && !latestRolledBack) return '';
 
     const items: string[] = [];
 
     if (latestCompleted) {
-        const output = latestCompleted.output;
-        const highlights = output?.highlights ?? [];
-        const maintenanceApplied = latestCompleted.maintenanceProposals.filter((p) => p.status === 'applied').length;
-        let summaryText: string;
-        if (maintenanceApplied > 0 && highlights.length === 0) {
-            summaryText = formatDreamWorkbenchText('silent_applied', { count: maintenanceApplied });
-        } else if (highlights.length > 0) {
-            summaryText = formatDreamWorkbenchText('silent_highlights', { count: highlights.length });
-        } else {
-            summaryText = resolveDreamWorkbenchText('silent_completed');
-        }
-        const profileLabel = resolveRunProfileLabel(latestCompleted.meta?.runProfile);
+        const summaryText = latestCompleted.summaryText || resolveDreamWorkbenchText('silent_completed');
+        const profileLabel = resolveRunProfileLabel(latestCompleted.runProfile);
         items.push(`
             <div class="stx-memory-workbench__info-row" style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,.06);">
                 <span><i class="fa-solid fa-check-circle" style="color:#81c784; margin-right:6px;"></i>${escapeHtml(resolveDreamWorkbenchText('recent_completed'))}</span>
-                <strong>${escapeHtml(summaryText)}${profileLabel ? ` (${escapeHtml(profileLabel)})` : ''} · ${escapeHtml(formatTimestamp(latestCompleted.meta?.updatedAt))}</strong>
+                <strong>${escapeHtml(summaryText)}${profileLabel ? ` (${escapeHtml(profileLabel)})` : ''} · ${escapeHtml(formatTimestamp(latestCompleted.completedAt))}</strong>
             </div>
         `);
     }
 
     if (latestFailed) {
-        const reason = latestFailed.meta?.failureReason || resolveDreamWorkbenchText('unknown_reason');
+        const reason = latestFailed.reason || resolveDreamWorkbenchText('unknown_reason');
         items.push(`
             <div class="stx-memory-workbench__info-row" style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,.06);">
                 <span><i class="fa-solid fa-exclamation-triangle" style="color:#e57373; margin-right:6px;"></i>${escapeHtml(resolveDreamWorkbenchText('recent_failed'))}</span>
-                <strong>${escapeHtml(truncateText(reason, 60))} · ${escapeHtml(formatTimestamp(latestFailed.meta?.updatedAt))}</strong>
+                <strong>${escapeHtml(truncateText(reason, 60))} · ${escapeHtml(formatTimestamp(latestFailed.failedAt))}</strong>
             </div>
         `);
     }
@@ -188,7 +187,7 @@ export function buildDreamRecentResultsMarkup(snapshot: WorkbenchSnapshot): stri
         items.push(`
             <div class="stx-memory-workbench__info-row" style="padding:6px 0;">
                 <span><i class="fa-solid fa-undo" style="color:#bdbdbd; margin-right:6px;"></i>${escapeHtml(resolveDreamWorkbenchText('recent_rolled_back'))}</span>
-                <strong>${escapeHtml(formatTimestamp(latestRolledBack.meta?.updatedAt))}</strong>
+                <strong>${escapeHtml(formatTimestamp(latestRolledBack.rolledBackAt))}</strong>
             </div>
         `);
     }

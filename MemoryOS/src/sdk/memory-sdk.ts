@@ -67,6 +67,7 @@ import { DreamRollbackService } from '../services/dream-rollback-service';
 import type {
     DreamMaintenanceProposalRecord,
     DreamQualityReport,
+    DreamReviewDecision,
     DreamSchedulerStateRecord,
     DreamSessionRecord,
     DreamTriggerReason,
@@ -118,7 +119,6 @@ import { detectWorldProfile } from '../memory-world-profile';
 
 const AUTO_SUMMARY_MESSAGE_EVENT_TYPES: string[] = ['chat.message.sent', 'chat.message.received'];
 const AUTO_SUMMARY_MIN_MESSAGE_WINDOW: number = 10;
-const AUTO_SUMMARY_MAX_MESSAGE_WINDOW: number = 40;
 
 /**
  * 功能：定义统一记忆提示词注入入参。
@@ -188,7 +188,6 @@ export interface MemorySummaryTriggerStatus {
     currentFloorCount: number;
     summaryIntervalFloors: number;
     summaryMinMessages: number;
-    summaryRecentWindowSize: number;
     lastSummarizedIndex: number;
     lastSummarizedMessageId?: string;
     pendingStartIndex: number;
@@ -401,6 +400,10 @@ export class MemorySDKImpl {
         ) => Promise<ImportMemoryPromptTestBundleResult>;
         rebuildLogicalChatView: () => Promise<void>;
         startDreamSession: (reason: DreamTriggerReason, executionContext?: DreamExecutionContext) => Promise<MemoryDreamExecutionResult>;
+        reviewPendingDreamSession: (input: {
+            dreamId: string;
+            review: DreamReviewDecision;
+        }) => Promise<MemoryDreamExecutionResult>;
         primeColdStartPrompt: (
             _reason?: string,
             selection?: MemoryColdStartWorldbookSelection,
@@ -558,10 +561,6 @@ export class MemorySDKImpl {
                     2,
                     Math.trunc(Number(settings.summaryMinMessages) || AUTO_SUMMARY_MIN_MESSAGE_WINDOW),
                 );
-                const summaryRecentWindowSize: number = Math.max(
-                    AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
-                    Math.min(AUTO_SUMMARY_MAX_MESSAGE_WINDOW, Math.trunc(Number(settings.summaryRecentWindowSize) || AUTO_SUMMARY_MAX_MESSAGE_WINDOW)),
-                );
                 const hostMessages = this.readActiveHostChatMessages();
                 const messageFloorCount: number = hostMessages.length > 0
                     ? hostMessages.length
@@ -577,7 +576,11 @@ export class MemorySDKImpl {
                         0,
                         Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
                     );
-                    if (messageFloorCount - lastSummaryFloorCount < summaryIntervalFloors) {
+                    const storedPendingEndIndex: number = Math.max(
+                        lastSummaryFloorCount,
+                        Math.trunc(Number(state.summaryPendingEndIndex) || lastSummaryFloorCount),
+                    );
+                    if (messageFloorCount - lastSummaryFloorCount < summaryIntervalFloors && storedPendingEndIndex <= lastSummaryFloorCount) {
                         return;
                     }
                     if (messageFloorCount < summaryMinMessages) {
@@ -585,10 +588,6 @@ export class MemorySDKImpl {
                     }
                 }
 
-                const messageWindowLimit: number = Math.max(
-                    summaryMinMessages,
-                    Math.min(summaryRecentWindowSize, summaryIntervalFloors),
-                );
                 const stateRow = await readMemoryOSChatState(this.chatKey_);
                 const state = this.toRecord(stateRow?.state);
                 const lastSummarizedIndex = Math.max(
@@ -596,10 +595,22 @@ export class MemorySDKImpl {
                     Math.trunc(Number(state.summaryLastSummarizedIndex ?? state.autoSummaryLastFloorCount) || 0),
                 );
                 const pendingEndIndex = messageFloorCount;
+                const pendingNewFloorCount: number = Math.max(0, pendingEndIndex - lastSummarizedIndex);
+                if (pendingNewFloorCount <= 0) {
+                    return;
+                }
+                const messageWindowLimit: number = pendingNewFloorCount;
                 const messages = hostMessages.length > 0
-                    ? hostMessages.slice(-messageWindowLimit)
+                    ? hostMessages.slice(lastSummarizedIndex, lastSummarizedIndex + messageWindowLimit)
                     : await this.readSummaryMessagesFromEvents(pendingEndIndex, messageWindowLimit);
                 if (messages.length <= 0) {
+                    return;
+                }
+                const summarizedEndIndex: number = Math.max(
+                    lastSummarizedIndex,
+                    ...messages.map((message): number => Math.trunc(Number(message.turnIndex) || 0)),
+                );
+                if (summarizedEndIndex <= lastSummarizedIndex) {
                     return;
                 }
                 const snapshot = await this.summaryService.captureSummaryFromChat({ messages });
@@ -611,12 +622,12 @@ export class MemorySDKImpl {
                     ? undefined
                     : await this.readLastSummarizedMessageIdFromEvents(messageWindowLimit);
                 await this.writeColdStartState({
-                    autoSummaryLastFloorCount: messageFloorCount,
+                    autoSummaryLastFloorCount: summarizedEndIndex,
                     autoSummaryLastTriggeredAt: Date.now(),
-                    summaryLastSummarizedIndex: pendingEndIndex,
+                    summaryLastSummarizedIndex: summarizedEndIndex,
                     summaryLastSummarizedMessageId: lastSummarizedMessageId,
-                    summaryPendingStartIndex: pendingEndIndex + 1,
-                    summaryPendingEndIndex: pendingEndIndex,
+                    summaryPendingStartIndex: summarizedEndIndex + 1,
+                    summaryPendingEndIndex: summarizedEndIndex,
                     summaryLastSummarizedAt: Date.now(),
                 });
             },
@@ -763,7 +774,9 @@ export class MemorySDKImpl {
                 return this.takeoverService.abortTakeover();
             },
             markTakeoverHandled: async (): Promise<MemoryTakeoverProgressSnapshot> => {
-                return this.takeoverService.markAsHandled(await this.readCurrentSummaryFloorCount());
+                const progress = await this.takeoverService.markAsHandled(await this.readCurrentSummaryFloorCount());
+                await this.alignSummaryProgressToCurrentFloor();
+                return progress;
             },
             getContentLabSettings: async (): Promise<ContentLabSettings> => {
                 return this.takeoverService.readContentLabSettings();
@@ -875,6 +888,16 @@ export class MemorySDKImpl {
                 const result = await this.dreamingService.startDreamSession(reason, executionContext);
                 if (result.ok && result.status === 'approved') {
                     await this.refreshVectorIndexAfterPipeline('梦境审批写回');
+                }
+                return result;
+            },
+            reviewPendingDreamSession: async (input: {
+                dreamId: string;
+                review: DreamReviewDecision;
+            }): Promise<MemoryDreamExecutionResult> => {
+                const result = await this.dreamingService.reviewPendingDreamSession(input);
+                if (result.ok && result.status === 'approved') {
+                    await this.refreshVectorIndexAfterPipeline('梦境待审批写回');
                 }
                 return result;
             },
@@ -3452,6 +3475,7 @@ export class MemorySDKImpl {
         const currentFloorCount = await this.readCurrentSummaryFloorCount();
         const now: number = Date.now();
         await this.writeColdStartState({
+            autoSummaryLastFloorCount: currentFloorCount,
             summaryLastSummarizedIndex: currentFloorCount,
             summaryLastSummarizedMessageId: undefined,
             summaryPendingStartIndex: currentFloorCount + 1,
@@ -4102,13 +4126,6 @@ export class MemorySDKImpl {
             2,
             Math.trunc(Number(settings.summaryMinMessages) || AUTO_SUMMARY_MIN_MESSAGE_WINDOW),
         );
-        const summaryRecentWindowSize = Math.max(
-            AUTO_SUMMARY_MIN_MESSAGE_WINDOW,
-            Math.min(
-                AUTO_SUMMARY_MAX_MESSAGE_WINDOW,
-                Math.trunc(Number(settings.summaryRecentWindowSize) || AUTO_SUMMARY_MAX_MESSAGE_WINDOW),
-            ),
-        );
         const nextTriggerFloor = Math.max(
             summaryMinMessages,
             summaryProgress.lastSummarizedIndex + summaryIntervalFloors,
@@ -4130,7 +4147,6 @@ export class MemorySDKImpl {
             currentFloorCount,
             summaryIntervalFloors,
             summaryMinMessages,
-            summaryRecentWindowSize,
             lastSummarizedIndex: summaryProgress.lastSummarizedIndex,
             lastSummarizedMessageId: summaryProgress.lastSummarizedMessageId,
             pendingStartIndex: summaryProgress.pendingStartIndex,
@@ -4234,31 +4250,31 @@ export class MemorySDKImpl {
         if (hostMessages.length <= 0) {
             return [];
         }
-        return hostMessages
-            .map((row: unknown, index: number): { role?: string; content?: string; name?: string; turnIndex?: number } | null => {
-                if (!row || typeof row !== 'object') {
-                    return null;
-                }
-                const record = row as Record<string, unknown>;
-                const content = String(getTavernMessageTextEvent(record) ?? '').trim();
-                if (!content) {
-                    return null;
-                }
-                const explicitRole = String(record.role ?? '').trim().toLowerCase();
-                const role = explicitRole === 'user' || explicitRole === 'assistant' || explicitRole === 'system'
-                    ? explicitRole
-                    : (record.is_user === true ? 'user' : (record.is_system === true ? 'system' : 'assistant'));
-                if (role === 'system') {
-                    return null;
-                }
-                return {
-                    role,
-                    content,
-                    name: String(record.name ?? record.display_name ?? '').trim() || undefined,
-                    turnIndex: index + 1,
-                };
-            })
-            .filter((item): item is { role?: string; content?: string; name?: string; turnIndex?: number } => item !== null);
+        const normalizedMessages: Array<{ role?: string; content?: string; name?: string; turnIndex?: number }> = [];
+        for (const row of hostMessages) {
+            if (!row || typeof row !== 'object') {
+                continue;
+            }
+            const record = row as Record<string, unknown>;
+            const content = String(getTavernMessageTextEvent(record) ?? '').trim();
+            if (!content) {
+                continue;
+            }
+            const explicitRole = String(record.role ?? '').trim().toLowerCase();
+            const role = explicitRole === 'user' || explicitRole === 'assistant' || explicitRole === 'system'
+                ? explicitRole
+                : (record.is_user === true ? 'user' : (record.is_system === true ? 'system' : 'assistant'));
+            if (role === 'system') {
+                continue;
+            }
+            normalizedMessages.push({
+                role,
+                content,
+                name: String(record.name ?? record.display_name ?? '').trim() || undefined,
+                turnIndex: normalizedMessages.length + 1,
+            });
+        }
+        return normalizedMessages;
     }
 
     /**

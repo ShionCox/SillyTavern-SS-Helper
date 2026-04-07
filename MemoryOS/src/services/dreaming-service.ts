@@ -61,6 +61,7 @@ export type DreamExecutionContext = {
     executionMode?: DreamExecutionMode;
     resolvedPlan?: ResolvedDreamExecutionPlan;
     triggerSource?: DreamTriggerReason;
+    dreamId?: string;
 };
 
 /**
@@ -149,7 +150,7 @@ export class DreamingService {
                 errorMessage: '当前聊天已有梦境会话正在运行，请稍后再试。',
             };
         }
-        const dreamId = `dream:${this.chatKey}:${crypto.randomUUID()}`;
+        const dreamId = String(executionContext?.dreamId ?? '').trim() || `dream:${this.chatKey}:${crypto.randomUUID()}`;
         const now = Date.now();
         const meta: DreamSessionMetaRecord = {
             dreamId,
@@ -340,118 +341,14 @@ export class DreamingService {
                 rejectedMaintenanceProposalIds: Array.isArray(reviewResult.rejectedMaintenanceProposalIds) ? reviewResult.rejectedMaintenanceProposalIds : [],
             };
 
-            if (review.decision === 'deferred') {
-                await this.dreamRepository.saveDreamSessionApproval({
-                    dreamId,
-                    chatKey: this.chatKey,
-                    status: 'pending',
-                    approvedMutationIds: review.approvedMutationIds,
-                    rejectedMutationIds: review.rejectedMutationIds,
-                    approvedMaintenanceProposalIds: review.approvedMaintenanceProposalIds,
-                    rejectedMaintenanceProposalIds: review.rejectedMaintenanceProposalIds,
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                });
-                await this.repository.appendMutationHistory({
-                    action: 'dream_session_deferred',
-                    payload: { dreamId },
-                });
-                return { ok: true, dreamId, status: 'deferred' };
-            }
-
-            if (review.decision === 'rejected' || (review.approvedMutationIds.length <= 0 && review.approvedMaintenanceProposalIds.length <= 0)) {
-                await this.rejectPendingMaintenanceProposals(maintenanceProposals);
-                await this.dreamRepository.saveDreamSessionApproval({
-                    dreamId,
-                    chatKey: this.chatKey,
-                    status: 'rejected',
-                    approvedMutationIds: [],
-                    rejectedMutationIds: output.proposedMutations.map((item: DreamMutationProposal): string => item.mutationId),
-                    approvedMaintenanceProposalIds: [],
-                    rejectedMaintenanceProposalIds: maintenanceProposals.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                });
-                await this.dreamRepository.saveDreamSessionMeta({
-                    ...meta,
-                    status: 'rejected',
-                    updatedAt: Date.now(),
-                });
-                await this.repository.appendMutationHistory({
-                    action: 'dream_session_rejected',
-                    payload: { dreamId },
-                });
-                return { ok: true, dreamId, status: 'rejected' };
-            }
-
-            const approvedMutations = output.proposedMutations.filter((mutation: DreamMutationProposal): boolean => {
-                return review.approvedMutationIds.includes(mutation.mutationId);
-            });
-            const guardedMutations = qualityReport
-                ? this.qualityGuardService.guardDreamMutations({
-                    output: {
-                        ...output,
-                        proposedMutations: approvedMutations,
-                    },
-                    qualityReport,
-                })
-                : approvedMutations;
-            const applyResult: {
-                rollbackKey?: string;
-                appliedMutationIds: string[];
-                affectedEntryIds: string[];
-                affectedRelationshipIds: string[];
-            } = guardedMutations.length > 0
-                ? await this.mutationApplier.applyDreamMutations({
-                    dreamId,
-                    mutations: guardedMutations,
-                })
-                : {
-                    rollbackKey: '',
-                    appliedMutationIds: [],
-                    affectedEntryIds: [],
-                    affectedRelationshipIds: [],
-                };
-            const selectedMaintenanceProposals = maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
-                return review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
-            });
-            const appliedMaintenance: DreamMaintenanceProposalRecord[] = [];
-            for (const proposal of selectedMaintenanceProposals) {
-                appliedMaintenance.push(await this.maintenancePlanner.applyDreamMaintenanceProposal(proposal));
-            }
-            await this.rejectPendingMaintenanceProposals(maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
-                return proposal.status === 'pending' && !review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
-            }));
-            if (appliedMaintenance.length > 0) {
-                await this.maintenancePlanner.mergeAppliedMaintenanceIntoRollback({
-                    dreamId,
-                    appliedProposals: appliedMaintenance,
-                });
-            }
-            await this.dreamRepository.saveDreamSessionApproval({
+            return this.applyReviewDecisionToGeneratedSession({
                 dreamId,
-                chatKey: this.chatKey,
-                status: 'approved',
-                approvedMutationIds: applyResult.appliedMutationIds,
-                rejectedMutationIds: output.proposedMutations
-                    .map((item: DreamMutationProposal): string => item.mutationId)
-                    .filter((mutationId: string): boolean => !applyResult.appliedMutationIds.includes(mutationId)),
-                approvedMaintenanceProposalIds: appliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
-                rejectedMaintenanceProposalIds: maintenanceProposals
-                    .map((item: DreamMaintenanceProposalRecord): string => item.proposalId)
-                    .filter((proposalId: string): boolean => !review.approvedMaintenanceProposalIds.includes(proposalId)),
-                    rollbackKey: applyResult.rollbackKey || undefined,
-                    approvalMode: 'interactive',
-                    approvedAt: Date.now(),
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
+                meta,
+                output,
+                maintenanceProposals,
+                qualityReport,
+                review,
             });
-            await this.dreamRepository.saveDreamSessionMeta({
-                ...meta,
-                status: 'approved',
-                updatedAt: Date.now(),
-            });
-            return { ok: true, dreamId, status: 'approved' };
         } catch (error) {
             const message = String((error as Error)?.message ?? error).trim() || 'dream_failed';
             if (sessionPersisted) {
@@ -481,6 +378,208 @@ export class DreamingService {
         } finally {
             runningChatKeys.delete(this.chatKey);
         }
+    }
+
+    /**
+     * 功能：应用待审批梦境的审核结果。
+     * @param input 待审批梦境 ID 与用户审核结果。
+     * @returns 审批应用结果。
+     */
+    async reviewPendingDreamSession(input: {
+        dreamId: string;
+        review: DreamReviewDecision;
+    }): Promise<DreamStartResult> {
+        const dreamId = String(input.dreamId ?? '').trim();
+        if (!dreamId) {
+            return { ok: false, reasonCode: 'dream_id_missing', errorMessage: '缺少梦境会话 ID。' };
+        }
+        const session = await this.dreamRepository.getDreamSessionById(dreamId);
+        if (!session.meta || !session.output) {
+            return { ok: false, dreamId, reasonCode: 'dream_session_not_found', errorMessage: '未找到可审批的梦境会话。' };
+        }
+        if (session.approval?.status !== 'pending') {
+            return { ok: false, dreamId, reasonCode: 'dream_session_not_pending', errorMessage: '该梦境会话当前不处于待审批状态。' };
+        }
+        return this.applyReviewDecisionToGeneratedSession({
+            dreamId,
+            meta: session.meta,
+            output: session.output,
+            maintenanceProposals: session.maintenanceProposals,
+            qualityReport: session.qualityReport,
+            review: input.review,
+        });
+    }
+
+    /**
+     * 功能：把审核结果应用到已生成的梦境会话。
+     * @param input 已生成会话及审核结果。
+     * @returns 最终审批状态。
+     */
+    private async applyReviewDecisionToGeneratedSession(input: {
+        dreamId: string;
+        meta: DreamSessionMetaRecord;
+        output: DreamSessionOutputRecord;
+        maintenanceProposals: DreamMaintenanceProposalRecord[];
+        qualityReport: DreamQualityReport | null;
+        review: DreamReviewDecision;
+    }): Promise<DreamStartResult> {
+        const review = this.normalizeDreamReviewDecision(input.review);
+        if (review.decision === 'deferred') {
+            await this.dreamRepository.saveDreamSessionApproval({
+                dreamId: input.dreamId,
+                chatKey: this.chatKey,
+                status: 'pending',
+                approvedMutationIds: review.approvedMutationIds,
+                rejectedMutationIds: review.rejectedMutationIds,
+                approvedMaintenanceProposalIds: review.approvedMaintenanceProposalIds,
+                rejectedMaintenanceProposalIds: review.rejectedMaintenanceProposalIds,
+                approvalMode: 'deferred',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            });
+            await this.repository.appendMutationHistory({
+                action: 'dream_session_deferred',
+                payload: { dreamId: input.dreamId },
+            });
+            return { ok: true, dreamId: input.dreamId, status: 'deferred' };
+        }
+
+        if (review.decision === 'rejected' || (review.approvedMutationIds.length <= 0 && review.approvedMaintenanceProposalIds.length <= 0)) {
+            return this.rejectGeneratedSession({
+                dreamId: input.dreamId,
+                meta: input.meta,
+                output: input.output,
+                maintenanceProposals: input.maintenanceProposals,
+            });
+        }
+
+        const approvedMutations = input.output.proposedMutations.filter((mutation: DreamMutationProposal): boolean => {
+            return review.approvedMutationIds.includes(mutation.mutationId);
+        });
+        const guardedMutations = input.qualityReport
+            ? this.qualityGuardService.guardDreamMutations({
+                output: {
+                    ...input.output,
+                    proposedMutations: approvedMutations,
+                },
+                qualityReport: input.qualityReport,
+            })
+            : approvedMutations;
+        const applyResult: {
+            rollbackKey?: string;
+            appliedMutationIds: string[];
+            affectedEntryIds: string[];
+            affectedRelationshipIds: string[];
+        } = guardedMutations.length > 0
+            ? await this.mutationApplier.applyDreamMutations({
+                dreamId: input.dreamId,
+                mutations: guardedMutations,
+            })
+            : {
+                rollbackKey: '',
+                appliedMutationIds: [],
+                affectedEntryIds: [],
+                affectedRelationshipIds: [],
+            };
+        const selectedMaintenanceProposals = input.maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+            return review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
+        });
+        const appliedMaintenance: DreamMaintenanceProposalRecord[] = [];
+        for (const proposal of selectedMaintenanceProposals) {
+            appliedMaintenance.push(await this.maintenancePlanner.applyDreamMaintenanceProposal(proposal));
+        }
+        await this.rejectPendingMaintenanceProposals(input.maintenanceProposals.filter((proposal: DreamMaintenanceProposalRecord): boolean => {
+            return proposal.status === 'pending' && !review.approvedMaintenanceProposalIds.includes(proposal.proposalId);
+        }));
+        if (appliedMaintenance.length > 0) {
+            await this.maintenancePlanner.mergeAppliedMaintenanceIntoRollback({
+                dreamId: input.dreamId,
+                appliedProposals: appliedMaintenance,
+            });
+        }
+        await this.dreamRepository.saveDreamSessionApproval({
+            dreamId: input.dreamId,
+            chatKey: this.chatKey,
+            status: 'approved',
+            approvedMutationIds: applyResult.appliedMutationIds,
+            rejectedMutationIds: input.output.proposedMutations
+                .map((item: DreamMutationProposal): string => item.mutationId)
+                .filter((mutationId: string): boolean => !applyResult.appliedMutationIds.includes(mutationId)),
+            approvedMaintenanceProposalIds: appliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
+            rejectedMaintenanceProposalIds: input.maintenanceProposals
+                .map((item: DreamMaintenanceProposalRecord): string => item.proposalId)
+                .filter((proposalId: string): boolean => !review.approvedMaintenanceProposalIds.includes(proposalId)),
+            rollbackKey: applyResult.rollbackKey || undefined,
+            approvalMode: 'interactive',
+            approvedAt: Date.now(),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+        await this.dreamRepository.saveDreamSessionMeta({
+            ...input.meta,
+            status: 'approved',
+            updatedAt: Date.now(),
+        });
+        await this.repository.appendMutationHistory({
+            action: 'dream_session_approved',
+            payload: {
+                dreamId: input.dreamId,
+                appliedMutationIds: applyResult.appliedMutationIds,
+                appliedMaintenanceProposalIds: appliedMaintenance.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
+            },
+        });
+        return { ok: true, dreamId: input.dreamId, status: 'approved' };
+    }
+
+    /**
+     * 功能：拒绝已生成的梦境会话。
+     * @param input 已生成会话数据。
+     * @returns 拒绝结果。
+     */
+    private async rejectGeneratedSession(input: {
+        dreamId: string;
+        meta: DreamSessionMetaRecord;
+        output: DreamSessionOutputRecord;
+        maintenanceProposals: DreamMaintenanceProposalRecord[];
+    }): Promise<DreamStartResult> {
+        await this.rejectPendingMaintenanceProposals(input.maintenanceProposals);
+        await this.dreamRepository.saveDreamSessionApproval({
+            dreamId: input.dreamId,
+            chatKey: this.chatKey,
+            status: 'rejected',
+            approvedMutationIds: [],
+            rejectedMutationIds: input.output.proposedMutations.map((item: DreamMutationProposal): string => item.mutationId),
+            approvedMaintenanceProposalIds: [],
+            rejectedMaintenanceProposalIds: input.maintenanceProposals.map((item: DreamMaintenanceProposalRecord): string => item.proposalId),
+            approvalMode: 'interactive',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+        await this.dreamRepository.saveDreamSessionMeta({
+            ...input.meta,
+            status: 'rejected',
+            updatedAt: Date.now(),
+        });
+        await this.repository.appendMutationHistory({
+            action: 'dream_session_rejected',
+            payload: { dreamId: input.dreamId },
+        });
+        return { ok: true, dreamId: input.dreamId, status: 'rejected' };
+    }
+
+    /**
+     * 功能：归一化梦境审核结果。
+     * @param review 原始审核结果。
+     * @returns 安全的审核结果。
+     */
+    private normalizeDreamReviewDecision(review: DreamReviewDecision): DreamReviewDecision {
+        return {
+            decision: review.decision,
+            approvedMutationIds: Array.isArray(review.approvedMutationIds) ? review.approvedMutationIds : [],
+            rejectedMutationIds: Array.isArray(review.rejectedMutationIds) ? review.rejectedMutationIds : [],
+            approvedMaintenanceProposalIds: Array.isArray(review.approvedMaintenanceProposalIds) ? review.approvedMaintenanceProposalIds : [],
+            rejectedMaintenanceProposalIds: Array.isArray(review.rejectedMaintenanceProposalIds) ? review.rejectedMaintenanceProposalIds : [],
+        };
     }
 
     private async rejectPendingMaintenanceProposals(proposals: DreamMaintenanceProposalRecord[]): Promise<void> {

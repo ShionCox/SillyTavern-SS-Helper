@@ -272,11 +272,19 @@ export class DreamSessionRepository {
      */
     async getLatestCompletedSession(): Promise<DreamSessionRecord | null> {
         const metas = await this.listDreamSessionMetas(20);
-        const completedMeta = metas.find((m: DreamSessionMetaRecord): boolean =>
-            m.status === 'approved' || m.status === 'generated',
-        );
-        if (!completedMeta) return null;
-        return this.getDreamSessionById(completedMeta.dreamId);
+        for (const meta of metas) {
+            if (meta.status === 'approved') {
+                return this.getDreamSessionById(meta.dreamId);
+            }
+            if (meta.status !== 'generated') {
+                continue;
+            }
+            const session = await this.getDreamSessionById(meta.dreamId);
+            if (session.approval?.status !== 'pending') {
+                return session;
+            }
+        }
+        return null;
     }
 
     /**

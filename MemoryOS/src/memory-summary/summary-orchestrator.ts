@@ -25,7 +25,7 @@ import type { MemoryLLMApi } from './llm-types';
 import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { readMemoryOSSettings } from '../settings/store';
 import { resolvePipelineBudgetPolicy } from '../pipeline/pipeline-budget';
-import { upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
+import { readPipelineJobRecord, upsertPipelineJobRecord, updatePipelineJobPhase } from '../pipeline/pipeline-job-store';
 import { assessBatchTime } from '../memory-time/batch-time-assessment';
 import { enhanceMemoryTimeContextWithText, mapBatchToMemoryTimeContext } from '../memory-time/fallback-time-engine';
 import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug';
@@ -394,20 +394,22 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             schema: strictSummarySchema,
         });
         if (!batchResult.ok || !batchResult.data) {
+            const reasonCode = batchResult.reasonCode || 'summary_llm_failed';
             await input.dependencies.appendMutationHistory({
                 action: 'summary_failed',
                 payload: {
-                    reasonCode: batchResult.reasonCode || 'summary_llm_failed',
+                    reasonCode,
                     batchId: batchPlan.batchId,
                     worldProfile: resumedDiagnostics.worldProfile,
                 },
             });
+            markSummaryPipelineJobFailed(summaryJobId, reasonCode);
             return buildSummaryFailureResult(
                 {
                     ...plannerResult,
                     diagnostics: resumedDiagnostics,
                 },
-                batchResult.reasonCode || 'summary_llm_failed',
+                reasonCode,
             );
         }
         const decodedDocument = decodeSummaryPromptDocument(batchResult.data, mutationContextResult);
@@ -454,6 +456,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                     worldProfile: resumedDiagnostics.worldProfile,
                 },
             });
+            markSummaryPipelineJobFailed(summaryJobId, reasonCode);
             return buildSummaryFailureResult({
                 ...plannerResult,
                 diagnostics: resumedDiagnostics,
@@ -470,6 +473,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
     const stagingSnapshot = readSummaryMutationStagingSnapshot(summaryJobId);
     if (!stagingSnapshot || stagingSnapshot.batchResults.length <= 0) {
         clearSummaryMutationStagingSnapshot(summaryJobId);
+        markSummaryPipelineJobFailed(summaryJobId, 'empty_mutation_batches');
         return buildSummaryFailureResult({
             ...plannerResult,
             diagnostics: resumedDiagnostics,
@@ -605,6 +609,25 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 function buildSummaryJobId(chatKey: string | undefined, fromTurn: number, toTurn: number): string {
     const normalizedChatKey = String(chatKey ?? '').trim() || 'global';
     return `summary:${normalizedChatKey}:${fromTurn}:${toTurn}`;
+}
+
+/**
+ * 功能：把总结流水线任务标记为失败。
+ * @param summaryJobId 总结任务标识。
+ * @param reasonCode 失败原因码。
+ * @returns 无返回值。
+ */
+function markSummaryPipelineJobFailed(summaryJobId: string, reasonCode: string): void {
+    const current = readPipelineJobRecord(summaryJobId);
+    if (!current) {
+        return;
+    }
+    upsertPipelineJobRecord({
+        ...current,
+        status: 'failed',
+        errorCode: reasonCode,
+        errorMessage: reasonCode,
+    });
 }
 
 /**

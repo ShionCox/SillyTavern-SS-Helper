@@ -16,7 +16,8 @@ type DreamSchedulerJob = {
         holderId: string;
         executionMode: DreamExecutionMode;
         triggerSource: Exclude<DreamTriggerReason, 'manual'>;
-    }) => Promise<{ ok: boolean; status?: string; reasonCode?: string }>;
+        dreamId: string;
+    }) => Promise<{ ok: boolean; dreamId?: string; status?: string; reasonCode?: string }>;
 };
 
 const globalQueue: DreamSchedulerJob[] = [];
@@ -35,6 +36,16 @@ function buildDateKey(ts: number): string {
 function createDreamSchedulerHolderId(): string {
     const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return `dream_scheduler:${randomId}`;
+}
+
+/**
+ * 功能：创建调度器预分配的真实梦境会话 ID。
+ * @param chatKey 当前聊天键。
+ * @returns 梦境会话 ID。
+ */
+function createScheduledDreamId(chatKey: string): string {
+    const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return `dream:${chatKey}:${randomId}`;
 }
 
 /**
@@ -153,9 +164,10 @@ export class DreamSchedulerService {
         const repo = new DreamSessionRepository(job.chatKey);
         const state = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
         const lockService = new DreamLockService({ chatKey: job.chatKey, holderId: this.holderId });
+        const scheduledDreamId = createScheduledDreamId(job.chatKey);
         const lockResult = await lockService.tryAcquireLock({
             triggerSource: job.triggerSource,
-            dreamId: `dream_run:${job.chatKey}:${Date.now()}`,
+            dreamId: scheduledDreamId,
             ttlMs: DEFAULT_DREAM_LOCK_TTL_MS,
         });
         const lockDecision: DreamScheduleDecision = {
@@ -185,7 +197,7 @@ export class DreamSchedulerService {
             }
             return;
         }
-        const activeDreamId = lockResult.record?.dreamId;
+        const activeDreamId = lockResult.record?.dreamId ?? scheduledDreamId;
         const executionMode = readMemoryOSSettings().dreamExecutionMode;
         const startedAt = Date.now();
         await repo.saveDreamSchedulerState({
@@ -206,7 +218,9 @@ export class DreamSchedulerService {
                 holderId: this.holderId,
                 executionMode,
                 triggerSource: job.triggerSource,
+                dreamId: activeDreamId,
             });
+            const resultDreamId = String(result.dreamId ?? '').trim();
             const now = Date.now();
             const dateKey = buildDateKey(now);
             const nextState = await repo.getDreamSchedulerState() ?? this.createDefaultState(job.chatKey);
@@ -217,6 +231,9 @@ export class DreamSchedulerService {
                 lastCompletedAt: now,
                 lastSuccessAt: result.ok ? now : nextState.lastSuccessAt,
                 lastFailedAt: result.ok ? nextState.lastFailedAt : now,
+                lastBlockedReasonCodes: resultDreamId && resultDreamId !== activeDreamId
+                    ? ['dream_id_mismatch']
+                    : nextState.lastBlockedReasonCodes,
                 dailyDateKey: nextState.dailyDateKey === dateKey ? dateKey : dateKey,
                 dailyRunCount: nextState.dailyDateKey === dateKey ? nextState.dailyRunCount + (result.ok ? 1 : 0) : (result.ok ? 1 : 0),
                 activeDreamId: undefined,

@@ -739,7 +739,7 @@ export function buildSettingsCardStylesTemplate(cardId: string): string {
 
     #${cardId} .stx-ui-consumer-map-form {
       display: grid;
-      grid-template-columns: minmax(0, 1.45fr) minmax(180px, 0.85fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px 10px;
       width: 100%;
       min-width: 0;

@@ -55,6 +55,15 @@ export function statusBadgeClass(status: string): string {
     return 'stx-memory-workbench__badge stx-memory-dream-workbench__status-badge';
 }
 
+function resolveDreamSessionStatusLabel(session: DreamSessionRecord): string {
+    if (session.approval?.approvalMode === 'auto_silent' && session.approval.status === 'approved') {
+        return '已自动处理';
+    }
+    const status = String(session.meta?.status ?? 'unknown').trim();
+    const localized = resolveDreamWorkbenchText(status);
+    return localized === status ? status : localized;
+}
+
 function renderDreamMetaId(value: string | null | undefined, extraClass = ''): string {
     const text = String(value ?? '').trim();
     if (!text) {
@@ -230,7 +239,7 @@ function buildDreamOverviewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchS
                     ${escapeHtml(resolveDreamWorkbenchText('dream_record'))} - ${escapeHtml(resolveDreamTriggerReasonLabel(session.meta?.triggerReason))}
                     <div class="stx-memory-workbench__meta stx-memory-workbench__truncate-id" title="${escapeHtml(session.meta?.dreamId || '')}" style="margin-top:2px;">${escapeHtml(session.meta?.dreamId || '')}</div>
                 </div>
-                <span class="stx-memory-workbench__badge ${session.meta?.status === 'approved' ? 'is-success' : session.meta?.status === 'rolled_back' ? 'is-warn' : ''}">${escapeHtml(resolveDreamWorkbenchText(session.meta?.status || ''))}</span>
+                <span class="stx-memory-workbench__badge ${session.meta?.status === 'approved' ? 'is-success' : session.meta?.status === 'rolled_back' ? 'is-warn' : ''}">${escapeHtml(resolveDreamSessionStatusLabel(session))}</span>
             </div>
             <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--compact" style="margin-bottom:8px;">
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveDreamWorkbenchText('quality_score'))}</span><strong>${escapeHtml(session.qualityReport?.qualityScore ? session.qualityReport.qualityScore.toFixed(2) : resolveDreamWorkbenchText('no_data'))}</strong></div>
@@ -536,7 +545,7 @@ const approvedSessions = visibleSessions.filter((item: DreamSessionRecord): bool
                                                         <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('rollbackable_sessions'))}</div>
                                                         ${renderDreamKeyMeta(resolveDreamWorkbenchText('id_label'), m?.dreamId || '')}
                                                     </div>
-                                                    <span class="${statusBadgeClass(m?.status || '')}">${escapeHtml(resolveDreamWorkbenchText(m?.status || '') === (m?.status || '') ? (m?.status || '') : resolveDreamWorkbenchText(m?.status || ''))}</span>
+                                                    <span class="${statusBadgeClass(m?.status || '')}">${escapeHtml(resolveDreamSessionStatusLabel(session))}</span>
                                                 </div>
                                                 <div class="stx-memory-dream-workbench__meta stx-memory-dream-workbench__meta-grid">
                                                     ${escapeHtml(resolveDreamWorkbenchText('trigger_reason'))}：${escapeHtml(resolveDreamTriggerReasonLabel(m?.triggerReason))} / ${escapeHtml(resolveDreamWorkbenchText('time_label'))}：${escapeHtml(m ? new Date(m.createdAt).toLocaleString('zh-CN') : '-')}
@@ -590,7 +599,7 @@ function renderSessionCard(session: DreamSessionRecord): string {
                     <div class="stx-memory-dream-workbench__title">${escapeHtml(resolveDreamWorkbenchText('dream_record'))}</div>
                     ${renderDreamKeyMeta(resolveDreamWorkbenchText('id_label'), meta?.dreamId)}
                 </div>
-                <span class="${statusBadgeClass(status)}">${escapeHtml(resolveDreamWorkbenchText(status) === status ? status : resolveDreamWorkbenchText(status))}</span>
+                <span class="${statusBadgeClass(status)}">${escapeHtml(resolveDreamSessionStatusLabel(session))}</span>
             </div>
             <div class="stx-memory-dream-workbench__meta stx-memory-dream-workbench__meta-grid">
                 ${escapeHtml(resolveDreamWorkbenchText('trigger_reason'))}：${escapeHtml(resolveDreamTriggerReasonLabel(meta?.triggerReason))} / ${escapeHtml(resolveDreamWorkbenchText('time_label'))}：${escapeHtml(meta ? new Date(meta.createdAt).toLocaleString('zh-CN') : '-')}

@@ -22,6 +22,7 @@ import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
 import type { ContentPreviewSourceMode, RawFloorRecord } from '../../memory-takeover/content-block-pipeline';
 import type { DreamMaintenanceProposalRecord, DreamQualityReport, DreamSchedulerStateRecord, DreamSessionRecord } from '../../services/dream-types';
+import type { DreamUiStateSnapshot } from '../dream-ui-state-service';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'content-lab' | 'dream';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
@@ -268,6 +269,7 @@ export interface WorkbenchSnapshot {
         maintenanceProposals: DreamMaintenanceProposalRecord[];
         qualityReports: DreamQualityReport[];
         schedulerState: DreamSchedulerStateRecord | null;
+        uiState: DreamUiStateSnapshot | null;
     };
 }
 

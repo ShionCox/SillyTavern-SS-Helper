@@ -54,7 +54,7 @@ export function buildSummaryWindow(messages: SummaryWindowMessage[], options?: S
             const turn = Math.trunc(Number(m.turnIndex) || 0);
             return turn >= options!.pendingStartIndex! && turn <= options!.pendingEndIndex!;
         })
-        : nonSystem.slice(-20);
+        : nonSystem;
 
     const recentSize = Math.max(3, Math.min(options?.recentContextSize ?? 5, 8));
     const recentSlice = nonSystem.slice(-recentSize);
@@ -110,4 +110,3 @@ function extractActorHintsFromSummary(summaryText: string): string[] {
     }
     return merged;
 }
-

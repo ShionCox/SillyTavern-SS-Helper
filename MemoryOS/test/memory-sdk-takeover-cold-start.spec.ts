@@ -15,6 +15,8 @@ const {
     listActorProfilesMock,
     listEntriesMock,
     getEntryMock,
+    getTavernMessageTextEventMock,
+    getTavernRuntimeContextEventMock,
 } = vi.hoisted(() => {
     return {
         stateStore: new Map<string, Record<string, unknown>>(),
@@ -98,6 +100,8 @@ const {
         listActorProfilesMock: vi.fn(async () => [{ actorKey: 'user', displayName: '用户' }]),
         listEntriesMock: vi.fn(async () => []),
         getEntryMock: vi.fn(async () => null),
+        getTavernMessageTextEventMock: vi.fn(() => ''),
+        getTavernRuntimeContextEventMock: vi.fn(() => ({ chat: [] })),
     };
 });
 
@@ -270,13 +274,13 @@ vi.mock('../src/repository/entry-repository', () => {
     return { EntryRepository };
 });
 
-vi.mock('../../../SDK/tavern', () => {
+vi.mock('../../SDK/tavern', () => {
     return {
         buildSdkChatKeyEvent: vi.fn(() => 'chat-1'),
         getCurrentTavernCharacterEvent: vi.fn(() => null),
-        getCurrentTavernUserNameEvent: vi.fn(() => '林远'),
-        getTavernMessageTextEvent: vi.fn(() => ''),
-        getTavernRuntimeContextEvent: vi.fn(() => ({ chat: [] })),
+        getCurrentTavernUserNameEvent: vi.fn(() => '你'),
+        getTavernMessageTextEvent: getTavernMessageTextEventMock,
+        getTavernRuntimeContextEvent: getTavernRuntimeContextEventMock,
         getCurrentTavernUserSnapshotEvent: vi.fn(() => null),
         getTavernSemanticSnapshotEvent: vi.fn(() => null),
         loadTavernWorldbookEntriesEvent: vi.fn(async () => []),
@@ -316,7 +320,6 @@ vi.mock('../src/settings/store', () => {
             summaryAutoTriggerEnabled: false,
             summaryIntervalFloors: 10,
             summaryMinMessages: 10,
-            summaryRecentWindowSize: 20,
             takeoverDetectMinFloors: 50,
             takeoverDefaultRecentFloors: 60,
             takeoverDefaultBatchSize: 30,
@@ -339,6 +342,7 @@ vi.mock('../src/runtime/runtime-services', () => {
 
 import { MemorySDKImpl } from '../src/sdk/memory-sdk';
 import type { MemoryTakeoverConsolidationResult } from '../src/types';
+import { readMemoryOSSettings } from '../src/settings/store';
 
 describe('memory sdk takeover cold start sync', () => {
     beforeEach(() => {
@@ -361,6 +365,22 @@ describe('memory sdk takeover cold start sync', () => {
         listActorProfilesMock.mockResolvedValue([{ actorKey: 'user', displayName: '用户' }]);
         listEntriesMock.mockResolvedValue([]);
         getEntryMock.mockResolvedValue(null);
+        getTavernMessageTextEventMock.mockReset();
+        getTavernMessageTextEventMock.mockReturnValue('');
+        getTavernRuntimeContextEventMock.mockReset();
+        getTavernRuntimeContextEventMock.mockReturnValue({ chat: [] });
+        vi.mocked(readMemoryOSSettings).mockReturnValue({
+            summaryAutoTriggerEnabled: false,
+            summaryIntervalFloors: 10,
+            summaryMinMessages: 10,
+            takeoverDetectMinFloors: 50,
+            takeoverDefaultRecentFloors: 60,
+            takeoverDefaultBatchSize: 30,
+            takeoverDefaultPrioritizeRecent: true,
+            takeoverDefaultAutoContinue: true,
+            takeoverDefaultAutoConsolidate: true,
+            takeoverDefaultPauseOnError: true,
+        } as ReturnType<typeof readMemoryOSSettings>);
     });
 
     it('marks cold start as completed and binds world profile after takeover consolidation is applied', async () => {
@@ -527,6 +547,79 @@ describe('memory sdk takeover cold start sync', () => {
         expect(summaryProgress.pendingEndIndex).toBe(12);
         expect(summaryProgress.lastSummarizedMessageId).toBeUndefined();
         expect(summaryProgress.lastSummarizedAt).toBeTypeOf('number');
+    });
+
+    it('自动总结处理全部未总结楼层，不再按最近楼层截断', async () => {
+        vi.mocked(readMemoryOSSettings).mockReturnValue({
+            summaryAutoTriggerEnabled: true,
+            summaryIntervalFloors: 30,
+            summaryMinMessages: 10,
+            takeoverDefaultBatchSize: 30,
+            takeoverDetectMinFloors: 50,
+            takeoverDefaultRecentFloors: 60,
+            takeoverDefaultPrioritizeRecent: true,
+            takeoverDefaultAutoContinue: true,
+            takeoverDefaultAutoConsolidate: true,
+            takeoverDefaultPauseOnError: true,
+        } as ReturnType<typeof readMemoryOSSettings>);
+        getTavernRuntimeContextEventMock.mockReturnValue({
+            chat: Array.from({ length: 30 }, (_value, index): Record<string, unknown> => ({
+                role: index % 2 === 0 ? 'user' : 'assistant',
+                text: `第 ${index + 1} 楼`,
+            })),
+        });
+        getTavernMessageTextEventMock.mockImplementation((record: unknown): string => {
+            return String((record as Record<string, unknown>).text ?? '');
+        });
+        const sdk = new MemorySDKImpl('chat-1');
+        const captureSummaryFromChat = vi.fn(async () => ({
+            summaryId: 'summary-1',
+            title: '自动总结',
+            content: '这是一次自动总结。',
+        }));
+        (sdk as unknown as {
+            summaryService: { captureSummaryFromChat: typeof captureSummaryFromChat };
+        }).summaryService = { captureSummaryFromChat };
+
+        await sdk.postGeneration.scheduleRoundProcessing('test');
+
+        const summaryProgress = await sdk.chatState.getSummaryProgress();
+        expect(captureSummaryFromChat).toHaveBeenCalledOnce();
+        expect(captureSummaryFromChat.mock.calls[0]?.[0]?.messages.map((item) => item.turnIndex)).toEqual(
+            Array.from({ length: 30 }, (_value, index): number => index + 1),
+        );
+        expect(summaryProgress.lastSummarizedIndex).toBe(30);
+        expect(summaryProgress.pendingStartIndex).toBe(31);
+        expect(summaryProgress.pendingEndIndex).toBe(30);
+
+        await sdk.postGeneration.scheduleRoundProcessing('test');
+
+        const nextSummaryProgress = await sdk.chatState.getSummaryProgress();
+        expect(captureSummaryFromChat).toHaveBeenCalledOnce();
+        expect(nextSummaryProgress.lastSummarizedIndex).toBe(30);
+        expect(nextSummaryProgress.pendingStartIndex).toBe(31);
+        expect(nextSummaryProgress.pendingEndIndex).toBe(30);
+    });
+
+    it('宿主消息过滤后使用连续楼层号', () => {
+        getTavernRuntimeContextEventMock.mockReturnValue({
+            chat: [
+                { role: 'system', text: '系统提示' },
+                { role: 'user', text: '第一条正文' },
+                { role: 'assistant', text: '' },
+                { role: 'assistant', text: '第二条正文' },
+            ],
+        });
+        getTavernMessageTextEventMock.mockImplementation((record: unknown): string => {
+            return String((record as Record<string, unknown>).text ?? '');
+        });
+        const sdk = new MemorySDKImpl('chat-1');
+        const messages = (sdk as unknown as {
+            readActiveHostChatMessages: () => Array<{ turnIndex?: number; content?: string }>;
+        }).readActiveHostChatMessages();
+
+        expect(messages.map((item) => item.turnIndex)).toEqual([1, 2]);
+        expect(messages.map((item) => item.content)).toEqual(['第一条正文', '第二条正文']);
     });
 
     it('creates different actor keys for multiple Chinese actor cards during takeover consolidation', async () => {

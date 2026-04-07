@@ -71,6 +71,7 @@ import {
     destroyMemoryGraphPage,
     mountMemoryGraphPage,
 } from './workbenchPages/memoryGraphPage';
+import { DreamUiStateService } from './dream-ui-state-service';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const graphService = new GraphService();
@@ -526,9 +527,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     maintenanceProposals: [],
                     qualityReports: [],
                     schedulerState: null,
+                    uiState: null,
                 },
             };
         }
+        const dreamUiStateService = new DreamUiStateService(memory.getChatKey());
         const [
             entryTypes,
             entries,
@@ -544,6 +547,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             dreamMaintenanceProposals,
             dreamQualityReports,
             dreamSchedulerState,
+            dreamUiState,
         ] = await Promise.all([
             memory.unifiedMemory.entryTypes.list(),
             memory.unifiedMemory.entries.list({ query: state.entryQuery }),
@@ -559,6 +563,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             memory.unifiedMemory.diagnostics.listDreamMaintenanceProposals(32),
             memory.unifiedMemory.diagnostics.listDreamQualityReports(12),
             memory.unifiedMemory.diagnostics.getDreamSchedulerState(),
+            dreamUiStateService.getSnapshot(),
         ]);
 
         takeoverProgressCache = takeoverProgress;
@@ -584,6 +589,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 maintenanceProposals: dreamMaintenanceProposals,
                 qualityReports: dreamQualityReports,
                 schedulerState: dreamSchedulerState,
+                uiState: dreamUiState,
             },
         };
     };
@@ -999,10 +1005,18 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     diagnostics: session.diagnostics,
                     graphSnapshot: session.graphSnapshot,
                 });
-                if (reviewResult.decision === 'approved') {
-                    toast.success('梦境提案已审批。');
-                } else if (reviewResult.decision === 'rejected') {
+                const applyResult = await memory.chatState.reviewPendingDreamSession({
+                    dreamId: session.meta.dreamId,
+                    review: reviewResult,
+                });
+                if (!applyResult.ok) {
+                    toast.error(`梦境审批应用失败：${applyResult.reasonCode || '未知原因'}`);
+                } else if (applyResult.status === 'approved') {
+                    toast.success('梦境提案已审批并写回。');
+                } else if (applyResult.status === 'rejected') {
                     toast.info('已拒绝本轮梦境提案。');
+                } else if (applyResult.status === 'deferred') {
+                    toast.info('梦境提案仍保留为待审批。');
                 }
                 await loadCoreSnapshot();
                 await render();

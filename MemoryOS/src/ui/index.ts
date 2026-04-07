@@ -76,7 +76,6 @@ const SUMMARY_AUTO_TRIGGER_ID = 'stx-memoryos-summary-auto-trigger';
 const SUMMARY_PROGRESS_OVERLAY_ID = 'stx-memoryos-summary-progress-overlay-enabled';
 const SUMMARY_INTERVAL_ID = 'stx-memoryos-summary-interval-floors';
 const SUMMARY_MIN_MESSAGES_ID = 'stx-memoryos-summary-min-messages';
-const SUMMARY_RECENT_WINDOW_ID = 'stx-memoryos-summary-recent-window';
 const SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-rolling-digest-max-chars';
 const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-candidate-summary-max-chars';
 const TAKEOVER_DETECT_MIN_FLOORS_ID = 'stx-memoryos-takeover-detect-min-floors';
@@ -380,12 +379,11 @@ function buildSettingsContentHtml(): string {
             ${divider('AI 总结')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动总结触发</div><div class="stx-ui-item-desc">到达阈值后自动运行 AI 总结，关闭后只保留手动触发。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_AUTO_TRIGGER_ID, '启用自动总结触发')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用总结进度悬浮框</div><div class="stx-ui-item-desc">显示距离下次自动总结还差多少楼层，并在即将触发时给出提示。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_PROGRESS_OVERLAY_ID, '启用总结进度悬浮框')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">总结窗口参数</div><div class="stx-ui-item-desc">控制触发频率、最小消息量和第二阶段摘要截断策略。</div></div><div class="stx-ui-form-grid">
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">触发间隔楼层</label>${numberField(SUMMARY_INTERVAL_ID,1,200,1)}</div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_MIN_MESSAGES_ID}">最少消息数</label>${numberField(SUMMARY_MIN_MESSAGES_ID,2,100,1)}</div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_RECENT_WINDOW_ID}">最近窗口大小</label>${numberField(SUMMARY_RECENT_WINDOW_ID,10,100,5)}</div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID}">第二阶段 rollingDigest 截断长度</label>${numberField(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示不限制。</span></div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID}">第二阶段候选摘要截断长度</label>${numberField(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示不限制。</span></div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动总结范围</div><div class="stx-ui-item-desc">先等聊天内容足够多，再按新增楼数定期总结；也可控制每次整理时保留多少摘要文字。</div></div><div class="stx-ui-form-grid">
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">每新增多少楼再总结</label>${numberField(SUMMARY_INTERVAL_ID,1,200,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_MIN_MESSAGES_ID}">首次总结至少需要多少条消息</label>${numberField(SUMMARY_MIN_MESSAGES_ID,2,100,1)}</div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID}">历史摘要最长字数</label>${numberField(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示保留完整历史摘要。</span></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID}">候选内容最长字数</label>${numberField(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示保留完整候选内容。</span></div>
             </div></div>
             ${divider('旧聊天接管')}
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">接管默认参数</div><div class="stx-ui-item-desc">控制识别旧聊天的阈值、默认范围和批处理策略。</div></div><div class="stx-ui-form-grid">
@@ -586,7 +584,6 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [SUMMARY_PROGRESS_OVERLAY_ID, settings.summaryProgressOverlayEnabled],
         [SUMMARY_INTERVAL_ID, String(settings.summaryIntervalFloors)],
         [SUMMARY_MIN_MESSAGES_ID, String(settings.summaryMinMessages)],
-        [SUMMARY_RECENT_WINDOW_ID, String(settings.summaryRecentWindowSize)],
         [SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID, String(settings.summarySecondStageRollingDigestMaxChars)],
         [SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID, String(settings.summarySecondStageCandidateSummaryMaxChars)],
         [TAKEOVER_DETECT_MIN_FLOORS_ID, String(settings.takeoverDetectMinFloors)],
@@ -775,7 +772,6 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         summaryProgressOverlayEnabled: checked(SUMMARY_PROGRESS_OVERLAY_ID, DEFAULT_MEMORY_OS_SETTINGS.summaryProgressOverlayEnabled),
         summaryIntervalFloors: Number(text(SUMMARY_INTERVAL_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryIntervalFloors))),
         summaryMinMessages: Number(text(SUMMARY_MIN_MESSAGES_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages))),
-        summaryRecentWindowSize: Number(text(SUMMARY_RECENT_WINDOW_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize))),
         summarySecondStageRollingDigestMaxChars: Number(text(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageRollingDigestMaxChars))),
         summarySecondStageCandidateSummaryMaxChars: Number(text(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.summarySecondStageCandidateSummaryMaxChars))),
         pipelineBudgetEnabled: checked(PIPELINE_BUDGET_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.pipelineBudgetEnabled),

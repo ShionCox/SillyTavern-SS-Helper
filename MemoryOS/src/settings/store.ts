@@ -67,7 +67,6 @@ export type MemoryOSSettings = {
     summaryProgressOverlayEnabled: boolean;
     summaryIntervalFloors: number;
     summaryMinMessages: number;
-    summaryRecentWindowSize: number;
     summarySecondStageRollingDigestMaxChars: number;
     summarySecondStageCandidateSummaryMaxChars: number;
     pipelineBudgetEnabled: boolean;
@@ -223,7 +222,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     summaryProgressOverlayEnabled: true,
     summaryIntervalFloors: 1,
     summaryMinMessages: 10,
-    summaryRecentWindowSize: 40,
     summarySecondStageRollingDigestMaxChars: 0,
     summarySecondStageCandidateSummaryMaxChars: 0,
     pipelineBudgetEnabled: true,
@@ -423,10 +421,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
     const summaryMinMessages: number = Math.max(
         2,
         Math.min(100, Math.trunc(Number(candidate.summaryMinMessages) || DEFAULT_MEMORY_OS_SETTINGS.summaryMinMessages)),
-    );
-    const summaryRecentWindowSize: number = Math.max(
-        10,
-        Math.min(100, Math.trunc(Number(candidate.summaryRecentWindowSize) || DEFAULT_MEMORY_OS_SETTINGS.summaryRecentWindowSize)),
     );
     const summarySecondStageRollingDigestMaxCharsRaw = Number(candidate.summarySecondStageRollingDigestMaxChars);
     const summarySecondStageRollingDigestMaxChars: number = summarySecondStageRollingDigestMaxCharsRaw <= 0
@@ -646,7 +640,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         summaryProgressOverlayEnabled: candidate.summaryProgressOverlayEnabled !== false,
         summaryIntervalFloors,
         summaryMinMessages,
-        summaryRecentWindowSize,
         summarySecondStageRollingDigestMaxChars,
         summarySecondStageCandidateSummaryMaxChars,
         pipelineBudgetEnabled: candidate.pipelineBudgetEnabled !== false,

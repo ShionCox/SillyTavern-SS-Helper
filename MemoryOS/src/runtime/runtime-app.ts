@@ -342,15 +342,6 @@ export class MemoryOS {
     }
 
     /**
-     * 功能：统一刷新工具栏和总结进度悬浮框。
-     */
-    private syncAuxiliaryUi(): void {
-        this.refreshToolbarShortcuts();
-        void this.refreshSummaryProgressUi();
-        this.ensureDreamUiPoll();
-    }
-
-    /**
      * 功能：启动梦境 UI 状态轮询。
      */
     private ensureDreamUiPoll(): void {
@@ -363,7 +354,7 @@ export class MemoryOS {
         this.dreamUiPollHandle = window.setInterval((): void => {
             void this.refreshDreamUiState();
         }, 8000);
-        // 立即执行一次
+        // 立即刷新一次，避免等待首轮轮询。
         void this.refreshDreamUiState();
     }
 
@@ -387,13 +378,13 @@ export class MemoryOS {
             if (!memory) return;
             const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
             if (!chatKey) return;
-            // 更新或创建 state service
+            // 更新或创建状态服务。
             if (!this.dreamUiStateService || (this.dreamUiStateService as unknown as { chatKey: string }).chatKey !== chatKey) {
                 this.dreamUiStateService = new DreamUiStateService(chatKey);
                 this.dreamNotificationService.reset();
             }
             const snapshot = await this.dreamUiStateService.getSnapshot();
-            // 更新 pill
+            // 更新任务入口。
             updateDreamTaskPill(snapshot, (): void => {
                 if (snapshot.inbox.pendingApprovalCount > 0) {
                     this.openPendingDreamReview(snapshot.inbox.pendingDreamIds[0]);
@@ -401,9 +392,9 @@ export class MemoryOS {
                     openUnifiedMemoryWorkbench({ initialView: 'dream' });
                 }
             });
-            // 挂载 pill 到 toolbar（如果还没挂）
+            // 挂载任务入口到工具栏附近。
             this.mountDreamPillToToolbar();
-            // 通知
+            // 评估通知状态。
             this.dreamNotificationService.evaluate(snapshot);
         } catch (error) {
             logger.debug('[DreamUiPoll] 刷新失败', error);
@@ -455,10 +446,24 @@ export class MemoryOS {
                     diagnostics: session.diagnostics,
                     graphSnapshot: session.graphSnapshot,
                 });
-                if (result.decision === 'approved' || result.decision === 'rejected') {
-                    toast.success(result.decision === 'approved' ? '梦境提案已审批。' : '已拒绝本轮梦境提案。');
+                const applyResult = await memory.chatState.reviewPendingDreamSession({
+                    dreamId: session.meta.dreamId,
+                    review: result,
+                });
+                if (!applyResult.ok) {
+                    toast.error(`梦境审批应用失败：${applyResult.reasonCode || '未知原因'}`);
+                    return;
+                }
+                if (applyResult.status === 'approved') {
+                    toast.success('梦境提案已审批并写回。');
+                } else if (applyResult.status === 'rejected') {
+                    toast.info('已拒绝本轮梦境提案。');
+                } else if (applyResult.status === 'deferred') {
+                    toast.info('梦境提案仍保留为待审批。');
+                }
+                if (applyResult.status === 'approved' || applyResult.status === 'rejected' || applyResult.status === 'deferred') {
                     this.dreamUiStateService?.invalidateCache();
-                    void this.refreshDreamUiState();
+                    await this.refreshDreamUiState();
                 }
             } catch (error) {
                 logger.error('[DreamReview] 打开待审批失败', error);
@@ -644,11 +649,14 @@ export class MemoryOS {
     private clearActiveMemoryBinding(): void {
         this.clearDreamIdleTimer();
         this.dreamScheduler = null;
+        this.dreamUiStateService = null;
+        this.dreamNotificationService.reset();
+        hideDreamTaskPill();
         try {
             const oldMemory = (window as unknown as { STX?: { memory?: { template?: { destroy?: () => void } } } })?.STX?.memory;
             oldMemory?.template?.destroy?.();
         } catch {
-            // noop
+            // 忽略旧实例销毁失败，继续清理当前绑定。
         }
         (window as unknown as { STX?: Record<string, unknown> }).STX = {
             ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
@@ -1408,9 +1416,9 @@ export class MemoryOS {
             chatKey,
             triggerSource: 'generation_ended',
             blockedBy,
-            execute: async (context): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+            execute: async (context): Promise<{ ok: boolean; dreamId?: string; status?: string; reasonCode?: string }> => {
                 const result = await memory.chatState.startDreamSession('generation_ended', context);
-                return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
+                return { ok: result.ok, dreamId: result.dreamId, status: result.status, reasonCode: result.reasonCode };
             },
         });
         if (decision.shouldTrigger) {
@@ -1449,9 +1457,9 @@ export class MemoryOS {
             chatKey,
             triggerSource: 'idle',
             blockedBy,
-            execute: async (context): Promise<{ ok: boolean; status?: string; reasonCode?: string }> => {
+            execute: async (context): Promise<{ ok: boolean; dreamId?: string; status?: string; reasonCode?: string }> => {
                 const result = await memory.chatState.startDreamSession('idle', context);
-                return { ok: result.ok, status: result.status, reasonCode: result.reasonCode };
+                return { ok: result.ok, dreamId: result.dreamId, status: result.status, reasonCode: result.reasonCode };
             },
         });
         if (decision.shouldTrigger) {

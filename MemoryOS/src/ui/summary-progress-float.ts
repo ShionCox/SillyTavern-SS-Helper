@@ -468,10 +468,6 @@ function renderSummaryProgressFloat(): void {
                         <div class="stx-memory-summary-float__meta-label"><i class="fa-solid fa-bookmark stx-memory-summary-float__inline-icon"></i><span>上次已总结</span></div>
                         <div class="stx-memory-summary-float__meta-value">${status.lastSummarizedIndex}</div>
                     </div>
-                    <div class="stx-memory-summary-float__meta-item">
-                        <div class="stx-memory-summary-float__meta-label"><i class="fa-solid fa-window-maximize stx-memory-summary-float__inline-icon"></i><span>最近窗口</span></div>
-                        <div class="stx-memory-summary-float__meta-value">${status.summaryRecentWindowSize}</div>
-                    </div>
                 </div>
                 <div class="stx-memory-summary-float__foot">
                     最近总结时间：${formatFloatTimestamp(status.lastSummarizedAt)}

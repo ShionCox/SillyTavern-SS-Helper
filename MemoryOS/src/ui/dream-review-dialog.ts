@@ -723,6 +723,15 @@ function ensureDreamReviewStyle(): void {
             min-width:0;
             margin:0;
         }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__mutation--maintenance {
+            display:flex;
+            flex-direction:column;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__mutation--maintenance > .stx-memory-dream-review__list {
+            flex:1;
+        }
         
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__mutation-meta {
             display:flex;
@@ -910,11 +919,29 @@ function ensureDreamReviewStyle(): void {
             box-shadow: 0 4px 10px rgba(0,0,0,0.3), 0 0 12px color-mix(in srgb, var(--dr-success) 40%, transparent);
         }
 
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-footer {
+            display:flex;
+            justify-content:flex-end;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+            margin-top:auto;
+            padding-top:4px;
+            text-align:right;
+        }
+
+        #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-note {
+            flex:1 1 220px;
+            text-align:right;
+        }
+
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions {
             display:flex;
             flex-wrap:wrap;
             gap:8px;
-            margin-top:2px;
+            justify-content:flex-end;
+            align-items:center;
+            margin-left:auto;
         }
 
         #${DREAM_REVIEW_DIALOG_ID} .stx-memory-dream-review__maintenance-actions button {
@@ -1245,7 +1272,7 @@ function renderMaintenanceCard(
         && normalizeDreamReviewDisplayText(impactText) !== normalizeDreamReviewDisplayText(impactItemsText)
         && normalizeDreamReviewDisplayText(impactText) !== normalizeDreamReviewDisplayText(String(display.summary ?? '').trim());
     return `
-        <article class="stx-memory-dream-review__mutation${checked ? ' is-selected' : ''}" data-maintenance-card="${escapeAttr(proposal.proposalId)}" data-mutation-type="${escapeAttr(proposal.proposalType)}">
+        <article class="stx-memory-dream-review__mutation stx-memory-dream-review__mutation--maintenance${checked ? ' is-selected' : ''}" data-maintenance-card="${escapeAttr(proposal.proposalId)}" data-mutation-type="${escapeAttr(proposal.proposalType)}">
             <div class="stx-memory-dream-review__mutation-head">
                 <input type="checkbox" data-dream-maintenance="${escapeAttr(proposal.proposalId)}" ${checked ? 'checked' : ''} hidden aria-hidden="true" tabindex="-1">
                 <div class="stx-memory-dream-review__mutation-body">
@@ -1262,11 +1289,6 @@ function renderMaintenanceCard(
                 <div class="stx-memory-dream-review__hint">${escapeHtml(localizeDreamDisplayText(proposal.reason || '无理由说明'))}</div>
                 <div class="stx-memory-dream-review__meta">应用后：${escapeHtml(display.resultHint || '会按这条维护建议更新相关记忆内容。')}</div>
                 <div class="stx-memory-dream-review__meta">来源记忆：${escapeHtml(renderDreamMaintenanceSourceRefs(proposal.sourceEntryIds, titleMap))}</div>
-                <div class="stx-memory-dream-review__maintenance-actions">
-                    <button type="button" data-dream-maintenance-choice="approve" data-proposal-id="${escapeAttr(proposal.proposalId)}">通过</button>
-                    <button type="button" data-dream-maintenance-choice="reject" data-proposal-id="${escapeAttr(proposal.proposalId)}">拒绝</button>
-                    <span class="stx-memory-dream-review__secondary">这里只是预选，点击底部“应用”后才会真正执行。</span>
-                </div>
                 ${shouldShowImpactItems ? `<div class="stx-memory-dream-review__meta">影响对象：${escapeHtml(impactItemsText)}</div>` : ''}
                 ${shouldShowImpactText ? `<div class="stx-memory-dream-review__meta">补充说明：${escapeHtml(impactText)}</div>` : ''}
                 <div class="stx-memory-dream-review__field-grid">
@@ -1278,6 +1300,13 @@ function renderMaintenanceCard(
                     ${renderFieldWithOptions('条目标识', payloadEntryId, { truncate: true })}
                     ${renderFieldWithOptions('提案标识', proposal.proposalId, { truncate: true })}
                     ${renderFieldWithOptions('梦境标识', proposal.dreamId, { truncate: true })}
+                </div>
+                <div class="stx-memory-dream-review__maintenance-footer">
+                    <span class="stx-memory-dream-review__secondary stx-memory-dream-review__maintenance-note">这里只是预选，点击底部“应用”后才会真正执行。</span>
+                    <div class="stx-memory-dream-review__maintenance-actions">
+                        <button type="button" data-dream-maintenance-choice="approve" data-proposal-id="${escapeAttr(proposal.proposalId)}">通过</button>
+                        <button type="button" data-dream-maintenance-choice="reject" data-proposal-id="${escapeAttr(proposal.proposalId)}">拒绝</button>
+                    </div>
                 </div>
             </div>
         </article>
