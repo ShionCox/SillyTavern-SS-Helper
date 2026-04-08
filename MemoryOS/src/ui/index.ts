@@ -2,12 +2,14 @@ import { buildSettingPageStyles, buildSettingPageTemplate, hydrateSettingPage } 
 import { buildSharedCheckboxCard, buildSharedCheckboxStyles } from '../../../_Components/sharedCheckbox';
 import { buildSharedButton, buildSharedButtonStyles } from '../../../_Components/sharedButton';
 import { buildSharedInputField, buildSharedInputStyles } from '../../../_Components/sharedInput';
+import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
+import { readSdkPluginUiState, writeSdkPluginUiState } from '../../../SDK/settings';
 import { buildThemeVars } from '../../../SDK/theme';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { logger } from '../runtime/runtime-services';
 import { openUnifiedMemoryWorkbench } from './unifiedMemoryWorkbench';
-import { DEFAULT_MEMORY_OS_SETTINGS, type MemoryOSSettings, readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
+import { DEFAULT_MEMORY_OS_SETTINGS, MEMORY_OS_SETTINGS_NAMESPACE, type MemoryOSSettings, readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 
 const CARD_ID = 'stx-memoryos-card';
 const STYLE_ID = 'stx-memoryos-settings-style';
@@ -17,6 +19,9 @@ const DRAWER_ICON_ID = 'stx-memoryos-drawer-icon';
 const BTN_ID = 'stx-memoryos-open-workbench';
 const RESET_BTN_ID = 'stx-memoryos-reset-settings';
 const STATUS_ID = 'stx-memoryos-settings-status';
+const ADVANCED_MODE_ID = 'stx-memoryos-advanced-mode';
+const ADVANCED_MODE_UI_STATE_KEY = 'settingsAdvancedModeEnabled';
+const ADVANCED_OPTION_ATTR = 'data-memoryos-advanced-option="true"';
 const TAB_GENERAL_ID = 'stx-memoryos-tab-general';
 const TAB_MEMORY_ID = 'stx-memoryos-tab-memory';
 const TAB_INJECTION_ID = 'stx-memoryos-tab-injection';
@@ -36,7 +41,6 @@ const DREAM_AUTO_TRIGGER_ID = 'stx-memoryos-dream-auto-trigger-enabled';
 const DREAM_EXECUTION_MODE_ID = 'stx-memoryos-dream-execution-mode';
 const DREAM_REQUIRE_APPROVAL_ID = 'stx-memoryos-dream-require-approval';
 const DREAM_PROMPT_ENABLED_ID = 'stx-memoryos-dream-prompt-enabled';
-const DREAM_PROMPT_VERSION_ID = 'stx-memoryos-dream-prompt-version';
 const DREAM_PROMPT_ALLOW_EXPANSION_ID = 'stx-memoryos-dream-prompt-allow-expansion';
 const DREAM_PROMPT_MAX_HIGHLIGHTS_ID = 'stx-memoryos-dream-prompt-max-highlights';
 const DREAM_PROMPT_MAX_MUTATIONS_ID = 'stx-memoryos-dream-prompt-max-mutations';
@@ -143,6 +147,130 @@ const PIPELINE_MAX_FINALIZER_ITEMS_ID = 'stx-memoryos-pipeline-max-finalizer-ite
 const PIPELINE_STAGING_RETENTION_DAYS_ID = 'stx-memoryos-pipeline-staging-retention-days';
 const PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID = 'stx-memoryos-pipeline-resolve-unresolved-only';
 
+const SETTING_CONTROL_TOOLTIPS: Record<string, string> = {
+    [BTN_ID]: '打开统一记忆工作台。',
+    [RESET_BTN_ID]: '把设置恢复为默认值。',
+    [ADVANCED_MODE_ID]: '显示调参、诊断和预算等高级选项。',
+    [TAB_GENERAL_ID]: '查看基础开关。',
+    [TAB_MEMORY_ID]: '查看梦境、总结和旧聊天接管设置。',
+    [TAB_INJECTION_ID]: '查看提示注入和检索设置。',
+    [TAB_PIPELINE_ID]: '查看批处理预算和冲突裁决设置。',
+    [TAB_ABOUT_ID]: '查看版本和更新日志。',
+    [ENABLED_ID]: '开启或关闭 MemoryOS。',
+    [TOOLBAR_QUICK_ACTIONS_ID]: '在工具栏显示 MemoryOS 快捷入口。',
+    [COLD_START_ENABLED_ID]: '启动时自动准备 MemoryOS 数据。',
+    [TAKEOVER_ENABLED_ID]: '允许 MemoryOS 接管旧聊天整理。',
+    [DREAM_ENABLED_ID]: '开启梦境整理系统。',
+    [DREAM_AUTO_TRIGGER_ID]: '聊天满足条件时自动运行梦境整理。',
+    [DREAM_EXECUTION_MODE_ID]: '选择梦境整理的执行方式。',
+    [DREAM_REQUIRE_APPROVAL_ID]: '梦境改动需要确认后再写入。',
+    [DREAM_PROMPT_ENABLED_ID]: '使用提示词生成梦境整理建议。',
+    [DREAM_PROMPT_ALLOW_EXPANSION_ID]: '允许梦境提示词补充弱推断内容。',
+    [DREAM_PROMPT_MAX_HIGHLIGHTS_ID]: '限制梦境关注的重点数量。',
+    [DREAM_PROMPT_MAX_MUTATIONS_ID]: '限制单次梦境生成的改动数量。',
+    [DREAM_PROMPT_REQUIRE_EXPLAIN_ID]: '要求模型说明每条梦境改动的原因。',
+    [DREAM_PROMPT_STRICT_JSON_ID]: '要求模型只返回可解析的 JSON。',
+    [DREAM_PROMPT_WEAK_INFERENCE_ID]: '允许保留不完全确定的推断。',
+    [DREAM_CONTEXT_MAX_CHARS_ID]: '限制梦境发送给模型的上下文长度。',
+    [DREAM_RECENT_TOPK_ID]: '设置梦境读取最近记忆的数量。',
+    [DREAM_MID_TOPK_ID]: '设置梦境读取中期记忆的数量。',
+    [DREAM_DEEP_TOPK_ID]: '设置梦境读取长期记忆的数量。',
+    [DREAM_FUSED_MAX_ITEMS_ID]: '限制梦境合并后的候选记忆数量。',
+    [DREAM_STYLE_PRESET_ID]: '选择梦境提示词使用的内置风格。',
+    [DREAM_WAVE_ENABLED_ID]: '开启梦境第二轮补充召回。',
+    [DREAM_WAVE_RECENT_TOPK_ID]: '设置第二轮读取最近记忆的数量。',
+    [DREAM_WAVE_MID_TOPK_ID]: '设置第二轮读取中期记忆的数量。',
+    [DREAM_WAVE_DEEP_TOPK_ID]: '设置第二轮读取长期记忆的数量。',
+    [DREAM_WAVE_FUSION_TOPK_ID]: '限制第二轮合并后的候选数量。',
+    [DREAM_GRAPH_ENABLED_ID]: '让梦境整理参考记忆关系图。',
+    [DREAM_GRAPH_EXPAND_DEPTH_ID]: '设置梦境关系图向外扩展的层数。',
+    [DREAM_NOVELTY_ENABLED_ID]: '提高新信息在梦境整理中的权重。',
+    [DREAM_NOVELTY_WEIGHT_ID]: '设置新信息加权强度。',
+    [DREAM_REPETITION_PENALTY_WEIGHT_ID]: '设置重复内容的降权强度。',
+    [DREAM_DIAGNOSTICS_ENABLED_ID]: '保存梦境整理的诊断快照。',
+    [DREAM_SCHEDULER_ENABLED_ID]: '开启梦境整理调度器。',
+    [DREAM_SCHEDULER_COOLDOWN_ID]: '设置两次梦境整理的最短间隔。',
+    [DREAM_SCHEDULER_DAILY_MAX_ID]: '限制每天自动梦境整理次数。',
+    [DREAM_SCHEDULER_IDLE_MINUTES_ID]: '设置空闲多久后可触发梦境整理。',
+    [DREAM_SCHEDULER_GENERATION_TRIGGER_ID]: '允许按生成次数触发梦境整理。',
+    [DREAM_SCHEDULER_IDLE_TRIGGER_ID]: '允许按空闲时间触发梦境整理。',
+    [DREAM_MAINTENANCE_ENABLED_ID]: '允许梦境整理做维护类改动。',
+    [DREAM_MAINTENANCE_MAX_PROPOSALS_ID]: '限制维护建议的数量。',
+    [DREAM_QUALITY_GUARD_ENABLED_ID]: '开启梦境改动质量检查。',
+    [DREAM_AUTO_APPLY_LOW_RISK_ID]: '自动应用低风险梦境改动。',
+    [DREAM_WORKBENCH_ENABLED_ID]: '允许在工作台查看梦境建议。',
+    [DREAM_ROLLBACK_ENABLED_ID]: '允许回滚梦境整理写入的改动。',
+    [SUMMARY_AUTO_TRIGGER_ID]: '聊天达到条件时自动总结。',
+    [SUMMARY_PROGRESS_OVERLAY_ID]: '总结时显示进度悬浮提示。',
+    [SUMMARY_INTERVAL_ID]: '设置每隔多少楼触发一次总结。',
+    [SUMMARY_MIN_MESSAGES_ID]: '设置自动总结需要的最少消息数。',
+    [SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID]: '限制第二阶段滚动摘要长度。',
+    [SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID]: '限制候选摘要长度。',
+    [TAKEOVER_DETECT_MIN_FLOORS_ID]: '设置检测旧聊天时需要的最少楼数。',
+    [TAKEOVER_DEFAULT_RECENT_FLOORS_ID]: '设置旧聊天接管时保留的最近楼数。',
+    [TAKEOVER_DEFAULT_BATCH_SIZE_ID]: '设置旧聊天接管每批处理的消息数。',
+    [TAKEOVER_REQUEST_INTERVAL_SECONDS_ID]: '设置旧聊天接管请求间隔。',
+    [TAKEOVER_DEFAULT_PRIORITIZE_RECENT_ID]: '旧聊天接管时优先处理最近消息。',
+    [TAKEOVER_DEFAULT_AUTO_CONTINUE_ID]: '旧聊天接管时自动继续下一批。',
+    [TAKEOVER_DEFAULT_AUTO_CONSOLIDATE_ID]: '旧聊天接管完成后自动合并记忆。',
+    [TAKEOVER_DEFAULT_PAUSE_ON_ERROR_ID]: '旧聊天接管出错时暂停处理。',
+    [INJECTION_PROMPT_ID]: '把检索到的记忆注入提示词。',
+    [INJECTION_PREVIEW_ID]: '发送前预览本次注入的记忆。',
+    [INJECTION_CUSTOM_BUDGET_ID]: '手动设置各类记忆的注入数量。',
+    [TIMELINE_MAX_ITEMS_ID]: '限制时间线记忆注入数量。',
+    [WORLD_BASE_MAX_ITEMS_ID]: '限制世界基础记忆注入数量。',
+    [SCENE_ACTIVE_MAX_ITEMS_ID]: '限制当前场景记忆注入数量。',
+    [SCENE_RECENT_MAX_ITEMS_ID]: '限制近期场景记忆注入数量。',
+    [ENTITY_MAX_ITEMS_ID]: '限制实体记忆注入数量。',
+    [IDENTITY_MAX_ITEMS_ID]: '限制身份记忆注入数量。',
+    [RELATIONSHIP_MAX_ITEMS_ID]: '限制关系记忆注入数量。',
+    [EVENT_MAX_ITEMS_ID]: '限制事件记忆注入数量。',
+    [SHADOW_EVENT_MAX_ITEMS_ID]: '限制影子事件记忆注入数量。',
+    [INTERPRETATION_MAX_ITEMS_ID]: '限制解读类记忆注入数量。',
+    [RETRIEVAL_MODE_ID]: '选择记忆检索方式。',
+    [RETRIEVAL_DEFAULT_TOPK_ID]: '设置每次检索的候选数量。',
+    [RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID]: '设置检索时关系图扩展层数。',
+    [RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID]: '按记忆类型和状态过滤检索结果。',
+    [RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID]: '让检索沿记忆关系图扩展结果。',
+    [RETRIEVAL_ENABLE_GRAPH_PENALTY_ID]: '降低过热关系节点的检索权重。',
+    [FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID]: '设置轻度遗忘记忆的召回降权。',
+    [FORGETTING_SHADOW_RECALL_PENALTY_HEAVY_ID]: '设置重度遗忘记忆的召回降权。',
+    [FORGETTING_SHADOW_CONFIDENCE_PENALTY_MILD_ID]: '设置轻度遗忘记忆的置信度降权。',
+    [FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID]: '设置重度遗忘记忆的置信度降权。',
+    [FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID]: '限制最终保留的影子记忆数量。',
+    [RETENTION_BLUR_THRESHOLD_ID]: '低于该分数的记忆会被标记为模糊。',
+    [RETENTION_DISTORTED_THRESHOLD_ID]: '低于该分数的记忆会被标记为扭曲。',
+    [RETRIEVAL_LOG_ENABLED_ID]: '开启检索日志。',
+    [RETRIEVAL_TRACE_PANEL_ID]: '显示检索 Trace 面板。',
+    [RETRIEVAL_LOG_LEVEL_ID]: '选择检索日志详细程度。',
+    [RETRIEVAL_RULE_PACK_ID]: '选择检索排序使用的规则包。',
+    [VECTOR_TOPK_ID]: '设置向量检索返回的候选数量。',
+    [VECTOR_DEEP_WINDOW_ID]: '设置长期记忆的向量检索窗口。',
+    [VECTOR_FINAL_TOPK_ID]: '限制向量检索最终结果数量。',
+    [VECTOR_ENABLE_STRATEGY_ROUTING_ID]: '按检索场景自动选择检索策略。',
+    [VECTOR_ENABLE_RERANK_ID]: '用规则对向量结果重新排序。',
+    [VECTOR_RERANK_WINDOW_ID]: '设置参与重排的候选数量。',
+    [VECTOR_EMBEDDING_MODEL_ID]: '填写向量索引使用的嵌入模型。',
+    [VECTOR_EMBEDDING_VERSION_ID]: '填写嵌入模型版本标记。',
+    [VECTOR_AUTO_INDEX_ON_WRITE_ID]: '写入记忆时自动更新向量索引。',
+    [VECTOR_ENABLE_LLMHUB_RERANK_ID]: '用 LLMHub 模型重排检索候选。',
+    [VECTOR_LLMHUB_RERANK_RESOURCE_ID]: '选择 LLMHub 重排使用的资源。',
+    [VECTOR_LLMHUB_RERANK_MODEL_ID]: '指定 LLMHub 重排使用的模型。',
+    [VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID]: '设置触发 LLMHub 重排的最少候选数。',
+    [VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID]: '限制送入 LLMHub 重排的候选数。',
+    [VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID]: 'LLMHub 重排失败时改用规则重排。',
+    [PIPELINE_BUDGET_ENABLED_ID]: '开启批处理预算限制。',
+    [PIPELINE_MAX_INPUT_CHARS_ID]: '限制单次批处理读取的输入长度。',
+    [PIPELINE_MAX_OUTPUT_ITEMS_ID]: '限制单次批处理输出条目数。',
+    [PIPELINE_MAX_ACTIONS_ID]: '限制单次批处理动作数。',
+    [PIPELINE_MAX_SECTION_BATCHES_ID]: '限制分段处理批次数。',
+    [PIPELINE_MAX_CONFLICT_BUCKET_ID]: '限制每批处理的冲突候选数。',
+    [PIPELINE_MAX_SECTION_DIGEST_ID]: '限制分段摘要长度。',
+    [PIPELINE_MAX_FINALIZER_ITEMS_ID]: '限制最终整理的条目数。',
+    [PIPELINE_STAGING_RETENTION_DAYS_ID]: '设置暂存结果保留天数。',
+    [PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID]: '只处理尚未解决的冲突。',
+};
+
 type TabKey = 'general' | 'memory' | 'injection' | 'pipeline' | 'about';
 type TabBinding = { key: TabKey; tabId: string; panelId: string };
 
@@ -160,10 +288,21 @@ let autoSaveTimer: number | null = null;
 /**
  * 功能：构建分隔栏。
  * @param title 标题。
+ * @param advanced 是否为高级设置分隔栏。
  * @returns HTML。
  */
-function divider(title: string): string {
-    return `<div class="stx-ui-divider"><span>${title}</span><span class="stx-ui-divider-line"></span></div>`;
+function divider(title: string, advanced: boolean = false): string {
+    return `<div class="stx-ui-divider"${advanced ? ` ${ADVANCED_OPTION_ATTR}` : ''}><span>${title}</span><span class="stx-ui-divider-line"></span></div>`;
+}
+
+/**
+ * 功能：归一化梦境风格预设，保持与 DreamPromptService 的内置风格一致。
+ * @param value 原始风格值。
+ * @returns 内置风格预设。
+ */
+function normalizeDreamStylePresetValue(value: unknown): 'reflective' | 'analytic' | 'symbolic' {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return normalized === 'analytic' || normalized === 'symbolic' ? normalized : 'reflective';
 }
 
 /**
@@ -259,8 +398,10 @@ function ensureSettingsStyles(): void {
         #${CARD_ID} .stx-ui-tab{flex:1 1 0;min-width:max-content;border:0;border-radius:999px;background:transparent;color:inherit;padding:6px 10px;font-size:12px;line-height:1.2;white-space:nowrap;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;opacity:.75;transition:background-color .2s ease,opacity .2s ease,box-shadow .2s ease;}
         #${CARD_ID} .stx-ui-tab.is-active{opacity:1;color:var(--ss-theme-text,inherit);background:var(--ss-theme-list-item-active-bg,rgba(197,160,89,.58));}
         #${CARD_ID} .stx-ui-tab:hover{background:var(--ss-theme-list-item-hover-bg,rgba(197,160,89,.2));box-shadow:0 0 12px color-mix(in srgb,var(--ss-theme-accent,#c5a059) 24%,transparent);}
+        #${CARD_ID}[data-memoryos-advanced-mode="false"] [data-memoryos-advanced-option="true"]{display:none!important;}
         #${CARD_ID} .stx-ui-panel{display:flex;flex-direction:column;gap:10px;min-width:0;max-width:100%;}
         #${CARD_ID} .stx-ui-panel[hidden]{display:none!important;}
+        #${CARD_ID} .stx-ui-advanced-mode{margin-bottom:10px;}
         #${CARD_ID} .stx-ui-divider{display:flex;align-items:center;gap:8px;margin-top:8px;margin-bottom:6px;font-size:13px;font-weight:700;opacity:.95;}
         #${CARD_ID} .stx-ui-divider-line{flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.2) 18%,rgba(255,255,255,.26) 50%,rgba(255,255,255,.2) 82%,rgba(255,255,255,0));}
         #${CARD_ID} .stx-ui-item{border:1px solid var(--ss-theme-border,rgba(255,255,255,.2));border-radius:10px;padding:12px;margin:2px 0;background:var(--ss-theme-surface-2,rgba(0,0,0,.16));display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;max-width:100%;box-sizing:border-box;transition:border-color .2s ease,background-color .2s ease,box-shadow .2s ease;}
@@ -304,18 +445,27 @@ function ensureSettingsStyles(): void {
 function buildSettingsContentHtml(): string {
     const openWorkbenchBtn = buildSharedButton({ id: BTN_ID, label: '打开统一记忆工作台', variant: 'secondary', iconClassName: 'fa-solid fa-table-cells-large' });
     const resetBtn = buildSharedButton({ id: RESET_BTN_ID, label: '恢复默认', variant: 'secondary', iconClassName: 'fa-solid fa-rotate-left' });
+    const advancedModeToggle = buildSharedCheckboxCard({
+        id: ADVANCED_MODE_ID,
+        title: '高级模式',
+        description: '显示召回权重、阈值、向量重排、Pipeline 预算等复杂选项。关闭后仅保留常用设置。',
+        containerClassName: 'stx-ui-advanced-mode',
+        inputAttributes: { 'aria-label': '高级模式' },
+    });
     const retrievalLogLevelSelect = `<select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input"><option value="info">信息级</option><option value="debug">调试级</option></select>`;
     const retrievalRulePackSelect = `<select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input"><option value="hybrid">混合规则包</option><option value="native">原生规则包</option><option value="perocore">PeroCore 兼容包</option></select>`;
     const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
+    const dreamStylePresetSelect = `<select id="${DREAM_STYLE_PRESET_ID}" class="stx-ui-input"><option value="reflective">内省型 reflective</option><option value="analytic">分析型 analytic</option><option value="symbolic">象征型 symbolic</option></select>`;
     const displayName = String((manifestJson as Record<string, unknown>).display_name ?? 'MemoryOS').trim() || 'MemoryOS';
     return `
         <div class="stx-ui-tabs">
             <button id="${TAB_GENERAL_ID}" type="button" class="stx-ui-tab is-active"><i class="fa-solid fa-gear"></i><span>基础</span></button>
             <button id="${TAB_MEMORY_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-route"></i><span>流程</span></button>
             <button id="${TAB_INJECTION_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-wand-magic-sparkles"></i><span>注入</span></button>
-            <button id="${TAB_PIPELINE_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-layer-group"></i><span>编排</span></button>
+            <button id="${TAB_PIPELINE_ID}" type="button" class="stx-ui-tab" ${ADVANCED_OPTION_ATTR}><i class="fa-solid fa-layer-group"></i><span>编排</span></button>
             <button id="${TAB_ABOUT_ID}" type="button" class="stx-ui-tab"><i class="fa-solid fa-circle-info"></i><span>关于</span></button>
         </div>
+        ${advancedModeToggle}
         <div id="${PANEL_GENERAL_ID}" class="stx-ui-panel">
             ${divider('通用控制')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">统一记忆工作台</div><div class="stx-ui-item-desc">进入统一工作台，管理条目、类型、角色、世界实体和接管测试能力。</div></div><div class="stx-ui-inline">${openWorkbenchBtn}</div></div>
@@ -330,30 +480,29 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境系统</div><div class="stx-ui-item-desc">开启后可在工具栏手动触发一次梦境会话，生成待审批的梦境提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ENABLED_ID, '启用梦境系统')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动触发</div><div class="stx-ui-item-desc">允许回复结束或空闲时进入自动梦境调度；实际行为由下方执行模式决定。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_TRIGGER_ID, '启用自动触发')}</div></div>
             <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境执行模式</div><div class="stx-ui-item-desc">手动审批模式：自动梦境生成完整提案但等待你审核后写回。静默模式：自动梦境以后台轻整理和低风险维护为主，不主动弹出审批；手动触发仍走完整深梦境。</div></div><select id="${DREAM_EXECUTION_MODE_ID}" class="stx-ui-input"><option value="manual_review">手动审批模式</option><option value="silent">静默模式</option></select></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">保留为旧行为兼容位；第二阶段实际自动/静默分流优先由“梦境执行模式”控制。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境提示词管线</div><div class="stx-ui-item-desc">启用后使用独立提示词模板、版本信息和风格预设来构建梦境生成输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ENABLED_ID, '启用梦境提示词管线')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境召回参数</div><div class="stx-ui-item-desc">控制梦境近层 / 中层 / 深层三段召回，以及送模上下文裁剪。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境必须人工审批</div><div class="stx-ui-item-desc">保留为旧行为兼容位；第二阶段实际自动/静默分流优先由“梦境执行模式”控制。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_REQUIRE_APPROVAL_ID, '梦境必须人工审批')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境提示词管线</div><div class="stx-ui-item-desc">启用后使用独立提示词模板、版本信息和风格预设来构建梦境生成输入。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ENABLED_ID, '启用梦境提示词管线')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境召回参数</div><div class="stx-ui-item-desc">控制梦境近层 / 中层 / 深层三段召回，以及送模上下文裁剪。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_CONTEXT_MAX_CHARS_ID}">梦境上下文最大字符数</label>${numberField(DREAM_CONTEXT_MAX_CHARS_ID,1000,30000,200)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_RECENT_TOPK_ID}">近层召回条数</label>${numberField(DREAM_RECENT_TOPK_ID,1,30,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MID_TOPK_ID}">中层召回条数</label>${numberField(DREAM_MID_TOPK_ID,1,30,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_DEEP_TOPK_ID}">深层召回条数</label>${numberField(DREAM_DEEP_TOPK_ID,1,30,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_FUSED_MAX_ITEMS_ID}">融合结果上限</label>${numberField(DREAM_FUSED_MAX_ITEMS_ID,1,60,1)}</div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_STYLE_PRESET_ID}">梦境风格预设</label><input id="${DREAM_STYLE_PRESET_ID}" class="stx-ui-input" type="text" placeholder="内省型"></div>
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_VERSION_ID}">提示词版本</label><input id="${DREAM_PROMPT_VERSION_ID}" class="stx-ui-input" type="text" placeholder="v1.0.0"></div>
+                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_STYLE_PRESET_ID}">梦境风格预设</label>${dreamStylePresetSelect}<span class="stx-ui-field-hint">内置风格：内省、分析、象征。</span></div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_MAX_HIGHLIGHTS_ID}">最大发现条数</label>${numberField(DREAM_PROMPT_MAX_HIGHLIGHTS_ID,1,8,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_PROMPT_MAX_MUTATIONS_ID}">最大变更提案数</label>${numberField(DREAM_PROMPT_MAX_MUTATIONS_ID,1,20,1)}</div>
             </div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境提示词约束</div><div class="stx-ui-item-desc">控制 JSON 严格度、推断边界和解释信息完整度要求。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">梦境提示词约束</div><div class="stx-ui-item-desc">控制 JSON 严格度、推断边界和解释信息完整度要求。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许叙事适度扩展</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_ALLOW_EXPANSION_ID, '允许叙事适度扩展')}</div></div>
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">要求解释信息</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_REQUIRE_EXPLAIN_ID, '要求解释信息')}</div></div>
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">严格 JSON</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_STRICT_JSON_ID, '严格 JSON')}</div></div>
                 <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅允许弱推断</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_PROMPT_WEAK_INFERENCE_ID, '仅允许弱推断')}</div></div>
             </div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用第二阶段波段召回</div><div class="stx-ui-item-desc">启用后使用第二阶段多波段召回和融合排序。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WAVE_ENABLED_ID, '启用第二阶段波段召回')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境图激活</div><div class="stx-ui-item-desc">构建 session 级神经图，为 recall 提供桥接节点与 activation 分。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_GRAPH_ENABLED_ID, '启用梦境图激活')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用新颖度加权</div><div class="stx-ui-item-desc">对深层老记忆做轻量提升，并配合重复惩罚抑制模板化召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_NOVELTY_ENABLED_ID, '启用新颖度加权')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">保存诊断和图快照</div><div class="stx-ui-item-desc">会把波段输出、融合诊断和图快照持久化，并显示在审批窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_DIAGNOSTICS_ENABLED_ID, '保存诊断和图快照')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第二阶段参数</div><div class="stx-ui-item-desc">控制波段召回、图扩展、新颖度与重复惩罚的强度。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用第二阶段波段召回</div><div class="stx-ui-item-desc">启用后使用第二阶段多波段召回和融合排序。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WAVE_ENABLED_ID, '启用第二阶段波段召回')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境图激活</div><div class="stx-ui-item-desc">构建 session 级神经图，为 recall 提供桥接节点与 activation 分。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_GRAPH_ENABLED_ID, '启用梦境图激活')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用新颖度加权</div><div class="stx-ui-item-desc">对深层老记忆做轻量提升，并配合重复惩罚抑制模板化召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_NOVELTY_ENABLED_ID, '启用新颖度加权')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">保存诊断和图快照</div><div class="stx-ui-item-desc">会把波段输出、融合诊断和图快照持久化，并显示在审批窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_DIAGNOSTICS_ENABLED_ID, '保存诊断和图快照')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">第二阶段参数</div><div class="stx-ui-item-desc">控制波段召回、图扩展、新颖度与重复惩罚的强度。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_RECENT_TOPK_ID}">近层波段条数</label>${numberField(DREAM_WAVE_RECENT_TOPK_ID,1,30,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_MID_TOPK_ID}">中层波段条数</label>${numberField(DREAM_WAVE_MID_TOPK_ID,1,30,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_WAVE_DEEP_TOPK_ID}">深层波段条数</label>${numberField(DREAM_WAVE_DEEP_TOPK_ID,1,30,1)}</div>
@@ -362,24 +511,24 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_NOVELTY_WEIGHT_ID}">新颖度权重</label>${numberField(DREAM_NOVELTY_WEIGHT_ID,0,1,0.05)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_REPETITION_PENALTY_WEIGHT_ID}">重复惩罚权重</label>${numberField(DREAM_REPETITION_PENALTY_WEIGHT_ID,0,1,0.05)}</div>
             </div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境调度器</div><div class="stx-ui-item-desc">允许在回复结束和空闲条件满足时自动排队做梦，默认关闭以便先半自动观察。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_ENABLED_ID, '启用梦境调度器')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许回复结束触发</div><div class="stx-ui-item-desc">回复完成后做轻量资格判断，满足条件时把梦境任务放入后台队列，不阻塞当前对话。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, '允许回复结束触发')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许空闲触发</div><div class="stx-ui-item-desc">当前聊天长时间无操作时允许入梦，适合作为夜间维护链的低优先入口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_IDLE_TRIGGER_ID, '允许空闲触发')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">第三阶段调度与维护参数</div><div class="stx-ui-item-desc">控制冷却时间、每日次数、空闲判定，以及梦后整理、质量守卫和回滚行为。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境调度器</div><div class="stx-ui-item-desc">允许在回复结束和空闲条件满足时自动排队做梦，默认关闭以便先半自动观察。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_ENABLED_ID, '启用梦境调度器')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许回复结束触发</div><div class="stx-ui-item-desc">回复完成后做轻量资格判断，满足条件时把梦境任务放入后台队列，不阻塞当前对话。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_GENERATION_TRIGGER_ID, '允许回复结束触发')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">允许空闲触发</div><div class="stx-ui-item-desc">当前聊天长时间无操作时允许入梦，适合作为夜间维护链的低优先入口。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_SCHEDULER_IDLE_TRIGGER_ID, '允许空闲触发')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">第三阶段调度与维护参数</div><div class="stx-ui-item-desc">控制冷却时间、每日次数、空闲判定，以及梦后整理、质量守卫和回滚行为。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_COOLDOWN_ID}">调度冷却分钟数</label>${numberField(DREAM_SCHEDULER_COOLDOWN_ID,1,1440,5)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_DAILY_MAX_ID}">每日最大自动梦境次数</label>${numberField(DREAM_SCHEDULER_DAILY_MAX_ID,1,24,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_SCHEDULER_IDLE_MINUTES_ID}">空闲触发分钟数</label>${numberField(DREAM_SCHEDULER_IDLE_MINUTES_ID,1,720,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${DREAM_MAINTENANCE_MAX_PROPOSALS_ID}">每轮整理提案上限</label>${numberField(DREAM_MAINTENANCE_MAX_PROPOSALS_ID,1,20,1)}</div>
             </div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦后整理</div><div class="stx-ui-item-desc">梦境完成后生成压缩、关系强化、影子修正与总结候选提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_MAINTENANCE_ENABLED_ID, '启用梦后整理')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用质量守卫</div><div class="stx-ui-item-desc">检查 explain 完整度、重复 mutation、硬事实风险与幻觉倾向。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_QUALITY_GUARD_ENABLED_ID, '启用质量守卫')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动应用低风险 maintenance</div><div class="stx-ui-item-desc">仅对高置信低风险 maintenance proposal 自动落地，dream mutation 本身仍保持审批边界。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_APPLY_LOW_RISK_ID, '自动应用低风险 maintenance')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境工作台</div><div class="stx-ui-item-desc">在统一工作台提供梦境入口，查看历史会话、提案、质量报告和回滚记录。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WORKBENCH_ENABLED_ID, '启用梦境工作台')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境回滚</div><div class="stx-ui-item-desc">允许按 dreamId 回滚已应用的梦境影响，作为第三阶段自动化的安全阀。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ROLLBACK_ENABLED_ID, '启用梦境回滚')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦后整理</div><div class="stx-ui-item-desc">梦境完成后生成压缩、关系强化、影子修正与总结候选提案。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_MAINTENANCE_ENABLED_ID, '启用梦后整理')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用质量守卫</div><div class="stx-ui-item-desc">检查 explain 完整度、重复 mutation、硬事实风险与幻觉倾向。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_QUALITY_GUARD_ENABLED_ID, '启用质量守卫')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动应用低风险 maintenance</div><div class="stx-ui-item-desc">仅对高置信低风险 maintenance proposal 自动落地，dream mutation 本身仍保持审批边界。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_AUTO_APPLY_LOW_RISK_ID, '自动应用低风险 maintenance')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境工作台</div><div class="stx-ui-item-desc">在统一工作台提供梦境入口，查看历史会话、提案、质量报告和回滚记录。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_WORKBENCH_ENABLED_ID, '启用梦境工作台')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用梦境回滚</div><div class="stx-ui-item-desc">允许按 dreamId 回滚已应用的梦境影响，作为第三阶段自动化的安全阀。</div></div><div class="stx-ui-inline">${inlineCheckbox(DREAM_ROLLBACK_ENABLED_ID, '启用梦境回滚')}</div></div>
             ${divider('AI 总结')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用自动总结触发</div><div class="stx-ui-item-desc">到达阈值后自动运行 AI 总结，关闭后只保留手动触发。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_AUTO_TRIGGER_ID, '启用自动总结触发')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用总结进度悬浮框</div><div class="stx-ui-item-desc">显示距离下次自动总结还差多少楼层，并在即将触发时给出提示。</div></div><div class="stx-ui-inline">${inlineCheckbox(SUMMARY_PROGRESS_OVERLAY_ID, '启用总结进度悬浮框')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动总结范围</div><div class="stx-ui-item-desc">先等聊天内容足够多，再按新增楼数定期总结；也可控制每次整理时保留多少摘要文字。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">自动总结范围</div><div class="stx-ui-item-desc">先等聊天内容足够多，再按新增楼数定期总结；也可控制每次整理时保留多少摘要文字。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_INTERVAL_ID}">每新增多少楼再总结</label>${numberField(SUMMARY_INTERVAL_ID,1,200,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_MIN_MESSAGES_ID}">首次总结至少需要多少条消息</label>${numberField(SUMMARY_MIN_MESSAGES_ID,2,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID}">历史摘要最长字数</label>${numberField(SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示保留完整历史摘要。</span></div>
@@ -403,14 +552,14 @@ function buildSettingsContentHtml(): string {
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 Prompt 注入</div><div class="stx-ui-item-desc">控制是否执行主注入链路。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PROMPT_ID, '启用 Prompt 注入')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用注入预览</div><div class="stx-ui-item-desc">在正式注入前额外计算并显示预览信息，便于调试。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_PREVIEW_ID, '启用注入预览')}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">自定义注入条数预算</div><div class="stx-ui-item-desc">默认使用内置预算且不显示细项；开启后可分别设置各分区最多保留多少条。</div></div><div class="stx-ui-inline">${inlineCheckbox(INJECTION_CUSTOM_BUDGET_ID, '自定义注入条数预算')}</div></div>
-            <div id="${INJECTION_BUDGET_FIELDS_ID}" class="stx-ui-item stx-ui-item-stack" hidden><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入条数预算</div><div class="stx-ui-item-desc">控制 XML 注入块每个分区最多保留多少条，所有条目按整条保留，不再按字符截半条。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${TIMELINE_MAX_ITEMS_ID}">timelineMaxItems</label>${numberField(TIMELINE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${WORLD_BASE_MAX_ITEMS_ID}">worldBaseMaxItems</label>${numberField(WORLD_BASE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_ACTIVE_MAX_ITEMS_ID}">sceneActiveMaxItems</label>${numberField(SCENE_ACTIVE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_RECENT_MAX_ITEMS_ID}">sceneRecentMaxItems</label>${numberField(SCENE_RECENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${ENTITY_MAX_ITEMS_ID}">entityMaxItems</label>${numberField(ENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${IDENTITY_MAX_ITEMS_ID}">identityMaxItems</label>${numberField(IDENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${RELATIONSHIP_MAX_ITEMS_ID}">relationshipMaxItems</label>${numberField(RELATIONSHIP_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${EVENT_MAX_ITEMS_ID}">eventMaxItems</label>${numberField(EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SHADOW_EVENT_MAX_ITEMS_ID}">shadowEventMaxItems</label>${numberField(SHADOW_EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${INTERPRETATION_MAX_ITEMS_ID}">interpretationMaxItems</label>${numberField(INTERPRETATION_MAX_ITEMS_ID,0,20,1)}</div></div></div>
+            <div id="${INJECTION_BUDGET_FIELDS_ID}" class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR} hidden><div class="stx-ui-item-main"><div class="stx-ui-item-title">注入条数预算</div><div class="stx-ui-item-desc">控制 XML 注入块每个分区最多保留多少条，所有条目按整条保留，不再按字符截半条。</div></div><div class="stx-ui-form-grid"><div class="stx-ui-field"><label class="stx-ui-field-label" for="${TIMELINE_MAX_ITEMS_ID}">timelineMaxItems</label>${numberField(TIMELINE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${WORLD_BASE_MAX_ITEMS_ID}">worldBaseMaxItems</label>${numberField(WORLD_BASE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_ACTIVE_MAX_ITEMS_ID}">sceneActiveMaxItems</label>${numberField(SCENE_ACTIVE_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SCENE_RECENT_MAX_ITEMS_ID}">sceneRecentMaxItems</label>${numberField(SCENE_RECENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${ENTITY_MAX_ITEMS_ID}">entityMaxItems</label>${numberField(ENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${IDENTITY_MAX_ITEMS_ID}">identityMaxItems</label>${numberField(IDENTITY_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${RELATIONSHIP_MAX_ITEMS_ID}">relationshipMaxItems</label>${numberField(RELATIONSHIP_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${EVENT_MAX_ITEMS_ID}">eventMaxItems</label>${numberField(EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${SHADOW_EVENT_MAX_ITEMS_ID}">shadowEventMaxItems</label>${numberField(SHADOW_EVENT_MAX_ITEMS_ID,0,20,1)}</div><div class="stx-ui-field"><label class="stx-ui-field-label" for="${INTERPRETATION_MAX_ITEMS_ID}">interpretationMaxItems</label>${numberField(INTERPRETATION_MAX_ITEMS_ID,0,20,1)}</div></div></div>
             ${divider('检索与诊断')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索模式</div><div class="stx-ui-item-desc">控制召回主链使用的检索链路：仅词法（默认稳定）、仅向量（测试）、混合（综合）。</div></div><div class="stx-ui-inline">${retrievalModeSelect}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索参数</div><div class="stx-ui-item-desc">控制召回行为的查询级默认配置。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索参数</div><div class="stx-ui-item-desc">控制召回行为的查询级默认配置。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_TOPK_ID}">默认 TopK</label>${numberField(RETRIEVAL_DEFAULT_TOPK_ID,1,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID}">图扩展深度</label>${numberField(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID,0,3,1)}<span class="stx-ui-field-hint">0 = 不扩展。</span></div>
             </div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Retention Core</div><div class="stx-ui-item-desc">统一控制记忆强度模型的阶段阈值，以及影子记忆被唤起后的召回/置信惩罚。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">Retention Core</div><div class="stx-ui-item-desc">统一控制记忆强度模型的阶段阈值，以及影子记忆被唤起后的召回/置信惩罚。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_BLUR_THRESHOLD_ID}">Blur 阈值</label>${numberField(RETENTION_BLUR_THRESHOLD_ID,1,99,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 blur。</span></div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETENTION_DISTORTED_THRESHOLD_ID}">Distorted 阈值</label>${numberField(RETENTION_DISTORTED_THRESHOLD_ID,1,98,1)}<span class="stx-ui-field-hint">retentionScore 小于等于该值时进入 distorted，且必须小于 blur 阈值。</span></div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID}">轻度影子召回惩罚</label>${numberField(FORGETTING_SHADOW_RECALL_PENALTY_MILD_ID,0,1,0.01)}</div>
@@ -419,25 +568,25 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID}">重度影子置信惩罚</label>${numberField(FORGETTING_SHADOW_CONFIDENCE_PENALTY_HEAVY_ID,0,1,0.01)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID}">最终影子条目上限</label>${numberField(FORGETTING_SHADOW_MAX_FINAL_ITEMS_ID,0,10,1)}<span class="stx-ui-field-hint">0 表示彻底不让影子记忆进入最终结果。</span></div>
             </div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展</div><div class="stx-ui-item-desc">控制是否沿关系图扩散种子节点，把相关上下文一起召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, '启用图扩展')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
-            ${divider('向量检索')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用写入自动建索引</div><div class="stx-ui-item-desc">写入条目、关系、角色和总结后立即刷新向量文档，不再依赖当前检索模式。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_AUTO_INDEX_ON_WRITE_ID, '启用写入自动建索引')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量策略路由</div><div class="stx-ui-item-desc">根据查询复杂度决定走快路径还是深路径，并使用不同候选窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_STRATEGY_ROUTING_ID, '启用向量策略路由')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">向量窗口参数</div><div class="stx-ui-item-desc">控制快路径窗口、深路径窗口和最终裁切数量。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 PayloadFilter 预过滤</div><div class="stx-ui-item-desc">在检索前按角色、schema、世界等条件预过滤候选。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_PAYLOAD_FILTER_ID, '启用 PayloadFilter')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展</div><div class="stx-ui-item-desc">控制是否沿关系图扩散种子节点，把相关上下文一起召回。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_EXPANSION_ID, '启用图扩展')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用图扩展热点降权</div><div class="stx-ui-item-desc">对高入度 Hub 节点施加惩罚，减少热门节点垄断召回结果。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_ENABLE_GRAPH_PENALTY_ID, '启用图扩展热点降权')}</div></div>
+            ${divider('向量检索', true)}
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用写入自动建索引</div><div class="stx-ui-item-desc">写入条目、关系、角色和总结后立即刷新向量文档，不再依赖当前检索模式。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_AUTO_INDEX_ON_WRITE_ID, '启用写入自动建索引')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量策略路由</div><div class="stx-ui-item-desc">根据查询复杂度决定走快路径还是深路径，并使用不同候选窗口。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_STRATEGY_ROUTING_ID, '启用向量策略路由')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">向量窗口参数</div><div class="stx-ui-item-desc">控制快路径窗口、深路径窗口和最终裁切数量。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_TOPK_ID}">快路径候选数</label>${numberField(VECTOR_TOPK_ID,1,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_DEEP_WINDOW_ID}">深路径候选窗口</label>${numberField(VECTOR_DEEP_WINDOW_ID,5,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_FINAL_TOPK_ID}">最终 TopK</label>${numberField(VECTOR_FINAL_TOPK_ID,1,50,1)}</div>
             </div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Embedding 配置</div><div class="stx-ui-item-desc">控制 MemoryOS 向量编码的模型提示和版本标识。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">Embedding 配置</div><div class="stx-ui-item-desc">控制 MemoryOS 向量编码的模型提示和版本标识。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_MODEL_ID}">Embedding 模型提示</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给 LLMHub 自动路由。</span></div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_EMBEDDING_VERSION_ID}">Embedding 版本标识</label>${buildSharedInputField({ id: VECTOR_EMBEDDING_VERSION_ID, type: 'text', className: 'stx-ui-input' })}</div>
             </div></div>
-            ${divider('向量重排序')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量重排序</div><div class="stx-ui-item-desc">仅在向量深路径中生效，关闭后直接使用融合结果裁切。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_RERANK_ID, '启用向量重排序')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 LLMHub 模型重排序</div><div class="stx-ui-item-desc">开启后仅深路径优先尝试模型重排，失败时可按设置回退规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_LLMHUB_RERANK_ID, '启用 LLMHub 模型重排序')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">重排序参数</div><div class="stx-ui-item-desc">规则重排窗口与 LLMHub 模型重排的候选数量配置。</div></div><div class="stx-ui-form-grid">
+            ${divider('向量重排序', true)}
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用向量重排序</div><div class="stx-ui-item-desc">仅在向量深路径中生效，关闭后直接使用融合结果裁切。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_RERANK_ID, '启用向量重排序')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 LLMHub 模型重排序</div><div class="stx-ui-item-desc">开启后仅深路径优先尝试模型重排，失败时可按设置回退规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_ENABLE_LLMHUB_RERANK_ID, '启用 LLMHub 模型重排序')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">重排序参数</div><div class="stx-ui-item-desc">规则重排窗口与 LLMHub 模型重排的候选数量配置。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_RERANK_WINDOW_ID}">规则重排窗口</label>${numberField(VECTOR_RERANK_WINDOW_ID,5,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID}">模型重排最小候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MIN_CANDIDATES_ID,1,100,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID}">模型重排最大候选数</label>${numberField(VECTOR_LLMHUB_RERANK_MAX_CANDIDATES_ID,1,100,1)}</div>
@@ -445,18 +594,18 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_RESOURCE_ID}">LLMHub 重排资源</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_RESOURCE_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则使用默认路由。</span></div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${VECTOR_LLMHUB_RERANK_MODEL_ID}">LLMHub 重排模型</label>${buildSharedInputField({ id: VECTOR_LLMHUB_RERANK_MODEL_ID, type: 'text', className: 'stx-ui-input' })}<span class="stx-ui-field-hint">不填则交给资源默认模型。</span></div>
             </div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">模型重排失败时回退规则重排</div><div class="stx-ui-item-desc">关闭后若模型重排失败，将直接返回当前融合结果裁切，不再继续规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, '模型重排失败时回退规则重排')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用检索日志</div><div class="stx-ui-item-desc">输出中文检索链日志，并为工作台保留结构化 trace。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_LOG_ENABLED_ID, '启用检索日志')}</div></div>
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用诊断 Trace 面板</div><div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定与召回流水。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_TRACE_PANEL_ID, '启用诊断 Trace 面板')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索调试配置</div><div class="stx-ui-item-desc">控制日志级别与当前启用的规则包模式。</div></div><div class="stx-ui-form-grid">
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">模型重排失败时回退规则重排</div><div class="stx-ui-item-desc">关闭后若模型重排失败，将直接返回当前融合结果裁切，不再继续规则重排。</div></div><div class="stx-ui-inline">${inlineCheckbox(VECTOR_LLMHUB_RERANK_FALLBACK_TO_RULE_ID, '模型重排失败时回退规则重排')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用检索日志</div><div class="stx-ui-item-desc">输出中文检索链日志，并为工作台保留结构化 trace。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_LOG_ENABLED_ID, '启用检索日志')}</div></div>
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用诊断 Trace 面板</div><div class="stx-ui-item-desc">允许工作台直接查看最近一轮检索判定与召回流水。</div></div><div class="stx-ui-inline">${inlineCheckbox(RETRIEVAL_TRACE_PANEL_ID, '启用诊断 Trace 面板')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">检索调试配置</div><div class="stx-ui-item-desc">控制日志级别与当前启用的规则包模式。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_LOG_LEVEL_ID}">retrievalLogLevel</label>${retrievalLogLevelSelect}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${RETRIEVAL_RULE_PACK_ID}">retrievalRulePack</label>${retrievalRulePackSelect}</div>
             </div></div>
         </div>
-        <div id="${PANEL_PIPELINE_ID}" class="stx-ui-panel" hidden>
-            ${divider('统一预算')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用统一预算控制</div><div class="stx-ui-item-desc">让总结、冷启动和旧聊天接管共用统一的预算与截断策略。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_BUDGET_ENABLED_ID, '启用统一预算控制')}</div></div>
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">Pipeline 预算参数</div><div class="stx-ui-item-desc">这些参数会直接影响 batch、section、冲突裁决和 finalizer 的体量。</div></div><div class="stx-ui-form-grid">
+        <div id="${PANEL_PIPELINE_ID}" class="stx-ui-panel" ${ADVANCED_OPTION_ATTR} hidden>
+            ${divider('统一预算', true)}
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用统一预算控制</div><div class="stx-ui-item-desc">让总结、冷启动和旧聊天接管共用统一的预算与截断策略。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_BUDGET_ENABLED_ID, '启用统一预算控制')}</div></div>
+            <div class="stx-ui-item stx-ui-item-stack" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">Pipeline 预算参数</div><div class="stx-ui-item-desc">这些参数会直接影响 batch、section、冲突裁决和 finalizer 的体量。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_INPUT_CHARS_ID}">每批最大输入字符数</label>${numberField(PIPELINE_MAX_INPUT_CHARS_ID,1000,50000,100)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_OUTPUT_ITEMS_ID}">每批最大输出项数</label>${numberField(PIPELINE_MAX_OUTPUT_ITEMS_ID,1,200,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_ACTIONS_ID}">每轮 mutation 最大动作数</label>${numberField(PIPELINE_MAX_ACTIONS_ID,1,100,1)}</div>
@@ -466,8 +615,8 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_MAX_FINALIZER_ITEMS_ID}">finalizer 每域最大条目数</label>${numberField(PIPELINE_MAX_FINALIZER_ITEMS_ID,1,500,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${PIPELINE_STAGING_RETENTION_DAYS_ID}">staging 保留天数</label>${numberField(PIPELINE_STAGING_RETENTION_DAYS_ID,1,365,1)}</div>
             </div></div>
-            ${divider('冲突裁决')}
-            <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅裁决未解决冲突</div><div class="stx-ui-item-desc">开启后只把 unresolved bucket 送入裁决任务，减少重复消耗。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, '仅裁决未解决冲突')}</div></div>
+            ${divider('冲突裁决', true)}
+            <div class="stx-ui-item" ${ADVANCED_OPTION_ATTR}><div class="stx-ui-item-main"><div class="stx-ui-item-title">仅裁决未解决冲突</div><div class="stx-ui-item-desc">开启后只把 unresolved bucket 送入裁决任务，减少重复消耗。</div></div><div class="stx-ui-inline">${inlineCheckbox(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, '仅裁决未解决冲突')}</div></div>
         </div>
         <div id="${PANEL_ABOUT_ID}" class="stx-ui-panel" hidden>
             <div class="stx-ui-item stx-ui-item-stack">
@@ -544,7 +693,6 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [DREAM_EXECUTION_MODE_ID, settings.dreamExecutionMode],
         [DREAM_REQUIRE_APPROVAL_ID, settings.dreamRequireApproval],
         [DREAM_PROMPT_ENABLED_ID, settings.dreamPromptEnabled],
-        [DREAM_PROMPT_VERSION_ID, settings.dreamPromptVersion],
         [DREAM_PROMPT_ALLOW_EXPANSION_ID, settings.dreamPromptAllowNarrativeExpansion],
         [DREAM_PROMPT_MAX_HIGHLIGHTS_ID, String(settings.dreamPromptMaxHighlights)],
         [DREAM_PROMPT_MAX_MUTATIONS_ID, String(settings.dreamPromptMaxMutations)],
@@ -556,7 +704,7 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [DREAM_MID_TOPK_ID, String(settings.dreamMidTopK)],
         [DREAM_DEEP_TOPK_ID, String(settings.dreamDeepTopK)],
         [DREAM_FUSED_MAX_ITEMS_ID, String(settings.dreamFusedMaxItems)],
-        [DREAM_STYLE_PRESET_ID, settings.dreamStylePreset],
+        [DREAM_STYLE_PRESET_ID, normalizeDreamStylePresetValue(settings.dreamPromptStylePreset ?? settings.dreamStylePreset)],
         [DREAM_WAVE_ENABLED_ID, settings.dreamWaveEnabled],
         [DREAM_WAVE_RECENT_TOPK_ID, String(settings.dreamWaveRecentTopK)],
         [DREAM_WAVE_MID_TOPK_ID, String(settings.dreamWaveMidTopK)],
@@ -686,7 +834,6 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
             : 'manual_review',
         dreamRequireApproval: checked(DREAM_REQUIRE_APPROVAL_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamRequireApproval),
         dreamPromptEnabled: checked(DREAM_PROMPT_ENABLED_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptEnabled),
-        dreamPromptVersion: text(DREAM_PROMPT_VERSION_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptVersion),
         dreamPromptStylePreset: text(DREAM_STYLE_PRESET_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptStylePreset),
         dreamPromptAllowNarrativeExpansion: checked(DREAM_PROMPT_ALLOW_EXPANSION_ID, DEFAULT_MEMORY_OS_SETTINGS.dreamPromptAllowNarrativeExpansion),
         dreamPromptMaxHighlights: Number(text(DREAM_PROMPT_MAX_HIGHLIGHTS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.dreamPromptMaxHighlights))),
@@ -878,6 +1025,72 @@ function setStatusText(text: string): void {
 }
 
 /**
+ * 功能：为元素写入 tooltip，避免覆盖手工指定的 data-tip。
+ * @param element 目标元素。
+ * @param tip tooltip 文案。
+ */
+function setAutoTooltip(element: HTMLElement | null, tip: string): void {
+    const text = tip.trim();
+    if (!element || !text || element.hasAttribute('data-tip')) {
+        return;
+    }
+    element.setAttribute('data-tip', text);
+}
+
+/**
+ * 功能：为 MemoryOS 设置页的控制组件补充专用 tooltip。
+ * @param root 设置卡片根节点。
+ */
+function applySettingTooltips(root: HTMLElement): void {
+    Object.entries(SETTING_CONTROL_TOOLTIPS).forEach(([id, tip]: [string, string]): void => {
+        const element = document.getElementById(id) as HTMLElement | null;
+        if (!element || !root.contains(element)) {
+            return;
+        }
+
+        setAutoTooltip(element, tip);
+
+        if (element instanceof HTMLInputElement && element.type === 'checkbox') {
+            setAutoTooltip(element.closest<HTMLElement>('.stx-shared-checkbox-card'), tip);
+        }
+    });
+}
+
+/**
+ * 功能：读取设置页高级模式 UI 状态。
+ * @returns 是否开启高级模式。
+ */
+function readAdvancedModeEnabled(): boolean {
+    return readSdkPluginUiState<boolean>(MEMORY_OS_SETTINGS_NAMESPACE, ADVANCED_MODE_UI_STATE_KEY, false) === true;
+}
+
+/**
+ * 功能：同步高级模式到 DOM 和开关控件。
+ * @param enabled 是否开启高级模式。
+ */
+function applyAdvancedModeUiState(enabled: boolean): void {
+    const card = document.getElementById(CARD_ID);
+    if (card) {
+        card.setAttribute('data-memoryos-advanced-mode', enabled ? 'true' : 'false');
+    }
+    const pipelinePanel = document.getElementById(PANEL_PIPELINE_ID);
+    if (!enabled && pipelinePanel && !pipelinePanel.hidden) {
+        activateTab('general');
+    }
+    const input = document.getElementById(ADVANCED_MODE_ID) as HTMLInputElement | null;
+    if (input) {
+        input.checked = enabled;
+    }
+}
+
+/**
+ * 功能：读取并同步高级模式 UI 状态。
+ */
+function syncAdvancedModeToForm(): void {
+    applyAdvancedModeUiState(readAdvancedModeEnabled());
+}
+
+/**
  * 功能：立即执行自动保存。
  */
 function flushAutoSave(): void {
@@ -906,6 +1119,15 @@ function scheduleAutoSave(): void {
 function bindActionEvents(): void {
     const openButton = document.getElementById(BTN_ID) as HTMLButtonElement | null;
     if (openButton) openButton.onclick = (): void => openUnifiedMemoryWorkbench();
+    const advancedModeInput = document.getElementById(ADVANCED_MODE_ID) as HTMLInputElement | null;
+    if (advancedModeInput) {
+        advancedModeInput.onchange = (): void => {
+            const enabled = advancedModeInput.checked;
+            writeSdkPluginUiState<boolean>(MEMORY_OS_SETTINGS_NAMESPACE, ADVANCED_MODE_UI_STATE_KEY, enabled);
+            applyAdvancedModeUiState(enabled);
+            setStatusText(enabled ? '已显示高级选项' : '已隐藏高级选项');
+        };
+    }
     const resetButton = document.getElementById(RESET_BTN_ID) as HTMLButtonElement | null;
     if (resetButton) {
         resetButton.onclick = (): void => {
@@ -918,7 +1140,7 @@ function bindActionEvents(): void {
     }
     const elements = Array.from(document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(`#${CARD_ID} input, #${CARD_ID} select`));
     elements.forEach((element: HTMLInputElement | HTMLSelectElement): void => {
-        if (element.id === BTN_ID || element.id === RESET_BTN_ID) return;
+        if (element.id === BTN_ID || element.id === RESET_BTN_ID || element.id === ADVANCED_MODE_ID) return;
         if (element instanceof HTMLInputElement && element.type === 'checkbox') {
             element.addEventListener('change', (): void => {
                 syncInjectionBudgetUiState();
@@ -960,9 +1182,12 @@ export async function renderSettingsUi(): Promise<void> {
     }
     card.innerHTML = buildCardTemplateHtml();
     hydrateSettingPage(card);
+    applySettingTooltips(card);
+    ensureSharedTooltip();
     bindTabEvents();
     bindActionEvents();
     syncSettingsToForm(readMemoryOSSettings());
+    syncAdvancedModeToForm();
     setStatusText('已加载当前设置');
 }
 
