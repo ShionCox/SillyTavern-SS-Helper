@@ -32,7 +32,7 @@ import {
 import { ensureSdkFloatingToolbar, removeSdkFloatingToolbarGroup, SDK_FLOATING_TOOLBAR_ID } from '../../../SDK/toolbar';
 import { initVectorRuntime } from './vector-runtime';
 import { DreamSchedulerService, initializeDreamScheduler } from '../services/dream-scheduler-service';
-import { DreamUiStateService } from '../ui/dream-ui-state-service';
+import { DreamUiStateService, type DreamUiStateSnapshot } from '../ui/dream-ui-state-service';
 import { DreamNotificationService } from '../ui/dream-notification-service';
 import { updateDreamTaskPill, getDreamTaskPillElement, hideDreamTaskPill } from '../ui/dream-task-pill';
 
@@ -54,6 +54,10 @@ type MemoryBindingStatus = {
 
 /** 仅在真实发送后的短时间窗口内执行 prompt_ready 注入 */
 const PROMPT_READY_SEND_WINDOW_MS = 15_000;
+const DREAM_UI_POLL_INTERVAL_ACTIVE_MS = 4_000;
+const DREAM_UI_POLL_INTERVAL_PENDING_MS = 8_000;
+const DREAM_UI_POLL_INTERVAL_IDLE_MS = 30_000;
+const DREAM_UI_REFRESH_DEBOUNCE_MS = 300;
 
 /**
  * 功能：归一化字符串数组并去重。
@@ -242,6 +246,8 @@ export class MemoryOS {
     private dreamUiStateService: DreamUiStateService | null;
     private dreamNotificationService: DreamNotificationService;
     private dreamUiPollHandle: number | null;
+    private dreamUiRefreshInFlight: boolean;
+    private dreamUiRefreshPending: boolean;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -264,6 +270,8 @@ export class MemoryOS {
         this.dreamUiStateService = null;
         this.dreamNotificationService = new DreamNotificationService();
         this.dreamUiPollHandle = null;
+        this.dreamUiRefreshInFlight = false;
+        this.dreamUiRefreshPending = false;
         window.setInterval((): void => {
             void this.refreshSummaryProgressUi();
         }, 2500);
@@ -274,6 +282,7 @@ export class MemoryOS {
         this.registerSelfManifest();
         this.setupPluginBusEndpoints();
         this.bindHostEvents();
+        this.bindDreamUiRefreshTriggers();
         this.bindToolbarActions();
         subscribeMemoryOSSettings((): void => {
             this.syncAuxiliaryUi();
@@ -350,12 +359,7 @@ export class MemoryOS {
             this.stopDreamUiPoll();
             return;
         }
-        if (this.dreamUiPollHandle != null) return;
-        this.dreamUiPollHandle = window.setInterval((): void => {
-            void this.refreshDreamUiState();
-        }, 8000);
-        // 立即刷新一次，避免等待首轮轮询。
-        void this.refreshDreamUiState();
+        this.queueDreamUiRefresh(0);
     }
 
     /**
@@ -363,16 +367,104 @@ export class MemoryOS {
      */
     private stopDreamUiPoll(): void {
         if (this.dreamUiPollHandle != null) {
-            window.clearInterval(this.dreamUiPollHandle);
+            window.clearTimeout(this.dreamUiPollHandle);
             this.dreamUiPollHandle = null;
         }
+        this.dreamUiRefreshInFlight = false;
+        this.dreamUiRefreshPending = false;
         hideDreamTaskPill();
+    }
+
+    /**
+     * 功能：根据当前梦境 UI 状态决定下一次轮询间隔。
+     * @param snapshot 最近一次状态快照。
+     * @returns 下次轮询等待毫秒数。
+     */
+    private resolveDreamUiPollInterval(snapshot: DreamUiStateSnapshot | null): number {
+        if (!snapshot) {
+            return DREAM_UI_POLL_INTERVAL_PENDING_MS;
+        }
+        if (snapshot.activeTask.exists) {
+            return DREAM_UI_POLL_INTERVAL_ACTIVE_MS;
+        }
+        if (snapshot.inbox.pendingApprovalCount > 0) {
+            return DREAM_UI_POLL_INTERVAL_PENDING_MS;
+        }
+        return DREAM_UI_POLL_INTERVAL_IDLE_MS;
+    }
+
+    /**
+     * 功能：安排下一次梦境 UI 刷新。
+     * @param delayMs 延迟毫秒数。
+     * @returns 无返回值。
+     */
+    private scheduleDreamUiRefresh(delayMs: number): void {
+        const settings = this.readSettings();
+        if (!settings.enabled || !settings.dreamEnabled) {
+            this.stopDreamUiPoll();
+            return;
+        }
+        if (this.dreamUiPollHandle != null) {
+            window.clearTimeout(this.dreamUiPollHandle);
+        }
+        this.dreamUiPollHandle = window.setTimeout((): void => {
+            this.dreamUiPollHandle = null;
+            void this.refreshDreamUiState();
+        }, Math.max(0, Math.trunc(delayMs)));
+    }
+
+    /**
+     * 功能：以防抖方式请求梦境 UI 立即刷新。
+     * @param delayMs 触发刷新前的等待毫秒数。
+     * @returns 无返回值。
+     */
+    private queueDreamUiRefresh(delayMs = DREAM_UI_REFRESH_DEBOUNCE_MS): void {
+        if (this.dreamUiRefreshInFlight) {
+            this.dreamUiRefreshPending = true;
+            return;
+        }
+        this.scheduleDreamUiRefresh(delayMs);
+    }
+
+    /**
+     * 功能：监听梦境相关的数据写入并触发 UI 即时刷新。
+     * @returns 无返回值。
+     */
+    private bindDreamUiRefreshTriggers(): void {
+        subscribeBroadcast<{ table?: string; pluginId?: string; chatKey?: string }>(
+            'sdk:chat_data:changed',
+            (data): void => {
+                const settings = this.readSettings();
+                if (!settings.enabled || !settings.dreamEnabled) {
+                    return;
+                }
+                const pluginId = String(data?.pluginId ?? '').trim();
+                const chatKey = String(data?.chatKey ?? '').trim();
+                if (pluginId !== MEMORY_OS_PLUGIN_ID || !chatKey) {
+                    return;
+                }
+                const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+                const currentChatKey = String(memory?.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+                if (!currentChatKey || chatKey !== currentChatKey) {
+                    return;
+                }
+                this.dreamUiStateService?.invalidateCache();
+                this.queueDreamUiRefresh(DREAM_UI_REFRESH_DEBOUNCE_MS);
+            },
+            { from: 'stx_sdk' },
+        );
     }
 
     /**
      * 功能：刷新梦境 UI 状态（pill + 通知）。
      */
     private async refreshDreamUiState(): Promise<void> {
+        if (this.dreamUiRefreshInFlight) {
+            this.dreamUiRefreshPending = true;
+            return;
+        }
+        this.dreamUiRefreshInFlight = true;
+        let snapshot: DreamUiStateSnapshot | null = null;
         try {
             const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
             if (!memory) return;
@@ -383,7 +475,7 @@ export class MemoryOS {
                 this.dreamUiStateService = new DreamUiStateService(chatKey);
                 this.dreamNotificationService.reset();
             }
-            const snapshot = await this.dreamUiStateService.getSnapshot();
+            snapshot = await this.dreamUiStateService.getSnapshot();
             // 更新任务入口。
             updateDreamTaskPill(snapshot, (): void => {
                 if (snapshot.inbox.pendingApprovalCount > 0) {
@@ -398,6 +490,14 @@ export class MemoryOS {
             this.dreamNotificationService.evaluate(snapshot);
         } catch (error) {
             logger.debug('[DreamUiPoll] 刷新失败', error);
+        } finally {
+            this.dreamUiRefreshInFlight = false;
+            if (this.dreamUiRefreshPending) {
+                this.dreamUiRefreshPending = false;
+                this.scheduleDreamUiRefresh(DREAM_UI_REFRESH_DEBOUNCE_MS);
+                return;
+            }
+            this.scheduleDreamUiRefresh(this.resolveDreamUiPollInterval(snapshot));
         }
     }
 
@@ -651,6 +751,7 @@ export class MemoryOS {
         this.dreamScheduler = null;
         this.dreamUiStateService = null;
         this.dreamNotificationService.reset();
+        this.stopDreamUiPoll();
         hideDreamTaskPill();
         try {
             const oldMemory = (window as unknown as { STX?: { memory?: { template?: { destroy?: () => void } } } })?.STX?.memory;
@@ -1056,6 +1157,29 @@ export class MemoryOS {
         let bindingSerial = 0;
         let lastUserMessageRenderedAt = 0;
         let lastUserMessageRenderedId = '';
+        const coldStartFlowCheckingChats = new Set<string>();
+
+        /**
+         * 功能：执行接管优先的冷启动检查流程。
+         * @param chatKey 当前聊天键。
+         * @param sdk 当前聊天的 Memory SDK。
+         * @returns 异步完成。
+         */
+        const maybeRunColdStartFlow = async (chatKey: string, sdk: MemorySDKImpl): Promise<void> => {
+            const normalizedChatKey = String(chatKey ?? '').trim();
+            if (!normalizedChatKey || coldStartFlowCheckingChats.has(normalizedChatKey)) {
+                return;
+            }
+            coldStartFlowCheckingChats.add(normalizedChatKey);
+            try {
+                const takeoverHandled = await this.maybePromptTakeover(normalizedChatKey, sdk);
+                if (!takeoverHandled) {
+                    await this.maybePromptColdStart(normalizedChatKey, sdk);
+                }
+            } finally {
+                coldStartFlowCheckingChats.delete(normalizedChatKey);
+            }
+        };
 
         const rebindChat = async (
             _force: boolean = false,
@@ -1080,6 +1204,14 @@ export class MemoryOS {
                 return;
             }
             if (chatKey === currentChatKey) {
+                if (triggerColdStart) {
+                    const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
+                    if (memory) {
+                        void maybeRunColdStartFlow(chatKey, memory).catch((error: unknown): void => {
+                            logger.warn('冷启动确认流程失败', error);
+                        });
+                    }
+                }
                 return;
             }
             const serial = ++bindingSerial;
@@ -1141,18 +1273,20 @@ export class MemoryOS {
             logger.info(`统一记忆聊天绑定完成: ${chatKey}`);
             void this.refreshSummaryProgressUi();
             this.initDreamSchedulerForChat(chatKey, sdk);
+            this.queueDreamUiRefresh(0);
             void (async (): Promise<void> => {
-                const takeoverHandled = await this.maybePromptTakeover(chatKey, sdk);
-                if (triggerColdStart && !takeoverHandled) {
-                    await this.maybePromptColdStart(chatKey, sdk);
+                if (triggerColdStart) {
+                    await maybeRunColdStartFlow(chatKey, sdk);
+                    return;
                 }
+                await this.maybePromptTakeover(chatKey, sdk);
             })().catch((error: unknown): void => {
                 logger.warn('冷启动确认流程失败', error);
             });
         };
 
         this.refreshChatBindingHandler = rebindChat;
-        void rebindChat(true, { triggerColdStart: false });
+        void rebindChat(true, { triggerColdStart: true });
 
         const onMessage = (eventType: 'chat.message.sent' | 'chat.message.received', payload: unknown): void => {
             const settings = this.readSettings();
@@ -1188,10 +1322,10 @@ export class MemoryOS {
         };
 
         eventSource.on(types.CHAT_CHANGED || 'chat_changed', (): void => {
-            void rebindChat(false, { triggerColdStart: false });
+            void rebindChat(false, { triggerColdStart: true });
         });
         eventSource.on(types.CHAT_STARTED || 'chat_started', (): void => {
-            void rebindChat(false, { triggerColdStart: false });
+            void rebindChat(false, { triggerColdStart: true });
         });
         eventSource.on(types.CHAT_NEW || 'chat_new', (): void => {
             void rebindChat(false, { triggerColdStart: true });

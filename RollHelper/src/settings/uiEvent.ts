@@ -537,6 +537,8 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_RULE_ID_Event: string;
   SETTINGS_AI_ROLL_MODE_ID_Event: string;
   SETTINGS_AI_ROUND_CONTROL_ID_Event: string;
+  SETTINGS_DICE_3D_ENABLED_ID_Event: string;
+  SETTINGS_REROLL_ENABLED_ID_Event: string;
   SETTINGS_EXPLODING_ENABLED_ID_Event: string;
   SETTINGS_ADVANTAGE_ENABLED_ID_Event: string;
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event: string;
@@ -565,6 +567,8 @@ export interface BindBasicSettingsInputsDepsEvent {
     autoSendRuleToAI?: boolean;
     enableAiRollMode?: boolean;
     enableAiRoundControl?: boolean;
+    enable3DDiceBox?: boolean;
+    enableRerollFeature?: boolean;
     enableExplodingDice?: boolean;
     enableAdvantageSystem?: boolean;
     enableDynamicResultGuidance?: boolean;
@@ -594,6 +598,12 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const aiRoundControlInput = document.getElementById(
     deps.SETTINGS_AI_ROUND_CONTROL_ID_Event
   ) as HTMLInputElement | null;
+  const dice3dEnabledInput = document.getElementById(
+    deps.SETTINGS_DICE_3D_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const rerollEnabledInput = document.getElementById(
+    deps.SETTINGS_REROLL_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const explodingEnabledInput = document.getElementById(
     deps.SETTINGS_EXPLODING_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -611,7 +621,7 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   ) as HTMLInputElement | null;
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
-  ) as HTMLInputElement | null;
+  ) as HTMLElement | null;
   const summaryDetailInput = document.getElementById(
     deps.SETTINGS_SUMMARY_DETAIL_ID_Event
   ) as HTMLSelectElement | null;
@@ -696,6 +706,16 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     deps.updateSettingsEvent({ enableAiRoundControl: value });
   });
 
+  dice3dEnabledInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ enable3DDiceBox: value });
+  });
+
+  rerollEnabledInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ enableRerollFeature: value });
+  });
+
   explodingEnabledInput?.addEventListener("input", (event) => {
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ enableExplodingDice: value });
@@ -721,10 +741,23 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     deps.updateSettingsEvent({ enableStatusSystem: value });
   });
 
-  allowedDiceSidesInput?.addEventListener("change", (event) => {
-    const value = String((event.target as HTMLInputElement).value || "").trim();
-    deps.updateSettingsEvent({ aiAllowedDiceSidesText: value });
-  });
+  allowedDiceSidesInput
+    ?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+    .forEach((input) => {
+      input.addEventListener("change", () => {
+        const checkedValues = Array.from(
+          allowedDiceSidesInput.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked')
+        )
+          .map((node) => Number(node.value))
+          .filter((value) => Number.isFinite(value))
+          .sort((left, right) => left - right);
+        const nextValues = checkedValues.length > 0 ? checkedValues : [20];
+        if (checkedValues.length === 0) {
+          input.checked = true;
+        }
+        deps.updateSettingsEvent({ aiAllowedDiceSidesText: nextValues.join(",") });
+      });
+    });
 
   summaryDetailInput?.addEventListener("change", (event) => {
     const raw = String((event.target as HTMLSelectElement).value || "");
@@ -863,6 +896,8 @@ export interface SyncSettingsUiDepsEvent {
     autoSendRuleToAI: boolean;
     enableAiRollMode: boolean;
     enableAiRoundControl: boolean;
+    enable3DDiceBox: boolean;
+    enableRerollFeature: boolean;
     enableExplodingDice: boolean;
     enableAdvantageSystem: boolean;
     enableDynamicResultGuidance: boolean;
@@ -889,6 +924,8 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_RULE_ID_Event: string;
   SETTINGS_AI_ROLL_MODE_ID_Event: string;
   SETTINGS_AI_ROUND_CONTROL_ID_Event: string;
+  SETTINGS_DICE_3D_ENABLED_ID_Event: string;
+  SETTINGS_REROLL_ENABLED_ID_Event: string;
   SETTINGS_EXPLODING_ENABLED_ID_Event: string;
   SETTINGS_ADVANTAGE_ENABLED_ID_Event: string;
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event: string;
@@ -937,6 +974,12 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const aiRoundControlInput = document.getElementById(
     deps.SETTINGS_AI_ROUND_CONTROL_ID_Event
   ) as HTMLInputElement | null;
+  const dice3dEnabledInput = document.getElementById(
+    deps.SETTINGS_DICE_3D_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const rerollEnabledInput = document.getElementById(
+    deps.SETTINGS_REROLL_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const explodingEnabledInput = document.getElementById(
     deps.SETTINGS_EXPLODING_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -954,7 +997,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   ) as HTMLInputElement | null;
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
-  ) as HTMLInputElement | null;
+  ) as HTMLElement | null;
   const summaryDetailInput = document.getElementById(
     deps.SETTINGS_SUMMARY_DETAIL_ID_Event
   ) as HTMLSelectElement | null;
@@ -1013,6 +1056,8 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (ruleInput) ruleInput.checked = Boolean(settings.autoSendRuleToAI);
   if (aiRollModeInput) aiRollModeInput.checked = Boolean(settings.enableAiRollMode);
   if (aiRoundControlInput) aiRoundControlInput.checked = Boolean(settings.enableAiRoundControl);
+  if (dice3dEnabledInput) dice3dEnabledInput.checked = Boolean(settings.enable3DDiceBox);
+  if (rerollEnabledInput) rerollEnabledInput.checked = Boolean(settings.enableRerollFeature);
   if (explodingEnabledInput) explodingEnabledInput.checked = Boolean(settings.enableExplodingDice);
   if (advantageEnabledInput) advantageEnabledInput.checked = Boolean(settings.enableAdvantageSystem);
   if (dynamicResultGuidanceInput) {
@@ -1024,7 +1069,19 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (statusSystemEnabledInput) {
     statusSystemEnabledInput.checked = Boolean(settings.enableStatusSystem);
   }
-  if (allowedDiceSidesInput) allowedDiceSidesInput.value = String(settings.aiAllowedDiceSidesText || "");
+  if (allowedDiceSidesInput) {
+    const enabledSides = new Set(
+      String(settings.aiAllowedDiceSidesText || "20")
+        .split(/[,\s]+/)
+        .map((item) => Number(item.trim()))
+        .filter((value) => Number.isFinite(value) && Number.isInteger(value))
+    );
+    allowedDiceSidesInput
+      .querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+      .forEach((input) => {
+        input.checked = enabledSides.has(Number(input.value));
+      });
+  }
   if (summaryDetailInput) summaryDetailInput.value = settings.summaryDetailMode;
   if (summaryRoundsInput) summaryRoundsInput.value = String(settings.summaryHistoryRounds);
   if (scopeInput) scopeInput.value = settings.eventApplyScope;

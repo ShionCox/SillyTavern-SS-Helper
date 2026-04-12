@@ -10,6 +10,8 @@ export const SETTINGS_ENABLED_ID_Event = "st-roll-settings-Event-enabled";
 export const SETTINGS_RULE_ID_Event = "st-roll-settings-Event-auto-rule";
 export const SETTINGS_AI_ROLL_MODE_ID_Event = "st-roll-settings-Event-ai-roll-mode";
 export const SETTINGS_AI_ROUND_CONTROL_ID_Event = "st-roll-settings-Event-ai-round-control";
+export const SETTINGS_DICE_3D_ENABLED_ID_Event = "st-roll-settings-Event-dice-3d-enabled";
+export const SETTINGS_REROLL_ENABLED_ID_Event = "st-roll-settings-Event-reroll-enabled";
 export const SETTINGS_EXPLODING_ENABLED_ID_Event = "st-roll-settings-Event-exploding-enabled";
 export const SETTINGS_ADVANTAGE_ENABLED_ID_Event = "st-roll-settings-Event-advantage-enabled";
 export const SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event = "st-roll-settings-Event-dynamic-result-guidance";
@@ -142,6 +144,8 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_RULE_ID_Event,
   SETTINGS_AI_ROLL_MODE_ID_Event,
   SETTINGS_AI_ROUND_CONTROL_ID_Event,
+  SETTINGS_DICE_3D_ENABLED_ID_Event,
+  SETTINGS_REROLL_ENABLED_ID_Event,
   SETTINGS_EXPLODING_ENABLED_ID_Event,
   SETTINGS_ADVANTAGE_ENABLED_ID_Event,
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event,
@@ -243,6 +247,8 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_RULE_ID_Event,
   SETTINGS_AI_ROLL_MODE_ID_Event,
   SETTINGS_AI_ROUND_CONTROL_ID_Event,
+  SETTINGS_DICE_3D_ENABLED_ID_Event,
+  SETTINGS_REROLL_ENABLED_ID_Event,
   SETTINGS_EXPLODING_ENABLED_ID_Event,
   SETTINGS_ADVANTAGE_ENABLED_ID_Event,
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event,
@@ -297,6 +303,8 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_RULE_ID_Event,
   SETTINGS_AI_ROLL_MODE_ID_Event,
   SETTINGS_AI_ROUND_CONTROL_ID_Event,
+  SETTINGS_DICE_3D_ENABLED_ID_Event,
+  SETTINGS_REROLL_ENABLED_ID_Event,
   SETTINGS_EXPLODING_ENABLED_ID_Event,
   SETTINGS_ADVANTAGE_ENABLED_ID_Event,
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event,
@@ -339,6 +347,7 @@ export const SUMMARY_HISTORY_ROUNDS_MIN_Event = 1;
 export const SUMMARY_HISTORY_ROUNDS_MAX_Event = 10;
 export const SUMMARY_HISTORY_MAX_STORED_Event = 20;
 export const OUTCOME_TEXT_MAX_LEN_Event = 400;
+export const AI_SUPPORTED_DICE_SIDES_Event = [4, 6, 8, 10, 12, 20, 100] as const;
 export const SKILL_PRESET_STORE_VERSION_Event = 1 as const;
 export const SKILL_PRESET_DEFAULT_ID_Event = "skill_preset_default_general_trpg";
 export const SKILL_PRESET_DEFAULT_NAME_Event = "通用叙事TRPG（默认）";
@@ -366,12 +375,14 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   autoSendRuleToAI: true,
   enableAiRollMode: true,
   enableAiRoundControl: false,
+  enable3DDiceBox: true,
+  enableRerollFeature: false,
   enableExplodingDice: true,
   enableAdvantageSystem: true,
   enableDynamicResultGuidance: false,
   enableDynamicDcReason: true,
   enableStatusSystem: true,
-  aiAllowedDiceSidesText: "4,6,8,10,12,20,100",
+  aiAllowedDiceSidesText: "20",
   theme: "default",
   summaryDetailMode: "minimal",
   summaryHistoryRounds: 3,

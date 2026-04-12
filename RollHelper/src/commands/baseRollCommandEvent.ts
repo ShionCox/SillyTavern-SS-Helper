@@ -13,10 +13,11 @@ export interface BaseRollCommandDepsEvent {
   SlashCommandArgument: any;
   ARGUMENT_TYPE: any;
   getDiceMeta: () => DiceMetaLikeEvent;
-  rollExpression: (exprRaw: string) => DiceResult;
+  rollDiceEvent: (exprRaw: string) => Promise<DiceResult>;
   saveLastRoll: (result: DiceResult) => void;
   buildResultMessage: (result: DiceResult) => string;
   appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
+  playDiceRevealOnlyEvent?: () => Promise<void>;
 }
 
 export function registerBaseMacrosAndCommandsEvent(
@@ -29,10 +30,11 @@ export function registerBaseMacrosAndCommandsEvent(
     SlashCommandArgument,
     ARGUMENT_TYPE,
     getDiceMeta,
-    rollExpression,
+    rollDiceEvent,
     saveLastRoll,
     buildResultMessage,
     appendToConsoleEvent,
+    playDiceRevealOnlyEvent,
   } = deps;
 
   const globalRef = globalThis as any;
@@ -76,19 +78,23 @@ export function registerBaseMacrosAndCommandsEvent(
       ],
       helpString: buildRollCommandHelpTemplateEvent(),
       callback: (_namedArgs: Record<string, any>, unnamedArgs: any) => {
-        try {
-          const exprRaw = (unnamedArgs ?? "").toString().trim();
-          const expr = exprRaw || "1d20";
-          const result = rollExpression(expr);
-          saveLastRoll(result);
-          const msg = buildResultMessage(result);
-          appendToConsoleEvent(msg);
-          return "";
-        } catch (e: any) {
-          const errMsg = `掷骰出错：${e?.message ?? String(e)}`;
-          appendToConsoleEvent(errMsg, "error");
-          return "";
-        }
+        const exprRaw = (unnamedArgs ?? "").toString().trim();
+        const expr = exprRaw || "1d20";
+        rollDiceEvent(expr)
+          .then((result) => {
+            saveLastRoll(result);
+            const msg = buildResultMessage(result);
+            appendToConsoleEvent(msg);
+            if (result.sourceEngine === "dice_box" && playDiceRevealOnlyEvent) {
+              return playDiceRevealOnlyEvent();
+            }
+            return undefined;
+          })
+          .catch((e: any) => {
+            const errMsg = `掷骰出错：${e?.message ?? String(e)}`;
+            appendToConsoleEvent(errMsg, "error");
+          });
+        return "";
       },
     })
   );

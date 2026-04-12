@@ -160,6 +160,41 @@ function evaluateResultGradeEvent(
   return { resultGrade: "failure", marginToDc };
 }
 
+type RollVisualStatusEvent = "critical_success" | "critical_failure" | "partial_success" | "success" | "failure";
+
+/**
+ * 功能：把最终结算分级映射为 3D 动画使用的视觉状态。
+ * @param resultGrade 最终结算分级。
+ * @returns 视觉反馈状态。
+ */
+function resolveRollVisualStatusFromGradeEvent(resultGrade: EventResultGradeEvent): RollVisualStatusEvent {
+  if (resultGrade === "critical_success") return "critical_success";
+  if (resultGrade === "critical_failure") return "critical_failure";
+  if (resultGrade === "partial_success") return "partial_success";
+  if (resultGrade === "success") return "success";
+  return "failure";
+}
+
+/**
+ * 功能：按原 3D 骰子流程播放检定视觉反馈。
+ * @param expr 骰子表达式。
+ * @param status 视觉反馈状态。
+ * @returns 无返回值。
+ */
+async function playRollResultAnimationEvent(status: RollVisualStatusEvent): Promise<void> {
+  if (typeof document === "undefined") return;
+  try {
+    const { playRollAnimation } = await import("../core/diceBox");
+    await playRollAnimation(status);
+  } catch (error) {
+    logger.warn("检定结果样式弹出失败，已继续完成检定", error);
+  }
+}
+
+function shouldPlay3DRollAnimationEvent(settings: DicePluginSettingsEvent, result: DiceResult): boolean {
+  return Boolean(settings.enable3DDiceBox && result.sourceEngine === "dice_box");
+}
+
 function ensurePendingResultGuidanceQueueEvent(meta: DiceMetaEvent): PendingResultGuidanceEvent[] {
   if (!Array.isArray(meta.pendingResultGuidanceQueue)) {
     meta.pendingResultGuidanceQueue = [];
@@ -333,7 +368,7 @@ export function buildAssistantFloorKeyEvent(assistantMsgId: string): string | nu
   const prefix = parts[0];
   const idOrIndex = parts[1];
   if (!prefix || !idOrIndex) return null;
-  if (prefix !== "assistant" && prefix !== "assistant_idx") return null;
+  if (prefix !== "assistant" && prefix !== "assistant_ts" && prefix !== "assistant_idx") return null;
   return `${prefix}:${idOrIndex}`;
 }
 
@@ -838,7 +873,7 @@ export interface PerformEventRollByIdDepsEvent {
   getLatestRollRecordForEvent: (round: PendingRoundEvent, eventId: string) => EventRollRecordEvent | null;
   refreshAllWidgetsFromStateEvent: () => void;
   refreshCountdownDomEvent: () => void;
-  rollExpression: (exprRaw: string, options?: DiceOptions) => DiceResult;
+  rollDiceEvent: (exprRaw: string, options?: DiceOptions) => Promise<DiceResult>;
   parseDiceExpression: ParseDiceExpressionFnEvent;
   getSettingsEvent: () => DicePluginSettingsEvent;
   resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number;
@@ -852,12 +887,25 @@ export interface PerformEventRollByIdDepsEvent {
   createIdEvent: (prefix: string) => string;
 }
 
-export function performEventRollByIdEvent(
+type ManualEventRollModeEvent = "initial" | "reroll";
+
+/**
+ * 功能：执行一次事件手动掷骰，可用于首次结算或重新投掷。
+ * @param eventIdRaw 事件 ID
+ * @param overrideExpr 覆盖骰式
+ * @param expectedRoundId 期望轮次 ID
+ * @param mode 执行模式：首次或重新投掷
+ * @param deps 运行时依赖
+ * @returns 错误文本；成功时返回空字符串
+ */
+async function executeManualEventRollEvent(
   eventIdRaw: string,
   overrideExpr: string | undefined,
   expectedRoundId: string | undefined,
+  mode: ManualEventRollModeEvent,
   deps: PerformEventRollByIdDepsEvent
-): string {
+): Promise<string> {
+  const allowExistingRecord = mode === "reroll";
   deps.sweepTimeoutFailuresEvent();
   const eventId = String(eventIdRaw || "").trim();
   if (!eventId) {
@@ -896,10 +944,17 @@ export function performEventRollByIdEvent(
   }
 
   const existingRecord = deps.getLatestRollRecordForEvent(round, event.id);
-  if (existingRecord) {
+  if (existingRecord && !allowExistingRecord) {
     deps.refreshAllWidgetsFromStateEvent();
     deps.refreshCountdownDomEvent();
     return "";
+  }
+
+  if (allowExistingRecord && !settings.enableRerollFeature) {
+    return "❌ 重新投掷功能未开启。";
+  }
+  if (allowExistingRecord && !existingRecord) {
+    return "❌ 当前事件还没有可重投的结算结果。";
   }
 
   const exprRaw = (overrideExpr || event.checkDice || "").trim();
@@ -927,7 +982,7 @@ export function performEventRollByIdEvent(
 
   let result: DiceResult;
   try {
-    result = deps.rollExpression(expr, {
+    result = await deps.rollDiceEvent(expr, {
       rule: settings.ruleText,
       adv: execution.adv,
       dis: execution.dis,
@@ -943,11 +998,15 @@ export function performEventRollByIdEvent(
   const statusAdjusted = applyStatusModifierToDiceResultEvent(result, statusResolved.modifier);
   result = statusAdjusted.result;
 
-  deps.saveLastRoll(result);
   const compareUsed = deps.normalizeCompareOperatorEvent(event.compare) ?? ">=";
   const dcUsed = Number.isFinite(event.dc) ? Number(event.dc) : null;
   const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
   const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, "manual_roll");
+  if (shouldPlay3DRollAnimationEvent(settings, result)) {
+    await playRollResultAnimationEvent(resolveRollVisualStatusFromGradeEvent(grade.resultGrade));
+  }
+
+  deps.saveLastRoll(result);
 
   const record: EventRollRecordEvent = {
     rollId: deps.createIdEvent("eroll"),
@@ -987,12 +1046,36 @@ export function performEventRollByIdEvent(
   return "";
 }
 
+export async function performEventRollByIdEvent(
+  eventIdRaw: string,
+  overrideExpr: string | undefined,
+  expectedRoundId: string | undefined,
+  deps: PerformEventRollByIdDepsEvent
+): Promise<string> {
+  return executeManualEventRollEvent(eventIdRaw, overrideExpr, expectedRoundId, "initial", deps);
+}
+
+/**
+ * 功能：对同一事件发起重新投掷，并保留旧记录。
+ * @param eventIdRaw 事件 ID
+ * @param expectedRoundId 期望轮次 ID
+ * @param deps 运行时依赖
+ * @returns 错误文本；成功时返回空字符串
+ */
+export async function rerollEventByIdEvent(
+  eventIdRaw: string,
+  expectedRoundId: string | undefined,
+  deps: PerformEventRollByIdDepsEvent
+): Promise<string> {
+  return executeManualEventRollEvent(eventIdRaw, undefined, expectedRoundId, "reroll", deps);
+}
+
 export interface AutoRollEventsByAiModeDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
   getDiceMetaEvent: () => DiceMetaEvent;
   ensureRoundEventTimersSyncedEvent: (round: PendingRoundEvent) => void;
   getLatestRollRecordForEvent: (round: PendingRoundEvent, eventId: string) => EventRollRecordEvent | null;
-  rollExpression: (exprRaw: string, options?: DiceOptions) => DiceResult;
+  rollDiceEvent: (exprRaw: string, options?: DiceOptions) => Promise<DiceResult>;
   parseDiceExpression: ParseDiceExpressionFnEvent;
   resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number;
   applySkillModifierToDiceResultEvent: (
@@ -1007,7 +1090,7 @@ export interface AutoRollEventsByAiModeDepsEvent {
   saveMetadataSafeEvent: () => void;
 }
 
-export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: AutoRollEventsByAiModeDepsEvent): string[] {
+export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: AutoRollEventsByAiModeDepsEvent): Promise<string[]> {
   const settings = deps.getSettingsEvent();
   if (!settings.enableAiRollMode) return [];
 
@@ -1059,7 +1142,7 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
 
     let result: DiceResult;
     try {
-      result = deps.rollExpression(expr, {
+      result = await deps.rollDiceEvent(expr, {
         rule: settings.ruleText,
         adv: execution.adv,
         dis: execution.dis,
@@ -1080,6 +1163,9 @@ export function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps: Auto
     const dcUsed = Number.isFinite(event.dc) ? Number(event.dc) : null;
     const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
     const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, "ai_auto_roll");
+    if (shouldPlay3DRollAnimationEvent(settings, result)) {
+      await playRollResultAnimationEvent(resolveRollVisualStatusFromGradeEvent(grade.resultGrade));
+    }
 
     const record: EventRollRecordEvent = {
       rollId: deps.createIdEvent("eroll"),

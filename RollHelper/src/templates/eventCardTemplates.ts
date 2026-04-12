@@ -379,6 +379,8 @@ export interface EventListItemTemplateParamsEvent {
   advantageStateHtml: string;
   modifierTextHtml: string;
   checkDiceHtml: string;
+  difficultyHtml: string;
+  difficultyTitleAttr: string;
   compareHtml: string;
   dcText: string;
   dcReasonHtml: string;
@@ -415,6 +417,13 @@ export interface EventRollButtonTemplateParamsEvent {
   buttonStateStyle: string;
 }
 
+export interface EventRerollButtonTemplateParamsEvent {
+  roundIdAttr: string;
+  eventIdAttr: string;
+  rollIdAttr: string;
+  buttonTitleAttr: string;
+}
+
 function buildTipLabelTemplateEvent(label: string, tip: string): string {
   return `<span class="st-rh-tip-label" data-tip="${tip}">${label}</span>`;
 }
@@ -433,6 +442,18 @@ export function buildEventRollButtonTemplateEvent(params: EventRollButtonTemplat
   return `<button type="button" class="st-rh-roll-btn" data-dice-event-roll="1" data-round-id="${params.roundIdAttr}"
   data-dice-event-id="${params.eventIdAttr}" data-dice-expr="${params.diceExprAttr}" ${params.buttonDisabledAttr}${stateStyleAttr}>
   <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.9;"></i>执行检定
+</button>`;
+}
+
+/**
+ * 功能：构建事件结果卡中的重新投掷按钮。
+ * @param params 按钮所需的轮次、事件与提示信息
+ * @returns 重新投掷按钮 HTML
+ */
+export function buildEventRerollButtonTemplateEvent(params: EventRerollButtonTemplateParamsEvent): string {
+  return `<button type="button" class="st-rh-reroll-btn" data-dice-event-reroll="1" data-round-id="${params.roundIdAttr}"
+  data-dice-event-id="${params.eventIdAttr}" data-roll-id="${params.rollIdAttr}" data-tip="${params.buttonTitleAttr}">
+  <i class="fa-solid fa-rotate-right fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.92;"></i>重新投掷
 </button>`;
 }
 
@@ -473,6 +494,9 @@ export function buildEventListItemTemplateEvent(params: EventListItemTemplatePar
     advantage_state_html: params.advantageStateHtml,
     tip_label_dice_html: buildTipLabelTemplateEvent("骰式", "本次检定使用的骰子表达式。"),
     check_dice_html: params.checkDiceHtml,
+    tip_label_difficulty_html: buildTipLabelTemplateEvent("难度", "系统建议优先由难度等级推导阈值，以避免不可达的判定条件。"),
+    difficulty_html: params.difficultyHtml,
+    difficulty_title_attr: params.difficultyTitleAttr,
     tip_label_condition_html: buildTipLabelTemplateEvent("条件", "将掷骰总值与 DC 按比较符进行判定。"),
     compare_html: params.compareHtml,
     dc_text: params.dcText,
@@ -514,6 +538,7 @@ export interface EventRollResultCardTemplateParamsEvent {
   collapsedStatusSummaryTitleAttr: string;
   collapsedStatusSummaryChipClassName: string;
   collapsedDiceVisualHtml: string;
+  rerollActionHtml: string;
   rollIdHtml: string;
   titleHtml: string;
   eventIdHtml: string;
@@ -522,6 +547,8 @@ export interface EventRollResultCardTemplateParamsEvent {
   skillHtml: string;
   skillTitleAttr: string;
   advantageStateHtml: string;
+  difficultyHtml: string;
+  difficultyTitleAttr: string;
   diceExprHtml: string;
   diceModifierHintHtml: string;
   rollsSummaryHtml: string;
@@ -563,6 +590,12 @@ function buildSettlementStatusBadgeTemplateEvent(
     "st-rh-status-pill st-rh-inline-chip st-rh-status-badge",
     extraClasses
   )}" style="--st-rh-status-color:${color};"${tipDataAttr}>${textHtml}</span>`;
+}
+
+function getSettlementStatusToneClassTemplateEvent(statusText: string): string {
+  if (statusText.includes("失败")) return "st-rh-settlement-status-failure";
+  if (statusText.includes("成功")) return "st-rh-settlement-status-success";
+  return "st-rh-settlement-status-pending";
 }
 
 function buildSettlementChipTemplateEvent(
@@ -735,14 +768,31 @@ function buildSettlementResultCoreTemplateEvent(params: {
   </div>`;
 }
 
-export function buildRollsSummaryTemplateEvent(rollsHtml: string, modifierHtml: string): string {
+/**
+ * 功能：构建结果卡中“判定拆解”的掷骰摘要。
+ * @param rollsHtml 原始骰面展示 HTML
+ * @param modifierHtml 修正值展示 HTML
+ * @param selectionHtml 优劣骰保留/舍弃说明 HTML
+ * @returns 掷骰摘要 HTML
+ */
+export function buildRollsSummaryTemplateEvent(
+  rollsHtml: string,
+  modifierHtml: string,
+  selectionHtml = ""
+): string {
+  const selectionSegment = String(selectionHtml ?? "").trim()
+    ? `<span class="st-rh-inline-divider">•</span>
+    <span class="st-rh-meta-text">${selectionHtml}</span>`
+    : "";
   return `<span class="st-rh-mono st-rh-title-text">[${rollsHtml}]</span>
+    ${selectionSegment}
     <span class="st-rh-inline-divider">•</span>
     <span class="st-rh-meta-text">修正：</span>
     <span class="st-rh-mono st-rh-emphasis-text">${modifierHtml}</span>`;
 }
 
 export function buildEventRollResultCardTemplateEvent(params: EventRollResultCardTemplateParamsEvent): string {
+  const statusToneClass = getSettlementStatusToneClassTemplateEvent(params.statusText);
   const summaryStatusBadgeHtml = buildSettlementStatusBadgeTemplateEvent(
     params.collapsedStatusHtml,
     params.statusColor,
@@ -807,6 +857,12 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     buildSettlementFactTemplateEvent(
       buildTipLabelTemplateEvent("掷骰模式", "普通、优势、劣势会影响最终检定结果。"),
       params.advantageStateHtml
+    ),
+    buildSettlementFactTemplateEvent(
+      buildTipLabelTemplateEvent("难度", "系统建议优先由难度等级自动换算阈值，避免出现理论不可达的判定条件。"),
+      params.difficultyTitleAttr
+        ? `<span data-tip="${params.difficultyTitleAttr}">${params.difficultyHtml}</span>`
+        : params.difficultyHtml
     ),
     buildSettlementFactTemplateEvent(
       buildTipLabelTemplateEvent("骰式", "本次检定使用的骰子表达式。"),
@@ -881,7 +937,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
 
   const desktopHtml = decorateDetailsTemplateHtmlEvent(
     renderHtmlTemplateEvent(eventRollResultCardTemplateHtml, {
-    shell_type_class: "st-rh-settlement-shell-result",
+    shell_type_class: `st-rh-settlement-shell-result ${statusToneClass}`,
     dice_slot_type_class: "st-rh-summary-dice-slot-result",
     details_layout_type_class: "st-rh-details-layout-result",
     summary_kicker_text: "检定结果",
@@ -891,7 +947,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     summary_primary_chips_html: summaryPrimaryChipsHtml,
     summary_secondary_chips_html: summarySecondaryChipsHtml,
     summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "ROLL"),
-    summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
+    summary_toggle_html: `${params.rerollActionHtml}${buildSummaryToggleStateTemplateEvent()}`,
     details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "desktop"),
     details_kicker_text: "结果档案",
     details_heading_html: params.titleHtml,
@@ -908,7 +964,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
   );
   const mobileHtml = decorateDetailsTemplateHtmlEvent(
     renderHtmlTemplateEvent(eventRollResultCardMobileTemplateHtml, {
-    shell_type_class: "st-rh-settlement-shell-result",
+    shell_type_class: `st-rh-settlement-shell-result ${statusToneClass}`,
     dice_slot_type_class: "st-rh-summary-dice-slot-result",
     details_layout_type_class: "st-rh-details-layout-result",
     summary_kicker_text: "检定结果",
@@ -918,7 +974,7 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
     summary_primary_chips_html: summaryPrimaryChipsHtml,
     summary_secondary_chips_html: summarySecondaryChipsHtml,
     summary_dice_visual_html: buildSettlementSummaryVisualTemplateEvent(params.collapsedDiceVisualHtml, "ROLL"),
-    summary_toggle_html: buildSummaryToggleStateTemplateEvent(),
+    summary_toggle_html: `${params.rerollActionHtml}${buildSummaryToggleStateTemplateEvent()}`,
     details_id_attr: buildVariantDetailsIdEvent(params.detailsIdAttr, "mobile"),
     details_kicker_text: "结果档案",
     details_heading_html: params.titleHtml,
@@ -935,4 +991,3 @@ export function buildEventRollResultCardTemplateEvent(params: EventRollResultCar
   );
   return buildCardVariantSwitchTemplateEvent("st-rh-card-switch-settlement st-rh-card-switch-result", desktopHtml, mobileHtml);
 }
-

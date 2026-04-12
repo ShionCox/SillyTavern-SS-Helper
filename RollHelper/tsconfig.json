@@ -7,6 +7,7 @@
     "allowSyntheticDefaultImports": true,
     "strict": false,
     "allowJs": true,
+    "skipLibCheck": true,
     "noEmitOnError": false,
     "lib": ["DOM", "ES2021"]
   },

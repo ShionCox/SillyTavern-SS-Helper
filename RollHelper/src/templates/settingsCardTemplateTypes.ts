@@ -27,6 +27,8 @@ export interface SettingsCardTemplateIdsEvent {
   ruleId: string;
   aiRollModeId: string;
   aiRoundControlId: string;
+  dice3dEnabledId: string;
+  rerollEnabledId: string;
   explodingEnabledId: string;
   advantageEnabledId: string;
   dynamicResultGuidanceId: string;

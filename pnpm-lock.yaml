@@ -76,6 +76,16 @@ importers:
         version: 3.2.4(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)
 
   RollHelper:
+    dependencies:
+      '@babylonjs/core':
+        specifier: 5.57.1
+        version: 5.57.1
+      '@babylonjs/loaders':
+        specifier: 5.57.1
+        version: 5.57.1(@babylonjs/core@5.57.1)(babylonjs-gltf2interface@5.57.1)
+      '@babylonjs/materials':
+        specifier: 5.57.1
+        version: 5.57.1(@babylonjs/core@5.57.1)
     devDependencies:
       esbuild:
         specifier: ^0.27.3
@@ -106,6 +116,20 @@ packages:
   '@babel/types@7.29.0':
     resolution: {integrity: sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A==}
     engines: {node: '>=6.9.0'}
+
+  '@babylonjs/core@5.57.1':
+    resolution: {integrity: sha512-k8U+SFPVGvHgeNr651nxZL26iVCmTzjmRrdbQa0BGas+lg8PIV/tfhN4uTeWWQeRFLvjbkcHA5qD8x/Xk3EpMQ==}
+
+  '@babylonjs/loaders@5.57.1':
+    resolution: {integrity: sha512-DHk0iOwJgnTcj8vI+cQVzpiUvWGJvYqWyZxsf7nzhbeND+ZwNWSG0AelaGbGHpWTaDSd/DjUcoWVZuT4Cg6/Xg==}
+    peerDependencies:
+      '@babylonjs/core': ^5.22.0
+      babylonjs-gltf2interface: ^5.22.0
+
+  '@babylonjs/materials@5.57.1':
+    resolution: {integrity: sha512-NLdR6eGUr+wFqie937HRWsnaWPeECpjOrYDGvjjYDg08VAcIC3YyctAuQxv8rId7BoDttkUd8Ey/IZ5d/9H7GA==}
+    peerDependencies:
+      '@babylonjs/core': ^5.22.0
 
   '@emnapi/core@1.9.0':
     resolution: {integrity: sha512-0DQ98G9ZQZOxfUcQn1waV2yS8aWdZ6kJMbYCJB3oUBecjWYO1fqJ+a1DRfPF3O5JEkwqwP1A9QEN/9mYm2Yd0w==}
@@ -876,6 +900,9 @@ packages:
     peerDependencies:
       postcss: ^8.1.0
 
+  babylonjs-gltf2interface@5.57.1:
+    resolution: {integrity: sha512-RZnaKfJ6Q/AYLdIjBYMRxCW/HPEC8jabAL1U8wJ0KVziw6NSbSV6S80S22fUCPTyaZ7nCekn1TYg1IPmJ/eA6w==}
+
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -1470,6 +1497,17 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
+  '@babylonjs/core@5.57.1': {}
+
+  '@babylonjs/loaders@5.57.1(@babylonjs/core@5.57.1)(babylonjs-gltf2interface@5.57.1)':
+    dependencies:
+      '@babylonjs/core': 5.57.1
+      babylonjs-gltf2interface: 5.57.1
+
+  '@babylonjs/materials@5.57.1(@babylonjs/core@5.57.1)':
+    dependencies:
+      '@babylonjs/core': 5.57.1
+
   '@emnapi/core@1.9.0':
     dependencies:
       '@emnapi/wasi-threads': 1.2.0
@@ -2009,6 +2047,8 @@ snapshots:
       picocolors: 1.1.1
       postcss: 8.5.8
       postcss-value-parser: 4.2.0
+
+  babylonjs-gltf2interface@5.57.1: {}
 
   base64-js@1.5.1: {}
 

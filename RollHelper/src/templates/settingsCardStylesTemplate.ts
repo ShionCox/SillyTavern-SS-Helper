@@ -282,6 +282,58 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       flex-wrap: wrap;
     }
 
+    #${cardId} .st-roll-dice-toggle-group {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+      max-width: min(100%, 420px);
+    }
+
+    #${cardId} .st-roll-dice-toggle {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 56px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(197, 160, 89, 0.28);
+      background: rgba(255, 255, 255, 0.05);
+      cursor: pointer;
+      transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      user-select: none;
+    }
+
+    #${cardId} .st-roll-dice-toggle:hover {
+      transform: translateY(-1px);
+      border-color: rgba(197, 160, 89, 0.5);
+    }
+
+    #${cardId} .st-roll-dice-toggle input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #${cardId} .st-roll-dice-toggle span {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      opacity: 0.78;
+    }
+
+    #${cardId} .st-roll-dice-toggle input:checked + span {
+      opacity: 1;
+    }
+
+    #${cardId} .st-roll-dice-toggle:has(input:checked) {
+      border-color: rgba(197, 160, 89, 0.72);
+      background: rgba(197, 160, 89, 0.18);
+      box-shadow: 0 0 0 1px rgba(197, 160, 89, 0.16), 0 6px 16px rgba(197, 160, 89, 0.12);
+    }
+
     #${cardId} .st-roll-field-label {
       font-size: 13px;
       opacity: 0.85;

@@ -50,6 +50,7 @@ import {
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
+  AI_SUPPORTED_DICE_SIDES_Event,
   DEFAULT_RULE_TEXT_Event,
   DEFAULT_SETTINGS_Event,
   SDK_SETTINGS_NAMESPACE_Event,
@@ -144,6 +145,25 @@ export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
 let ACTIVE_CHAT_KEY_Event = "";
 let ACTIVE_CHAT_SCOPE_Event: SdkTavernScopeLocatorEvent | null = null;
 let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
+
+/**
+ * 功能：把 AI 可用骰式配置规范化为受支持的骰面列表文本。
+ * 参数：
+ *   raw：原始配置文本。
+ * 返回：
+ *   string：规范化后的逗号分隔文本；为空时回退到默认值。
+ */
+function normalizeAiAllowedDiceSidesTextEvent(raw: unknown): string {
+  const parts = String(raw ?? "")
+    .split(/[,\s]+/)
+    .map((item) => Number(String(item || "").trim()))
+    .filter((value) => Number.isFinite(value) && Number.isInteger(value) && AI_SUPPORTED_DICE_SIDES_Event.includes(value as any));
+  const normalized = Array.from(new Set(parts)).sort((left, right) => left - right);
+  if (normalized.length > 0) {
+    return normalized.join(",");
+  }
+  return DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText;
+}
 
 function traceStoreThemeEvent(message: string, payload?: unknown): void {
   if (payload === undefined) {
@@ -664,15 +684,14 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.autoSendRuleToAI = bucket.autoSendRuleToAI !== false;
   bucket.enableAiRollMode = bucket.enableAiRollMode !== false;
   bucket.enableAiRoundControl = bucket.enableAiRoundControl === true;
+  bucket.enable3DDiceBox = bucket.enable3DDiceBox !== false;
+  bucket.enableRerollFeature = bucket.enableRerollFeature === true;
   bucket.enableExplodingDice = bucket.enableExplodingDice !== false;
   bucket.enableAdvantageSystem = bucket.enableAdvantageSystem !== false;
   bucket.enableDynamicResultGuidance = bucket.enableDynamicResultGuidance === true;
   bucket.enableDynamicDcReason = bucket.enableDynamicDcReason !== false;
   bucket.enableStatusSystem = bucket.enableStatusSystem !== false;
-  bucket.aiAllowedDiceSidesText =
-    typeof (source as any)?.aiAllowedDiceSidesText === "string"
-      ? String((source as any).aiAllowedDiceSidesText).trim()
-      : DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText;
+  bucket.aiAllowedDiceSidesText = normalizeAiAllowedDiceSidesTextEvent((source as any)?.aiAllowedDiceSidesText);
   const rawTheme = String((source as any)?.theme ?? "").trim().toLowerCase();
   bucket.theme =
     rawTheme === "dark" || rawTheme === "light" || rawTheme === "tavern"

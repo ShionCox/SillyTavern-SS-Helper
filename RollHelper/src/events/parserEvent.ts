@@ -1,9 +1,11 @@
 import { parseDiceExpression } from "../core/diceEngineEvent";
+import { AI_SUPPORTED_DICE_SIDES_Event, DEFAULT_SETTINGS_Event } from "../settings/constantsEvent";
 import type {
   AdvantageStateEvent,
   CompareOperatorEvent,
   DiceEventSpecEvent,
   DicePluginSettingsEvent,
+  EventDifficultyLevelEvent,
   EventOutcomesEvent,
   EventRollModeEvent,
   EventScopeTagEvent,
@@ -17,6 +19,42 @@ export function normalizeCompareOperatorEvent(raw: any): CompareOperatorEvent | 
   if (raw == null || raw === "") return ">=";
   if (raw === ">=" || raw === ">" || raw === "<=" || raw === "<") return raw;
   return null;
+}
+
+/**
+ * 功能：规范化事件难度等级文本。
+ * @param raw 原始难度文本
+ * @returns 统一后的难度等级；无法识别时返回空值
+ */
+function normalizeDifficultyLevelEvent(raw: any): EventDifficultyLevelEvent | undefined {
+  const value = normalizeStringFieldEvent(raw).toLowerCase();
+  if (!value) return undefined;
+  if (value === "easy" || value === "simple" || value === "easier" || value === "简单" || value === "容易") {
+    return "easy";
+  }
+  if (
+    value === "normal" ||
+    value === "medium" ||
+    value === "standard" ||
+    value === "普通" ||
+    value === "正常" ||
+    value === "中等"
+  ) {
+    return "normal";
+  }
+  if (value === "hard" || value === "difficult" || value === "困难" || value === "较难") {
+    return "hard";
+  }
+  if (
+    value === "extreme" ||
+    value === "very_hard" ||
+    value === "veryhard" ||
+    value === "极难" ||
+    value === "严苛"
+  ) {
+    return "extreme";
+  }
+  return undefined;
 }
 
 export function normalizeStringFieldEvent(raw: any): string {
@@ -61,6 +99,259 @@ export function normalizeOutcomesEvent(
   const explode = normalizeOutcomeTextEvent((raw as any).explode, "explode", eventId, OUTCOME_TEXT_MAX_LEN_Event);
   if (!success && !failure && !explode) return undefined;
   return { success, failure, explode };
+}
+
+type ReachableTotalRangeEvent = {
+  min: number;
+  max: number;
+};
+
+type ResolvedEventThresholdEvent = {
+  dc: number;
+  difficulty?: EventDifficultyLevelEvent;
+  dcSource: "ai" | "difficulty_mapped";
+  generatedDcReason?: string;
+};
+
+function clampNumberEvent(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatDifficultyLabelEvent(level: EventDifficultyLevelEvent): string {
+  if (level === "easy") return "简单";
+  if (level === "hard") return "困难";
+  if (level === "extreme") return "极难";
+  return "普通";
+}
+
+/**
+ * 功能：根据骰式结构估算理论可达的总值范围。
+ * @param count 骰子数量
+ * @param sides 骰子面数
+ * @param modifier 固定修正值
+ * @param keepCount 保留骰子数量；未指定时按全部骰子计分
+ * @returns 理论最小值与最大值
+ */
+function buildReachableTotalRangeFromPartsEvent(
+  count: number,
+  sides: number,
+  modifier: number,
+  keepCount?: number
+): ReachableTotalRangeEvent {
+  const scoringCount = Number.isFinite(Number(keepCount)) && Number(keepCount) > 0
+    ? Math.max(1, Math.min(Number(count) || 1, Number(keepCount)))
+    : Math.max(1, Number(count) || 1);
+  const numericSides = Math.max(1, Number(sides) || 1);
+  const numericModifier = Number.isFinite(Number(modifier)) ? Number(modifier) : 0;
+  return {
+    min: scoringCount + numericModifier,
+    max: scoringCount * numericSides + numericModifier,
+  };
+}
+
+/**
+ * 功能：根据事件骰式与优劣骰配置估算理论可达总值范围。
+ * @param checkDice 事件骰式
+ * @param advantageState 事件声明的优劣骰状态
+ * @returns 理论最小值与最大值；解析失败时返回空值
+ */
+function buildReachableTotalRangeForEventEvent(
+  checkDice: string,
+  advantageState: AdvantageStateEvent
+): ReachableTotalRangeEvent | null {
+  try {
+    const parsed = parseDiceExpression(checkDice);
+    const effectiveKeepCount =
+      parsed.keepMode === "kh" || parsed.keepMode === "kl"
+        ? parsed.keepCount
+        : undefined;
+    return buildReachableTotalRangeFromPartsEvent(
+      parsed.count,
+      parsed.sides,
+      parsed.modifier,
+      effectiveKeepCount
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 功能：根据比较符判断当前检定是否以“更高总值更有利”。
+ * @param compare 比较运算符
+ * @returns 若更高总值更有利则返回 `true`
+ */
+function isHigherTotalBetterForCompareEvent(compare: CompareOperatorEvent): boolean {
+  return compare === ">=" || compare === ">";
+}
+
+/**
+ * 功能：根据优劣骰状态微调难度映射强度。
+ * @param advantageState 优劣骰状态
+ * @param compare 比较运算符
+ * @returns 对基础难度进度的偏移量
+ */
+function getDifficultyProgressBiasEvent(
+  advantageState: AdvantageStateEvent,
+  compare: CompareOperatorEvent
+): number {
+  if (advantageState === "normal") return 0;
+  const higherIsBetter = isHigherTotalBetterForCompareEvent(compare);
+  if (advantageState === "advantage") {
+    return higherIsBetter ? 0.08 : -0.12;
+  }
+  return higherIsBetter ? -0.12 : 0.08;
+}
+
+/**
+ * 功能：把难度等级换算为基础进度值。
+ * @param difficulty 难度等级
+ * @returns 0~1 的基础进度
+ */
+function getDifficultyBaseProgressEvent(difficulty: EventDifficultyLevelEvent): number {
+  if (difficulty === "easy") return 0.28;
+  if (difficulty === "hard") return 0.68;
+  if (difficulty === "extreme") return 0.84;
+  return 0.48;
+}
+
+/**
+ * 功能：根据可达范围、比较方式与难度等级自动换算 DC。
+ * @param range 理论可达范围
+ * @param compare 比较运算符
+ * @param difficulty 难度等级
+ * @param advantageState 优劣骰状态
+ * @returns 自动换算出的 DC
+ */
+function computeDcFromDifficultyEvent(
+  range: ReachableTotalRangeEvent,
+  compare: CompareOperatorEvent,
+  difficulty: EventDifficultyLevelEvent,
+  advantageState: AdvantageStateEvent
+): number {
+  const span = Math.max(0, range.max - range.min);
+  const challengeProgress = clampNumberEvent(
+    getDifficultyBaseProgressEvent(difficulty) + getDifficultyProgressBiasEvent(advantageState, compare),
+    0.08,
+    0.92
+  );
+  const thresholdProgress = isHigherTotalBetterForCompareEvent(compare)
+    ? challengeProgress
+    : 1 - challengeProgress;
+  const inclusiveTarget = clampNumberEvent(
+    Math.round(range.min + span * thresholdProgress),
+    range.min,
+    range.max
+  );
+
+  if (compare === ">") {
+    return clampNumberEvent(inclusiveTarget - 1, range.min - 1, range.max);
+  }
+  if (compare === "<") {
+    return clampNumberEvent(inclusiveTarget + 1, range.min, range.max + 1);
+  }
+  return inclusiveTarget;
+}
+
+/**
+ * 功能：综合原始字段与系统难度映射得到最终用于结算的 DC。
+ * @param eventId 事件 ID
+ * @param checkDice 事件骰式
+ * @param compare 比较运算符
+ * @param rawDc 原始 DC 字段
+ * @param rawDifficulty 原始难度字段
+ * @param advantageState 优劣骰状态
+ * @returns 规范化后的 DC 解析结果；缺失时返回空值
+ */
+function resolveEventThresholdEvent(
+  eventId: string,
+  checkDice: string,
+  compare: CompareOperatorEvent,
+  rawDc: any,
+  rawDifficulty: any,
+  advantageState: AdvantageStateEvent
+): ResolvedEventThresholdEvent | null {
+  const difficulty = normalizeDifficultyLevelEvent(rawDifficulty);
+  const rawDcNumber = Number(rawDc);
+  const reachableRange = buildReachableTotalRangeForEventEvent(checkDice, advantageState);
+
+  if (difficulty && reachableRange) {
+    const dc = computeDcFromDifficultyEvent(reachableRange, compare, difficulty, advantageState);
+    return {
+      dc,
+      difficulty,
+      dcSource: "difficulty_mapped",
+      generatedDcReason: `系统按${formatDifficultyLabelEvent(difficulty)}难度自动换算阈值（可达范围 ${reachableRange.min}~${reachableRange.max}）。`,
+    };
+  }
+
+  if (Number.isFinite(rawDcNumber)) {
+    return {
+      dc: rawDcNumber,
+      difficulty,
+      dcSource: "ai",
+    };
+  }
+
+  logger.warn(`事件缺少可用阈值信息，已忽略: event=${eventId} checkDice=${checkDice}`);
+  return null;
+}
+
+/**
+ * 功能：判断当前比较条件是否超出理论可达范围。
+ * @param compare 比较运算符
+ * @param dc 目标 DC
+ * @param range 理论可达范围
+ * @returns 若条件不可能成立则返回 `true`
+ */
+function isEventCheckImpossibleByRangeEvent(
+  compare: CompareOperatorEvent,
+  dc: number,
+  range: ReachableTotalRangeEvent
+): boolean {
+  switch (compare) {
+    case ">=":
+      return range.max < dc;
+    case ">":
+      return range.max <= dc;
+    case "<=":
+      return range.min > dc;
+    case "<":
+      return range.min >= dc;
+    default:
+      return false;
+  }
+}
+
+/**
+ * 功能：在 AI 事件规范化阶段记录“理论上无法达成”的判定条件告警。
+ * @param eventId 事件 ID
+ * @param checkDice 事件骰式
+ * @param compare 比较运算符
+ * @param dc 目标 DC
+ * @param advantageState 优劣骰状态
+ * @returns 无返回值
+ */
+function warnIfEventCheckImpossibleEvent(
+  eventId: string,
+  checkDice: string,
+  compare: CompareOperatorEvent,
+  dc: number,
+  advantageState: AdvantageStateEvent
+): void {
+  const reachableRange = buildReachableTotalRangeForEventEvent(checkDice, advantageState);
+  if (!reachableRange) return;
+  if (!isEventCheckImpossibleByRangeEvent(compare, dc, reachableRange)) return;
+
+  const advantageText =
+    advantageState === "advantage"
+      ? "优势"
+      : advantageState === "disadvantage"
+        ? "劣势"
+        : "正常";
+  logger.warn(
+    `事件判定条件超出可达范围: event=${eventId} checkDice=${checkDice} advantage=${advantageText} condition=${compare} ${dc} reachable=${reachableRange.min}..${reachableRange.max}`
+  );
 }
 
 export function parseIsoDurationToMsEvent(raw: string, ISO_8601_DURATION_REGEX_Event: RegExp): number | null {
@@ -251,12 +542,26 @@ export interface NormalizeEventSpecDepsEvent {
 
 export function parseAllowedDiceSidesSetEvent(raw: string): Set<number> | null {
   const text = normalizeStringFieldEvent(raw);
-  if (!text) return null;
+  if (!text) {
+    return new Set(
+      String(DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText)
+        .split(/[,\s]+/)
+        .map((item) => Number(item.trim()))
+        .filter((value) => Number.isFinite(value) && value > 0 && Number.isInteger(value) && AI_SUPPORTED_DICE_SIDES_Event.includes(value as any))
+    );
+  }
   const parts = text
     .split(/[,\s]+/)
     .map((item) => Number(item.trim()))
-    .filter((value) => Number.isFinite(value) && value > 0 && Number.isInteger(value));
-  if (parts.length === 0) return null;
+    .filter((value) => Number.isFinite(value) && value > 0 && Number.isInteger(value) && AI_SUPPORTED_DICE_SIDES_Event.includes(value as any));
+  if (parts.length === 0) {
+    return new Set(
+      String(DEFAULT_SETTINGS_Event.aiAllowedDiceSidesText)
+        .split(/[,\s]+/)
+        .map((item) => Number(item.trim()))
+        .filter((value) => Number.isFinite(value) && value > 0 && Number.isInteger(value) && AI_SUPPORTED_DICE_SIDES_Event.includes(value as any))
+    );
+  }
   return new Set(parts);
 }
 
@@ -265,10 +570,9 @@ export function isDiceExpressionAllowedBySettingsEvent(
   settings: DicePluginSettingsEvent
 ): boolean {
   const allowedSidesSet = parseAllowedDiceSidesSetEvent(settings.aiAllowedDiceSidesText);
-  if (!allowedSidesSet || allowedSidesSet.size === 0) return true;
   try {
     const parsed = parseDiceExpression(checkDice);
-    return allowedSidesSet.has(parsed.sides);
+    return AI_SUPPORTED_DICE_SIDES_Event.includes(parsed.sides as any) && Boolean(allowedSidesSet?.has(parsed.sides));
   } catch {
     return false;
   }
@@ -281,7 +585,7 @@ export function normalizeDiceExpressionByAllowedSidesEvent(
   const allowedSidesSet = parseAllowedDiceSidesSetEvent(settings.aiAllowedDiceSidesText);
   const allowedSides = allowedSidesSet ? Array.from(allowedSidesSet).sort((a, b) => a - b) : [];
   if (allowedSides.length === 0) {
-    return { nextExpr: checkDice, changed: false, allowedSidesText: "" };
+    return { nextExpr: checkDice, changed: false, allowedSidesText: "d20" };
   }
 
   const parsed = parseDiceExpression(checkDice);
@@ -289,7 +593,7 @@ export function normalizeDiceExpressionByAllowedSidesEvent(
     return {
       nextExpr: checkDice,
       changed: false,
-      allowedSidesText: allowedSides.join(","),
+      allowedSidesText: allowedSides.map((sides) => `d${sides}`).join(","),
     };
   }
 
@@ -304,7 +608,7 @@ export function normalizeDiceExpressionByAllowedSidesEvent(
   return {
     nextExpr,
     changed: true,
-    allowedSidesText: allowedSides.join(","),
+    allowedSidesText: allowedSides.map((sides) => `d${sides}`).join(","),
   };
 }
 
@@ -327,7 +631,7 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
   const advantageState = normalizeAdvantageStateEvent(
     raw.advantageState ?? raw.advantage ?? raw.advState
   );
-  const dc = Number(raw.dc);
+  const rawDifficulty = raw.difficulty ?? raw.level ?? raw.challenge;
   const dcReason = normalizeDcReasonTextEvent(
     raw.dc_reason ?? raw.dcReason,
     id || "unknown_event",
@@ -350,7 +654,6 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
 
   if (!id || !title || !checkDice || !skill || !desc) return null;
   if (compare == null) return null;
-  if (!Number.isFinite(dc)) return null;
 
   try {
     parseDiceExpression(checkDice);
@@ -362,23 +665,47 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
     const normalized = normalizeDiceExpressionByAllowedSidesEvent(checkDice, settings);
     if (normalized.changed) {
       logger.warn(
-        `事件骰式不在允许面数列表中，自动修正: event=${id} from=${checkDice} to=${normalized.nextExpr} allowed=${normalized.allowedSidesText || "(未配置)"}`
+        `事件骰式不在已启用骰式列表中，自动修正: event=${id} from=${checkDice} to=${normalized.nextExpr} enabled=${normalized.allowedSidesText || "(未配置)"}`
       );
       checkDice = normalized.nextExpr;
     } else {
       const allowedText = normalizeStringFieldEvent(settings.aiAllowedDiceSidesText);
       logger.warn(
-        `事件骰式不在允许面数列表中，已忽略: event=${id} checkDice=${checkDice} allowed=${allowedText || "(未配置)"}`
+        `事件骰式不在已启用骰式列表中，已忽略: event=${id} checkDice=${checkDice} enabled=${allowedText || "(未配置)"}`
       );
       return null;
     }
   }
 
+  const threshold = resolveEventThresholdEvent(
+    id || "unknown_event",
+    checkDice,
+    compare ?? ">=",
+    raw.dc,
+    rawDifficulty,
+    advantageState
+  );
+  if (!threshold || !Number.isFinite(threshold.dc)) return null;
+
+  const finalDc = Number(threshold.dc);
+  const mergedDcReason = (() => {
+    const generatedReason = String(threshold.generatedDcReason ?? "").trim();
+    const originalReason = String(dcReason ?? "").trim();
+    if (generatedReason && originalReason) {
+      return `${originalReason} ${generatedReason}`;
+    }
+    return originalReason || generatedReason || undefined;
+  })();
+
+  warnIfEventCheckImpossibleEvent(id, checkDice, compare, finalDc, advantageState);
+
   return {
     id,
     title,
     checkDice,
-    dc,
+    dc: finalDc,
+    difficulty: threshold.difficulty,
+    dcSource: threshold.dcSource,
     compare,
     scope,
     rollMode,
@@ -390,7 +717,7 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
     timeLimitMs,
     timeLimit,
     desc,
-    dcReason,
+    dcReason: mergedDcReason,
     outcomes,
   };
 }

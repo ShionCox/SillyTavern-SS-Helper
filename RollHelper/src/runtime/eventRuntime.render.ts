@@ -23,6 +23,7 @@ import {
   buildEventRolledBlockTemplateEvent,
   buildEventRolledPrefixTemplateEvent,
   buildEventRollButtonTemplateEvent,
+  buildEventRerollButtonTemplateEvent,
   buildEventRollResultCardTemplateEvent,
   buildRollsSummaryTemplateEvent,
 } from "../templates/eventCardTemplates";
@@ -92,6 +93,7 @@ export function buildEventRollResultCardEvent(event: DiceEventSpecEvent, record:
     resolveTriggeredOutcomeEvent,
     formatEventModifierBreakdownEvent: formatEventModifierBreakdownCoreEvent,
     buildRollsSummaryTemplateEvent,
+    buildEventRerollButtonTemplateEvent,
     formatModifier: formatModifierCoreEvent,
     buildEventRollResultCardTemplateEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,

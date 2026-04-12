@@ -48,6 +48,11 @@ export function buildEventRollHelpTemplateEvent(): string {
       爆骰与优劣骰会改变判定结果，并通过 <code>outcomes</code> 直接影响剧情走向。
     </div>
     <div>
+      <strong>事件难度</strong>：
+      现在更推荐让 AI 输出 <code>difficulty</code>（<code>easy</code> / <code>normal</code> / <code>hard</code> / <code>extreme</code>），
+      再由系统按骰式与优劣骰自动换算 <code>dc</code>，避免生成理论上不可达的阈值。
+    </div>
+    <div>
       <strong>事件目标</strong>：
       可选 <code>events[i].target = { type, name? }</code>，其中
       <code>type</code> 可为 <code>self</code>/<code>scene</code>/<code>supporting</code>/<code>object</code>/<code>other</code>。

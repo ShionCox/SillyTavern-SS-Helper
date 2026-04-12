@@ -13,6 +13,7 @@ export interface DiceResult {
   selectionMode?: "keep_highest" | "keep_lowest" | "none";
   exploding?: boolean;
   explosionTriggered?: boolean;
+  sourceEngine?: "native" | "dice_box";
 }
 
 export interface DiceOptions {

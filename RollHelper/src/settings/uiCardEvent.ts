@@ -86,6 +86,8 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_RULE_ID_Event: string;
   SETTINGS_AI_ROLL_MODE_ID_Event: string;
   SETTINGS_AI_ROUND_CONTROL_ID_Event: string;
+  SETTINGS_DICE_3D_ENABLED_ID_Event: string;
+  SETTINGS_REROLL_ENABLED_ID_Event: string;
   SETTINGS_EXPLODING_ENABLED_ID_Event: string;
   SETTINGS_ADVANTAGE_ENABLED_ID_Event: string;
   SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event: string;
@@ -218,6 +220,8 @@ export function buildSettingsCardTemplateIdsEvent(
     ruleId: deps.SETTINGS_RULE_ID_Event,
     aiRollModeId: deps.SETTINGS_AI_ROLL_MODE_ID_Event,
     aiRoundControlId: deps.SETTINGS_AI_ROUND_CONTROL_ID_Event,
+    dice3dEnabledId: deps.SETTINGS_DICE_3D_ENABLED_ID_Event,
+    rerollEnabledId: deps.SETTINGS_REROLL_ENABLED_ID_Event,
     explodingEnabledId: deps.SETTINGS_EXPLODING_ENABLED_ID_Event,
     advantageEnabledId: deps.SETTINGS_ADVANTAGE_ENABLED_ID_Event,
     dynamicResultGuidanceId: deps.SETTINGS_DYNAMIC_RESULT_GUIDANCE_ID_Event,

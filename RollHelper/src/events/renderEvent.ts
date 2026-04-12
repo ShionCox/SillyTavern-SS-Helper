@@ -168,6 +168,55 @@ function setEventButtonsDisabledStateEvent(
   }
 }
 
+/**
+ * 功能：获取指定事件在当前轮次中的最新投掷记录。
+ * @param round 当前待处理轮次
+ * @param eventId 事件 ID
+ * @returns 最新投掷记录；不存在时返回 `null`
+ */
+function getLatestRollRecordForEventInRoundEvent(
+  round: PendingRoundEvent,
+  eventId: string
+): EventRollRecordEvent | null {
+  for (let index = round.rolls.length - 1; index >= 0; index -= 1) {
+    const current = round.rolls[index];
+    if (current?.eventId === eventId) return current;
+  }
+  return null;
+}
+
+/**
+ * 功能：按当前轮次状态同步重新投掷按钮的显隐。
+ * @param round 当前待处理轮次；为空时会隐藏所有重新投掷按钮
+ * @returns void：无返回值
+ */
+function syncRerollButtonsVisibilityEvent(round: PendingRoundEvent | null): void {
+  const buttons = Array.from(
+    document.querySelectorAll("button[data-dice-event-reroll='1']")
+  ) as HTMLButtonElement[];
+  if (buttons.length === 0) return;
+
+  for (const button of buttons) {
+    if (!round || round.status !== "open") {
+      button.style.display = "none";
+      continue;
+    }
+
+    const btnRoundId = button.getAttribute("data-round-id") || "";
+    const btnEventId = button.getAttribute("data-dice-event-id") || "";
+    const btnRollId = button.getAttribute("data-roll-id") || "";
+    const event = round.events.find((item) => item.id === btnEventId) || null;
+    const latestRecord = event ? getLatestRollRecordForEventInRoundEvent(round, btnEventId) : null;
+    const shouldShow =
+      btnRoundId === round.roundId &&
+      !!event &&
+      !!latestRecord &&
+      latestRecord.rollId === btnRollId;
+
+    button.style.display = shouldShow ? "inline-flex" : "none";
+  }
+}
+
 export interface RefreshCountdownDomDepsEvent {
   getDiceMetaEvent: () => DiceMetaEvent;
   ensureRoundEventTimersSyncedEvent: (round: PendingRoundEvent) => void;
@@ -190,7 +239,10 @@ export function refreshCountdownDomEvent(deps: RefreshCountdownDomDepsEvent): vo
   const buttons = Array.from(
     document.querySelectorAll("button[data-dice-event-roll='1']")
   ) as HTMLButtonElement[];
-  if (nodes.length === 0 && buttons.length === 0) return;
+  const rerollButtons = Array.from(
+    document.querySelectorAll("button[data-dice-event-reroll='1']")
+  ) as HTMLButtonElement[];
+  if (nodes.length === 0 && buttons.length === 0 && rerollButtons.length === 0) return;
 
   const meta = deps.getDiceMetaEvent();
   const round = meta.pendingRound;
@@ -202,10 +254,12 @@ export function refreshCountdownDomEvent(deps: RefreshCountdownDomDepsEvent): vo
       button.style.cursor = "not-allowed";
       button.style.filter = "grayscale(0.35)";
     }
+    syncRerollButtonsVisibilityEvent(null);
     return;
   }
 
   deps.ensureRoundEventTimersSyncedEvent(round);
+  syncRerollButtonsVisibilityEvent(round);
   const now = Date.now();
   for (const node of nodes) {
     const roundId = node.getAttribute("data-round-id") || "";
@@ -424,6 +478,48 @@ function formatAdvantageStateForCardEvent(raw: any): string {
   return "正常";
 }
 
+function formatDifficultyForCardEvent(raw: any): string {
+  if (raw === "easy") return "简单";
+  if (raw === "hard") return "困难";
+  if (raw === "extreme") return "极难";
+  return "普通";
+}
+
+function buildDifficultyTitleTextEvent(
+  difficulty: string | undefined,
+  dcSource: "ai" | "difficulty_mapped" | undefined,
+  dc: number
+): string {
+  const difficultyLabel = formatDifficultyForCardEvent(difficulty);
+  if (dcSource === "difficulty_mapped") {
+    return `当前为${difficultyLabel}难度，阈值 ${dc} 由系统按骰式与优劣骰自动换算。`;
+  }
+  return `当前为${difficultyLabel}难度，阈值 ${dc} 来自事件原始配置。`;
+}
+
+/**
+ * 功能：判断当前结果卡是否允许显示重新投掷按钮。
+ * @param event 当前事件定义
+ * @param record 当前结果记录
+ * @param meta 全局骰子运行时状态
+ * @param settings 当前设置
+ * @returns 可显示重投按钮时返回 `true`
+ */
+function canShowRerollActionEvent(
+  event: DiceEventSpecEvent,
+  record: EventRollRecordEvent,
+  meta: DiceMetaEvent,
+  settings: DicePluginSettingsEvent
+): boolean {
+  if (!settings.enableRerollFeature) return false;
+  const round = meta.pendingRound;
+  if (!round || round.status !== "open") return false;
+  if (round.roundId !== record.roundId) return false;
+  if (!round.events.some((item) => item.id === event.id)) return false;
+  const latestRecord = getLatestRollRecordForEventInRoundEvent(round, event.id);
+  return latestRecord?.rollId === record.rollId;
+}
+
 function toDomIdTokenEvent(raw: string): string {
   const normalized = String(raw ?? "")
     .trim()
@@ -485,7 +581,7 @@ export interface BuildEventListCardDepsEvent {
     buttonDisabledAttr: string;
     buttonStateStyle: string;
   }) => string;
-  buildEventListItemTemplateEvent: (params: {
+    buildEventListItemTemplateEvent: (params: {
     detailsIdAttr: string;
     templateVariant?: "desktop" | "mobile";
     titleHtml: string;
@@ -496,10 +592,12 @@ export interface BuildEventListCardDepsEvent {
     targetHtml: string;
     skillHtml: string;
     skillTitleAttr: string;
-    advantageStateHtml: string;
-    modifierTextHtml: string;
-    checkDiceHtml: string;
-    compareHtml: string;
+      advantageStateHtml: string;
+      modifierTextHtml: string;
+      checkDiceHtml: string;
+      difficultyHtml: string;
+      difficultyTitleAttr: string;
+      compareHtml: string;
     dcText: string;
     dcReasonHtml: string;
     timeLimitHtml: string;
@@ -643,6 +741,12 @@ export function buildEventListCardEvent(
       const advantageStateText = formatAdvantageStateForCardEvent(
         lastRecord?.advantageStateApplied ?? event.advantageState
       );
+      const difficultyText = formatDifficultyForCardEvent(event.difficulty);
+      const difficultyTitleAttr = buildDifficultyTitleTextEvent(
+        event.difficulty,
+        event.dcSource,
+        Number.isFinite(Number(event.dc)) ? Number(event.dc) : 0
+      );
 
       const rollButtonHtml = (() => {
         if (!showRollButton) return "";
@@ -678,6 +782,8 @@ export function buildEventListCardEvent(
         advantageStateHtml: deps.escapeHtmlEvent(advantageStateText),
         modifierTextHtml,
         checkDiceHtml: deps.escapeHtmlEvent(event.checkDice),
+        difficultyHtml: deps.escapeHtmlEvent(difficultyText),
+        difficultyTitleAttr: deps.escapeAttrEvent(difficultyTitleAttr),
         compareHtml: deps.escapeHtmlEvent(compare),
         dcText: String(event.dc),
         dcReasonHtml: dcDescriptionHtml,
@@ -839,6 +945,7 @@ function buildDiceComputationTooltipEvent(
   finalModifierUsed?: number
 ): string {
   const rollsText = Array.isArray(result.rolls) && result.rolls.length > 0 ? `[${result.rolls.join(", ")}]` : "[]";
+  const isD100Composite = Number(result.sides) === 100 && Array.isArray(result.rolls) && result.rolls.length >= 2;
   const rawTotal = Number.isFinite(Number(result.rawTotal)) ? Number(result.rawTotal) : 0;
   const total = Number.isFinite(Number(result.total)) ? Number(result.total) : rawTotal;
   const hasSkillModifier = Number.isFinite(Number(skillModifierApplied));
@@ -853,7 +960,17 @@ function buildDiceComputationTooltipEvent(
       : Number(result.modifier) || 0;
 
   const parts: string[] = [];
-  parts.push(`骰面 ${rollsText}`);
+  if (isD100Composite) {
+    const tensValue = Number(result.rolls[0] ?? 0);
+    const onesValue = Number(result.rolls[1] ?? 0);
+    parts.push(`百分骰 十位=${tensValue} 个位=${onesValue}`);
+  } else {
+    parts.push(`骰面 ${rollsText}`);
+  }
+  const selectionSummaryText = buildSelectionSummaryTextEvent(result);
+  if (selectionSummaryText) {
+    parts.push(selectionSummaryText);
+  }
   parts.push(`原始值 ${rawTotal}`);
   if (hasSkillModifier) {
     parts.push(`基础修正 ${formatSignedValueEvent(baseModifier)}`);
@@ -868,6 +985,45 @@ function buildDiceComputationTooltipEvent(
   }
 
   return parts.join(" | ");
+}
+
+/**
+ * 功能：将保留或舍弃的骰面列表格式化为可读文本。
+ * @param rolls 需要格式化的骰面数组
+ * @returns 逗号分隔的骰面文本；无内容时返回“无”
+ */
+function formatSelectedRollsTextEvent(rolls?: number[]): string {
+  if (!Array.isArray(rolls) || rolls.length === 0) return "无";
+  return rolls.join(", ");
+}
+
+/**
+ * 功能：根据优劣骰选择模式生成结果摘要文本。
+ * @param result 当前骰子结果
+ * @returns 选择摘要；普通骰返回空字符串
+ */
+function buildSelectionSummaryTextEvent(result: DiceResult): string {
+  if (result.selectionMode !== "keep_highest" && result.selectionMode !== "keep_lowest") {
+    return "";
+  }
+
+  const modeLabel = result.selectionMode === "keep_highest" ? "取高" : "取低";
+  const keptText = formatSelectedRollsTextEvent(result.keptRolls);
+  const droppedText = formatSelectedRollsTextEvent(result.droppedRolls);
+
+  if (droppedText === "无") {
+    return `${modeLabel}：保留 ${keptText}`;
+  }
+  return `${modeLabel}：保留 ${keptText} / 舍弃 ${droppedText}`;
+}
+
+function buildRollsSummaryTextEvent(result: DiceResult): string {
+  if (Number(result.sides) === 100 && Array.isArray(result.rolls) && result.rolls.length >= 2) {
+    const tensValue = Number(result.rolls[0] ?? 0);
+    const onesValue = Number(result.rolls[1] ?? 0);
+    return `十位 ${tensValue} / 个位 ${onesValue}`;
+  }
+  return result.rolls.join(", ");
 }
 
 /**
@@ -1040,7 +1196,17 @@ export interface BuildEventRollResultCardDepsEvent {
     skillModifier: number,
     finalModifier: number
   ) => string;
-  buildRollsSummaryTemplateEvent: (rollsHtml: string, modifierHtml: string) => string;
+  buildRollsSummaryTemplateEvent: (
+    rollsHtml: string,
+    modifierHtml: string,
+    selectionHtml?: string
+  ) => string;
+  buildEventRerollButtonTemplateEvent: (params: {
+    roundIdAttr: string;
+    eventIdAttr: string;
+    rollIdAttr: string;
+    buttonTitleAttr: string;
+  }) => string;
   formatModifier: (mod: number) => string;
   buildEventRollResultCardTemplateEvent: (params: {
     detailsIdAttr: string;
@@ -1055,6 +1221,7 @@ export interface BuildEventRollResultCardDepsEvent {
     collapsedStatusSummaryTitleAttr: string;
     collapsedStatusSummaryChipClassName: string;
     collapsedDiceVisualHtml: string;
+    rerollActionHtml: string;
     rollIdHtml: string;
     titleHtml: string;
     eventIdHtml: string;
@@ -1063,6 +1230,8 @@ export interface BuildEventRollResultCardDepsEvent {
     skillHtml: string;
     skillTitleAttr: string;
     advantageStateHtml: string;
+    difficultyHtml: string;
+    difficultyTitleAttr: string;
     diceExprHtml: string;
     diceModifierHintHtml: string;
     rollsSummaryHtml: string;
@@ -1224,6 +1393,21 @@ export function buildEventRollResultCardEvent(
         48
       );
   const timeLimitLabel = formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无");
+  const selectionSummaryText = buildSelectionSummaryTextEvent(record.result);
+  const difficultyText = formatDifficultyForCardEvent(event.difficulty);
+  const difficultyTitleAttr = buildDifficultyTitleTextEvent(
+    event.difficulty,
+    event.dcSource,
+    Number.isFinite(Number(record.dcUsed)) ? Number(record.dcUsed) : Number(event.dc) || 0
+  );
+  const rerollActionHtml = canShowRerollActionEvent(event, record, deps.getDiceMetaEvent(), settings)
+    ? deps.buildEventRerollButtonTemplateEvent({
+      roundIdAttr: deps.escapeAttrEvent(record.roundId),
+      eventIdAttr: deps.escapeAttrEvent(event.id),
+      rollIdAttr: deps.escapeAttrEvent(record.rollId),
+      buttonTitleAttr: deps.escapeAttrEvent("重新投掷会保留历史记录，并以本次结果作为当前生效结果。"),
+    })
+    : "";
 
   return deps.buildEventRollResultCardTemplateEvent({
     detailsIdAttr,
@@ -1238,6 +1422,7 @@ export function buildEventRollResultCardEvent(
     collapsedStatusSummaryTitleAttr: deps.escapeAttrEvent(collapsedStatusSummaryPreview.title),
     collapsedStatusSummaryChipClassName: collapsedStatusSummaryPreview.chipClassName,
     collapsedDiceVisualHtml,
+    rerollActionHtml,
     rollIdHtml: deps.escapeHtmlEvent(record.rollId),
     titleHtml: deps.escapeHtmlEvent(event.title),
     eventIdHtml: deps.escapeHtmlEvent(event.id),
@@ -1248,11 +1433,14 @@ export function buildEventRollResultCardEvent(
     advantageStateHtml: deps.escapeHtmlEvent(
       formatAdvantageStateForCardEvent(record.advantageStateApplied ?? event.advantageState)
     ),
+    difficultyHtml: deps.escapeHtmlEvent(difficultyText),
+    difficultyTitleAttr: deps.escapeAttrEvent(difficultyTitleAttr),
     diceExprHtml: deps.escapeHtmlEvent(record.diceExpr),
     diceModifierHintHtml: deps.escapeHtmlEvent(diceModifierHint),
     rollsSummaryHtml: deps.buildRollsSummaryTemplateEvent(
-      deps.escapeHtmlEvent(record.result.rolls.join(", ")),
-      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier))
+      deps.escapeHtmlEvent(buildRollsSummaryTextEvent(record.result)),
+      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier)),
+      selectionSummaryText ? deps.escapeHtmlEvent(selectionSummaryText) : ""
     ),
     explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
     modifierBreakdownHtml,

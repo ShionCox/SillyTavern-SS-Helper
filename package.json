@@ -18,6 +18,7 @@
         "watch:llm": "node scripts/vite-build.mjs LLMHub --watch",
         "watch:roll": "node scripts/vite-build.mjs RollHelper --watch",
         "roll:test": "vite serve RollHelper/test",
+        "roll:calibrate": "vite serve RollHelper/test/calibration --config RollHelper/test/vite.config.ts",
         "clean": "rm -rf MemoryOS/dist LLMHub/dist RollHelper/dist"
     },
     "devDependencies": {

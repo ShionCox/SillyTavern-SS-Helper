@@ -187,6 +187,22 @@ export function buildSettingsCardHtmlTemplateEvent(
           <div class="st-roll-divider"><i class="fa-solid fa-dice"></i><span>掷骰规则</span><div class="st-roll-divider-line"></div></div>
 
           ${buildCheckboxItemEvent(
+            ids.dice3dEnabledId,
+            "启用 3D 骰子动画并用其结果结算",
+            "开启后，掷骰动画与最终结果都统一来自 dice-box。",
+            "3d dice box animation result",
+            "开启 3D 骰子并统一用 3D 结果结算。",
+            )}
+
+          ${buildCheckboxItemEvent(
+            ids.rerollEnabledId,
+            "启用重新投掷功能",
+            "开启后，可在结果卡中对已结算事件再次手动掷骰。",
+            "reroll retry rerun result card",
+            "允许在结果卡中重新投掷当前事件。",
+            )}
+
+          ${buildCheckboxItemEvent(
             ids.explodingEnabledId,
             "启用爆骰",
             "满足条件时可追加掷骰。",
@@ -210,19 +226,24 @@ export function buildSettingsCardHtmlTemplateEvent(
             "给 AI 追加结果提示。",
             )}
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="dice sides allowed">
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="enabled dice type ai dice d20 d6 d100">
             <div class="st-roll-item-main">
-              <div class="st-roll-item-title">限制 AI 可用骰子面数</div>
-              <div class="st-roll-item-desc">AI 只能用这里列出的骰子面数。</div>
+              <div class="st-roll-item-title">AI 可用骰式</div>
+              <div class="st-roll-item-desc">只允许 AI 从已开启的骰式中选取。默认仅开启 d20。</div>
             </div>
             <div class="st-roll-row">
-              ${buildSharedInputField({
-                id: ids.allowedDiceSidesId,
-                attributes: {
-                  placeholder: "4,6,8,10,12,20,100",
-                  "data-tip": "限制 AI 可用的骰子面数。",
-                },
-              })}
+              <div id="${ids.allowedDiceSidesId}" class="st-roll-dice-toggle-group" data-tip="选择允许 AI 使用的骰式。">
+                ${[4, 6, 8, 10, 12, 20, 100]
+                  .map(
+                    (sides) => `
+                      <label class="st-roll-dice-toggle">
+                        <input type="checkbox" value="${sides}" />
+                        <span>d${sides}</span>
+                      </label>
+                    `
+                  )
+                  .join("")}
+              </div>
             </div>
           </div>
 

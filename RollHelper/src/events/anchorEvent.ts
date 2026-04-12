@@ -65,6 +65,21 @@ export function findMesElementByMsgIdEvent(
     }
   }
 
+  if (prefix === "assistant_ts" && idOrIndex) {
+    for (let i = chat.length - 1; i >= 0; i -= 1) {
+      const msg = chat[i];
+      const timestamp =
+        (msg as any)?.create_date ??
+        (msg as any)?.create_time ??
+        (msg as any)?.timestamp ??
+        "";
+      if (String(timestamp ?? "").trim() === idOrIndex) {
+        const element = chatContainer.querySelector(`.mes[mesid="${i}"]`) as HTMLElement | null;
+        if (element) return element;
+      }
+    }
+  }
+
   if (prefix === "assistant_idx" && idOrIndex) {
     const index = Number(idOrIndex);
     if (Number.isFinite(index) && index >= 0 && index < chat.length) {
@@ -171,6 +186,8 @@ function rebuildEventAndRecordFromSnapshotEvent(
     title: item.title,
     checkDice: item.checkDice,
     dc: item.dc,
+    difficulty: item.difficulty,
+    dcSource: item.dcSource,
     compare: item.compare,
     skill: item.skill,
     targetType: "self",

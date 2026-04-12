@@ -84,12 +84,24 @@ export function resolveCurrentChatIdEvent(
   currentCharacter: SdkTavernCharacterEvent | null
 ): string {
   const rawChatNode = (context as { chat?: unknown } | null)?.chat;
-  const chatObjectId =
+  const liveChatIdCandidates: unknown[] = [
+    context?.chatId,
+    context?.chat_id,
     rawChatNode && typeof rawChatNode === "object" && !Array.isArray(rawChatNode)
-      ? (rawChatNode as { id?: unknown }).id
-      : "";
+      ? (rawChatNode as { id?: unknown; file_name?: unknown; name?: unknown }).id
+      : "",
+    rawChatNode && typeof rawChatNode === "object" && !Array.isArray(rawChatNode)
+      ? (rawChatNode as { id?: unknown; file_name?: unknown; name?: unknown }).file_name
+      : "",
+    rawChatNode && typeof rawChatNode === "object" && !Array.isArray(rawChatNode)
+      ? (rawChatNode as { id?: unknown; file_name?: unknown; name?: unknown }).name
+      : "",
+  ];
+  const liveChatId = liveChatIdCandidates
+    .map((value) => normalizeTavernChatIdEvent(value, ""))
+    .find((value) => value && value !== "fallback_chat");
   return normalizeTavernChatIdEvent(
-    currentCharacter?.chat ?? context?.chatId ?? context?.chat_id ?? chatObjectId,
+    liveChatId ?? currentCharacter?.chat,
     "fallback_chat"
   );
 }
@@ -166,10 +178,10 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
   if (!context) return null;
   const tavernInstanceId = ensureTavernInstanceIdEvent();
   const group = resolveCurrentGroupEvent(context);
+  const liveContextChatId = resolveCurrentChatIdEvent(context, null);
 
   if (group) {
     const groupId = normalizeTavernKeyPartEvent(group.id, "no_group");
-    const currentChatId = normalizeTavernChatIdEvent(group.chat_id, "fallback_chat");
     return {
       tavernInstanceId,
       scopeType: "group",
@@ -180,7 +192,7 @@ export function getTavernContextSnapshotEvent(): SdkTavernScopeLocatorEvent | nu
       avatarUrl: String(group.avatar_url ?? "").trim(),
       groupId,
       characterId: -1,
-      currentChatId,
+      currentChatId: liveContextChatId,
     };
   }
 

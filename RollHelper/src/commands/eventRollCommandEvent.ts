@@ -36,7 +36,7 @@ export interface EventRollCommandDepsEvent {
     eventIdRaw: string,
     overrideExpr?: string,
     expectedRoundId?: string
-  ) => string;
+  ) => Promise<string>;
   escapeHtmlEvent: (input: string) => string;
 }
 
@@ -56,6 +56,14 @@ function formatAdvantageStateTextEvent(raw: any): string {
 
 function formatRollModeTextEvent(raw: any): string {
   return raw === "auto" ? "自动" : "手动";
+}
+
+function formatDifficultyTextEvent(raw: any): string {
+  if (raw === "easy") return "简单";
+  if (raw === "hard") return "困难";
+  if (raw === "extreme") return "极难";
+  if (raw === "normal") return "普通";
+  return "";
 }
 
 function formatStatusItemForListEvent(status: ActiveStatusEvent): string {
@@ -132,10 +140,14 @@ function buildEventListTextEvent(
     const statusPreview = formatStatusPreviewForEventLineEvent(settings, activeStatuses, event.skill);
     const dcReasonPreview =
       settings.enableDynamicDcReason && event.dcReason ? ` | DC原因=${event.dcReason}` : "";
+    const difficultyPreview = event.difficulty
+      ? ` | 难度=${formatDifficultyTextEvent(event.difficulty)}`
+      : "";
+    const dcSourcePreview = event.dcSource === "difficulty_mapped" ? " | 阈值=系统换算" : "";
     lines.push(
       `- ${event.id}: ${event.title} | 对象=${event.targetLabel} | 骰式=${event.checkDice} | 条件=${
         event.compare ?? ">="
-      } ${event.dc}${dcReasonPreview} | 技能=${event.skill} | 技能修正=${formatSignedEvent(
+      } ${event.dc}${difficultyPreview}${dcSourcePreview}${dcReasonPreview} | 技能=${event.skill} | 技能修正=${formatSignedEvent(
         skillMod
       )} | 模式=${formatRollModeTextEvent(event.rollMode)} | 骰态=${formatAdvantageStateTextEvent(
         event.advantageState
@@ -220,10 +232,11 @@ export function registerEventRollCommandEvent(deps: EventRollCommandDepsEvent): 
         if (action === "roll") {
           const eventId = parts[1] || "";
           const overrideExpr = parts.length > 2 ? parts.slice(2).join(" ") : undefined;
-          const feedback = performEventRollByIdEvent(eventId, overrideExpr);
-          if (feedback) {
-            appendToConsoleEvent(feedback, "error");
-          }
+          performEventRollByIdEvent(eventId, overrideExpr).then(feedback => { 
+            if (feedback) {
+              appendToConsoleEvent(feedback, "error");
+            }
+          });
           return "";
         }
 

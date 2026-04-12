@@ -56,7 +56,8 @@ import {
   escapeAttrEvent as escapeAttrCoreEvent,
   escapeHtmlEvent as escapeHtmlCoreEvent,
 } from "../core/utilsEvent";
-import { rollExpression as rollExpressionCoreEvent } from "../core/diceEngineEvent";
+import { rollDiceWithEngineEvent as rollDiceWithEngineCoreEvent } from "../core/diceRollRuntimeEvent";
+import { playDiceRevealOnlyEvent as playDiceRevealOnlyCoreEvent } from "../core/diceBox";
 import {
   buildDefaultSkillPresetStoreEvent as buildDefaultSkillPresetStoreTemplateStoreEvent,
   buildSkillDraftSnapshotEvent as buildSkillDraftSnapshotStoreEvent,
@@ -302,10 +303,11 @@ export function registerBaseMacrosAndCommandsEvent(): void {
     SlashCommandArgument: slashCommandRuntime.argument,
     ARGUMENT_TYPE: slashCommandRuntime.argumentType,
     getDiceMeta: getDiceMetaStoreEvent,
-    rollExpression: rollExpressionCoreEvent,
+    rollDiceEvent: rollDiceWithEngineCoreEvent,
     saveLastRoll: saveLastRollStoreEvent,
     buildResultMessage: buildResultMessageTemplateEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,
+    playDiceRevealOnlyEvent: playDiceRevealOnlyCoreEvent,
   });
 }
 

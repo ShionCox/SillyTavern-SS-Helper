@@ -4,7 +4,7 @@ import { buildSharedButton, buildSharedButtonStyles } from '../../../_Components
 import { buildSharedInputField, buildSharedInputStyles } from '../../../_Components/sharedInput';
 import { ensureSharedTooltip } from '../../../_Components/sharedTooltip';
 import { readSdkPluginUiState, writeSdkPluginUiState } from '../../../SDK/settings';
-import { buildThemeVars } from '../../../SDK/theme';
+import { buildThemeVars, initThemeKernel, mountThemeHost, subscribeTheme, unmountThemeHost } from '../../../SDK/theme';
 import manifestJson from '../../manifest.json';
 import changelogData from '../../changelog.json';
 import { logger } from '../runtime/runtime-services';
@@ -284,6 +284,28 @@ const TABS: TabBinding[] = [
 
 let isSyncingForm = false;
 let autoSaveTimer: number | null = null;
+let MEMORYOS_THEME_BINDING_READY = false;
+
+/**
+ * 功能：让 MemoryOS 设置面板跟随 SDK 主题切换。
+ */
+function ensureThemeBinding(): void {
+    if (MEMORYOS_THEME_BINDING_READY) {
+        return;
+    }
+    MEMORYOS_THEME_BINDING_READY = true;
+    subscribeTheme((): void => {
+        const cardRoot = document.getElementById(CARD_ID);
+        if (cardRoot) {
+            unmountThemeHost(cardRoot);
+        }
+        const contentRoot = document.getElementById(DRAWER_CONTENT_ID);
+        if (!contentRoot) {
+            return;
+        }
+        mountThemeHost(contentRoot);
+    });
+}
 
 /**
  * 功能：构建分隔栏。
@@ -646,7 +668,7 @@ function buildCardTemplateHtml(): string {
         drawerToggleId: DRAWER_TOGGLE_ID,
         drawerContentId: DRAWER_CONTENT_ID,
         drawerIconId: DRAWER_ICON_ID,
-        title: 'MemoryOS',
+        title: 'SS-Helper [记忆引擎]',
         badgeText: 'Unified',
         contentHtml: buildSettingsContentHtml(),
     });
@@ -1182,6 +1204,13 @@ export async function renderSettingsUi(): Promise<void> {
     }
     card.innerHTML = buildCardTemplateHtml();
     hydrateSettingPage(card);
+    initThemeKernel();
+    unmountThemeHost(card);
+    const contentRoot = document.getElementById(DRAWER_CONTENT_ID);
+    if (contentRoot) {
+        mountThemeHost(contentRoot);
+    }
+    ensureThemeBinding();
     applySettingTooltips(card);
     ensureSharedTooltip();
     bindTabEvents();

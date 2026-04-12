@@ -1,4 +1,5 @@
 import {
+  registerAnimationDebugCommandEvent,
   bindEventButtonsEvent,
   mountSettingsCardEvent,
   registerBaseMacrosAndCommandsEvent,
@@ -42,6 +43,7 @@ export function initializeEventRuntimeEvent(attempt = 0): void {
   bindEventButtonsEvent();
   registerEventRollCommandEvent();
   registerDebugCommandEvent();
+  registerAnimationDebugCommandEvent();
   registerEventHooksEvent();
   startCountdownTickerEvent();
 

@@ -28,11 +28,18 @@ function escapeAttrTemplateEvent(input: string): string {
 function buildDiceComputationTooltipTemplateEvent(result: DiceResultTemplateEvent): string {
   const parts: string[] = [];
   const rollsText = Array.isArray(result.rolls) && result.rolls.length > 0 ? `[${result.rolls.join(", ")}]` : "[]";
+  const isD100Composite = Number(result.sides) === 100 && Array.isArray(result.rolls) && result.rolls.length >= 2;
   const rawTotal = Number.isFinite(Number(result.rawTotal)) ? Number(result.rawTotal) : 0;
   const modifier = Number.isFinite(Number(result.modifier)) ? Number(result.modifier) : 0;
   const total = Number.isFinite(Number(result.total)) ? Number(result.total) : rawTotal + modifier;
 
-  parts.push(`骰面 ${rollsText}`);
+  if (isD100Composite) {
+    const tensValue = Number(result.rolls[0] ?? 0);
+    const onesValue = Number(result.rolls[1] ?? 0);
+    parts.push(`百分骰 十位=${tensValue} 个位=${onesValue}`);
+  } else {
+    parts.push(`骰面 ${rollsText}`);
+  }
   parts.push(`原始值 ${rawTotal}`);
   parts.push(`修正值 ${formatModifierTemplateEvent(modifier)}`);
   parts.push(`总计 ${total}`);

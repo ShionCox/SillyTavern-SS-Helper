@@ -27,6 +27,19 @@
   border-left-color: rgba(186, 78, 60, 0.7);
 }
 
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-mobile-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  justify-content: center;
+}
+
+.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile .st-rh-reroll-btn {
+  min-height: 32px;
+  padding-inline: 0.8rem;
+  font-size: 11px;
+}
+
 details.st-rh-settlement-shell-result.st-rh-settlement-shell-mobile[open] .st-rh-mobile-summary-wrap {
   gap: 0.46rem;
   padding-bottom: 0.58rem;

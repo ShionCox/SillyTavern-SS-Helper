@@ -174,6 +174,21 @@ function copyRollHelperLogoPlugin(targetName) {
   };
 }
 
+function copyRollHelperDiceBoxAssetsPlugin(targetName) {
+  return {
+    name: `copy-rollhelper-dice-box-assets:${targetName}`,
+    closeBundle() {
+      if (targetName !== "RollHelper") return;
+      const target = PROJECT_TARGETS[targetName];
+      if (!target) return;
+
+      const source = path.resolve(ROOT_DIR, "RollHelper/assets/dice-box");
+      const destination = path.resolve(ROOT_DIR, target.outDir, "assets/dice-box");
+      copyDirectoryRecursive(source, destination);
+    },
+  };
+}
+
 function imageFileLoaderPlugin() {
   const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/;
   return {
@@ -241,6 +256,7 @@ export function createProjectConfig(targetName, options = {}) {
       copyStaticAssetsPlugin(targetName),
       copyFontAwesomeAssetsPlugin(targetName),
       copyRollHelperLogoPlugin(targetName),
+      copyRollHelperDiceBoxAssetsPlugin(targetName),
     ],
   };
 }

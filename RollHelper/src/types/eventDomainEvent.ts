@@ -6,6 +6,7 @@ export type EventScopeTagEvent = "protagonist" | "all" | "character";
 export type EventTargetTypeEvent = "self" | "scene" | "supporting" | "object" | "other";
 export type EventRollModeEvent = "auto" | "manual";
 export type AdvantageStateEvent = "normal" | "advantage" | "disadvantage";
+export type EventDifficultyLevelEvent = "easy" | "normal" | "hard" | "extreme";
 export type EventRollSourceEvent = "manual_roll" | "ai_auto_roll" | "timeout_auto_fail";
 export type SummaryDetailModeEvent = "minimal" | "balanced" | "detailed";
 export type RollHelperSettingsThemeEvent = "default" | "dark" | "light" | "tavern";
@@ -36,6 +37,8 @@ export interface DicePluginSettingsEvent {
   autoSendRuleToAI: boolean;
   enableAiRollMode: boolean;
   enableAiRoundControl: boolean;
+  enable3DDiceBox: boolean;
+  enableRerollFeature: boolean;
   enableExplodingDice: boolean;
   enableAdvantageSystem: boolean;
   enableDynamicResultGuidance: boolean;
@@ -107,6 +110,8 @@ export interface DiceEventSpecEvent {
   title: string;
   checkDice: string;
   dc: number;
+  difficulty?: EventDifficultyLevelEvent;
+  dcSource?: "ai" | "difficulty_mapped";
   compare?: CompareOperatorEvent;
   scope?: EventScopeTagEvent;
   rollMode?: EventRollModeEvent;
@@ -203,6 +208,8 @@ export interface RoundSummaryEventItemEvent {
   checkDice: string;
   compare: CompareOperatorEvent;
   dc: number;
+  difficulty?: EventDifficultyLevelEvent;
+  dcSource?: "ai" | "difficulty_mapped";
   dcReason: string;
   rollMode: EventRollModeEvent;
   advantageState: AdvantageStateEvent;

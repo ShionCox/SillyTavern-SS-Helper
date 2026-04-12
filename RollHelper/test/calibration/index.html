@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RollHelper 三轴姿态校正台</title>
+  <style>
+    :root { color-scheme: dark; --bg: radial-gradient(circle at top, rgba(84,112,170,.18), transparent 40%), linear-gradient(180deg, #171c25 0%, #0d1016 100%); --panel-bg: linear-gradient(180deg, rgba(29,35,48,.94), rgba(13,16,23,.96)); --panel-border: rgba(148,180,255,.16); --panel-text: #edf3ff; --muted-text: rgba(225,234,255,.68); --preview-bg: radial-gradient(circle at top, rgba(143,190,255,.16), transparent 45%), linear-gradient(180deg, rgba(49,60,78,.92), rgba(18,22,31,.98)); --unconfigured-color: rgba(255,190,80,.82); }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--panel-text); font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+    .layout { display: grid; grid-template-columns: minmax(280px,360px) minmax(0,1fr) minmax(280px,360px); min-height: 100vh; gap: 18px; padding: 18px; }
+    .panel, .preview-panel { background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 24px; padding: 18px; box-shadow: 0 18px 36px rgba(0,0,0,.24); min-height: 0; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+    .preview-panel { background: var(--preview-bg); }
+    h1, h2, p { margin: 0; }
+    .kicker { font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: rgba(214,228,255,.54); }
+    .title { font-size: 24px; font-weight: 700; }
+    .desc { color: var(--muted-text); line-height: 1.65; font-size: 14px; }
+    .field { display: flex; flex-direction: column; gap: 8px; }
+    .field-label { font-size: 13px; color: rgba(227,236,255,.8); }
+    .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    select, button, textarea, input[type="number"] { font: inherit; }
+    select, textarea { width: 100%; border-radius: 16px; border: 1px solid rgba(141,184,255,.18); background: rgba(8,11,16,.58); color: var(--panel-text); padding: 12px 14px; outline: none; }
+    textarea { min-height: 220px; resize: vertical; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; line-height: 1.55; }
+    button { border: 1px solid rgba(141,184,255,.18); background: rgba(255,255,255,.03); color: var(--panel-text); border-radius: 999px; padding: 10px 14px; cursor: pointer; transition: transform .16s ease, filter .16s ease, border-color .16s ease; }
+    button:hover { filter: brightness(1.08); transform: translateY(-1px); border-color: rgba(141,184,255,.42); }
+    button.primary { background: linear-gradient(180deg, rgba(79,132,255,.96), rgba(47,92,198,.96)); border-color: rgba(164,196,255,.46); }
+    button.success { background: linear-gradient(180deg, rgba(74,150,109,.96), rgba(37,106,71,.96)); border-color: rgba(154,227,188,.34); }
+    .result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px,1fr)); gap: 8px; }
+    .result-btn { border-radius: 14px; padding: 10px 8px; text-align: center; }
+    .result-btn.is-active { background: linear-gradient(180deg, rgba(79,132,255,.96), rgba(47,92,198,.96)); border-color: rgba(164,196,255,.46); box-shadow: 0 10px 18px rgba(31,62,126,.35); }
+    .result-btn.is-configured { background: linear-gradient(180deg, rgba(72,132,103,.34), rgba(37,90,68,.28)); border-color: rgba(130,212,165,.34); color: #d8ffea; box-shadow: inset 0 0 0 1px rgba(130,212,165,.1); }
+    .result-btn.is-configured.is-active { background: linear-gradient(180deg, rgba(79,132,255,.96), rgba(47,92,198,.96)); border-color: rgba(164,196,255,.46); color: var(--panel-text); }
+    .result-btn.is-unconfigured { color: var(--unconfigured-color); border-color: rgba(255,190,80,.3); }
+    .preview-stage { position: relative; flex: 1; min-height: 520px; border-radius: 24px; overflow: hidden; background: radial-gradient(circle at top, rgba(165,198,255,.18), transparent 42%), linear-gradient(180deg, rgba(57,67,86,.88), rgba(19,23,31,.96)); border: 1px solid rgba(163,193,255,.16); }
+    #dice-preview-container { position: absolute; inset: 0; }
+    #dice-preview-container .dice-box-canvas { width: 100% !important; height: 100% !important; display: block; visibility: visible; opacity: 1; }
+    .preview-overlay { position: absolute; inset: auto 18px 18px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 18px; background: rgba(8,12,17,.44); backdrop-filter: blur(12px); border: 1px solid rgba(157,188,255,.14); }
+    .preview-meta { display: flex; flex-direction: column; gap: 4px; }
+    .preview-value { font-size: 28px; font-weight: 700; }
+    .preview-sub { color: var(--muted-text); font-size: 13px; }
+    .euler-group { display: flex; flex-direction: column; gap: 10px; }
+    .euler-row { display: flex; align-items: center; gap: 10px; }
+    .euler-label { width: 22px; font-weight: 700; font-size: 15px; text-align: center; }
+    .euler-label[data-axis="x"] { color: #ff6b6b; }
+    .euler-label[data-axis="y"] { color: #69db7c; }
+    .euler-label[data-axis="z"] { color: #74c0fc; }
+    .euler-input { flex: 1; border-radius: 14px; border: 1px solid rgba(141,184,255,.18); background: rgba(4,7,12,.46); color: var(--panel-text); padding: 10px 12px; outline: none; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 14px; }
+    .euler-input:focus { border-color: rgba(141,184,255,.42); }
+    .stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+    .stat-card { padding: 12px 14px; border-radius: 16px; background: rgba(7,11,17,.48); border: 1px solid rgba(141,184,255,.14); }
+    .stat-label { font-size: 12px; color: rgba(225,234,255,.64); margin-bottom: 6px; }
+    .stat-value { font-size: 18px; font-weight: 700; }
+    .test-card { padding: 14px; border-radius: 16px; background: rgba(7,11,17,.48); border: 1px solid rgba(141,184,255,.14); display: flex; flex-direction: column; gap: 10px; }
+    .test-result-main { font-size: 28px; font-weight: 700; }
+    .test-result-sub { color: var(--muted-text); font-size: 13px; line-height: 1.6; }
+    .test-history { min-height: 44px; padding: 10px 12px; border-radius: 14px; background: rgba(4,7,12,.46); border: 1px solid rgba(141,184,255,.12); color: rgba(225,234,255,.74); font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; line-height: 1.6; }
+    .test-input { width: 100%; border-radius: 14px; border: 1px solid rgba(141,184,255,.18); background: rgba(4,7,12,.46); color: var(--panel-text); padding: 10px 12px; outline: none; }
+    .status-line { padding: 10px 12px; border-radius: 14px; background: rgba(8,12,17,.48); border: 1px solid rgba(141,184,255,.12); color: var(--muted-text); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+    .status-line[data-status="success"] { color: #d8ffea; border-color: rgba(130,212,165,.26); }
+    .status-line[data-status="error"] { color: #ffd6d6; border-color: rgba(255,145,145,.24); }
+    .tag-unconfigured { display: inline-block; padding: 2px 8px; border-radius: 8px; background: rgba(255,190,80,.14); color: var(--unconfigured-color); font-size: 12px; font-weight: 600; }
+    .tag-configured { display: inline-block; padding: 2px 8px; border-radius: 8px; background: rgba(130,212,165,.14); color: #d8ffea; font-size: 12px; font-weight: 600; }
+    @media (max-width: 1300px) { .layout { grid-template-columns: 320px minmax(0,1fr); } .panel:last-child { grid-column: 1 / -1; } }
+    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .preview-stage { min-height: 420px; } }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <section class="panel">      <div class="field"><label class="field-label" for="die-type-select">骰型</label><select id="die-type-select"></select></div>
+      <div class="field"><span class="field-label">目标结果面</span><div id="result-grid" class="result-grid"></div></div>
+      <div class="row"><button id="roll-target-btn" class="primary" type="button">显示目标面</button><button id="test-roll-btn" type="button">骰子测试</button><button id="replay-focus-btn" type="button">重播聚焦</button></div>
+      <div class="field">
+        <span class="field-label">复制其他结果面的姿态作为当前基础</span>
+        <div class="row">
+          <select id="copy-source-result-select" style="flex: 1; min-width: 0;"></select>
+          <button id="copy-source-pose-btn" type="button">复制为当前基础</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">三轴姿态编辑（度）</span>
+        <div class="row">
+          <label class="field-label" for="rotation-snap-select" style="min-width: 72px;">旋转刻度</label>
+          <select id="rotation-snap-select" style="flex: 1; min-width: 0;">
+                        <option value="1">1°</option>
+            <option value="5">5°</option>
+            <option value="10" selected>10°</option>
+            <option value="45">45°</option>
+            <option value="90">90°</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="field-label" for="coordinate-space-select" style="min-width: 72px;">坐标系</label>
+          <select id="coordinate-space-select" style="flex: 1; min-width: 0;">
+            <option value="local" selected>自身坐标系</option>
+            <option value="global">全局坐标系</option>
+          </select>
+        </div>
+        <div class="euler-group">
+          <div class="euler-row"><span class="euler-label" data-axis="x">X</span><input id="euler-x" class="euler-input" type="number" step="1" value="0" /></div>
+          <div class="euler-row"><span class="euler-label" data-axis="y">Y</span><input id="euler-y" class="euler-input" type="number" step="1" value="0" /></div>
+          <div class="euler-row"><span class="euler-label" data-axis="z">Z</span><input id="euler-z" class="euler-input" type="number" step="1" value="0" /></div>
+        </div>
+      </div>
+      <div class="row"><button id="save-pose-btn" class="success" type="button">保存当前姿态</button><button id="reset-pose-btn" type="button">重置为 0,0,0</button></div>
+      <div class="test-card">
+        <div class="stat-label">骰子测试结果</div>
+        <input id="test-formula-input" class="test-input" type="text" placeholder="可输入测试公式，例如 1d20、2d6+1，留空则使用当前骰型" />
+        <div id="test-result-main" class="test-result-main">--</div>
+        <div id="test-result-sub" class="test-result-sub">点击"骰子测试"可以直接查看当前骰型的实际掷骰结果。</div>
+        <div id="test-history" class="test-history">最近结果：--</div>
+      </div>
+      <div id="status-line" class="status-line" data-status="idle">等待开始校正。</div>
+    </section>
+    <section class="preview-panel">
+      <div><p class="kicker">实时预览</p></div>
+      <div class="preview-stage">
+        <div id="dice-preview-container"></div>
+        <div class="preview-overlay">
+          <div class="preview-meta"><div id="current-result-value" class="preview-value">--</div><div id="current-result-text" class="preview-sub">请先显示目标结果面</div></div>
+          <div class="preview-meta" style="text-align: right;">
+            <div id="current-die-type" class="preview-sub">骰型 --</div>
+            <div id="current-selected-die" class="preview-sub">选中骰子 --</div>
+            <div id="current-group-summary" class="preview-sub">分组 --</div>
+            <div id="current-pose-status" class="preview-sub"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <p class="kicker">配置输出</p>
+      <h2 class="title" style="font-size: 20px;">信息与导出</h2>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">当前结果</div><div id="stat-result" class="stat-value">--</div></div>
+        <div class="stat-card"><div class="stat-label">配置状态</div><div id="stat-pose-status" class="stat-value">--</div></div>
+        <div class="stat-card"><div class="stat-label">选中骰子点数</div><div id="stat-selected-die-value" class="stat-value">--</div></div>
+        <div class="stat-card"><div class="stat-label">X (度)</div><div id="stat-x" class="stat-value">0</div></div>
+        <div class="stat-card"><div class="stat-label">Y (度)</div><div id="stat-y" class="stat-value">0</div></div>
+        <div class="stat-card"><div class="stat-label">Z (度)</div><div id="stat-z" class="stat-value">0</div></div>
+        <div class="stat-card"><div class="stat-label">已落盘</div><div id="stat-saved" class="stat-value">--</div></div>
+      </div>
+      <div class="row"><button id="apply-config-btn" type="button">应用编辑配置</button><button id="copy-json-btn" type="button">复制配置</button><button id="download-json-btn" class="primary" type="button">下载配置</button></div>
+      <div class="field"><label class="field-label" for="config-output">三轴姿态配置 JSON</label><textarea id="config-output"></textarea></div>
+    </section>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

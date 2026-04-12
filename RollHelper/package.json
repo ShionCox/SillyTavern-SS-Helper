@@ -8,5 +8,10 @@
   "devDependencies": {
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@babylonjs/core": "5.57.1",
+    "@babylonjs/loaders": "5.57.1",
+    "@babylonjs/materials": "5.57.1"
   }
 }

@@ -360,7 +360,7 @@ export async function querySdkPluginChatRecords(
         results = results.slice(0, opts.limit);
     }
 
-    logger.info('[ChatRecords][QueryByChat]', {
+    logger.debug('[ChatRecords][QueryByChat]', {
         pluginId,
         chatKey,
         collection,
@@ -443,7 +443,7 @@ export async function queryLatestSdkPluginChatRecords(
     if (opts?.limit && opts.limit > 0) {
         results = results.slice(0, opts.limit);
     }
-    logger.info('[ChatRecords][QueryLatestByChat]', {
+    logger.debug('[ChatRecords][QueryLatestByChat]', {
         pluginId,
         chatKey,
         collection,

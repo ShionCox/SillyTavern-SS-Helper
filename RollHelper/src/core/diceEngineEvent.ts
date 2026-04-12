@@ -23,7 +23,7 @@ function parseAllowedSidesFromRuleTextEvent(ruleText: string): Set<number> | nul
   return new Set(parsed);
 }
 
-function applyRulePolicyToExpressionEvent(exprRaw: string, ruleText: string): void {
+export function applyRulePolicyToExpressionEvent(exprRaw: string, ruleText: string): void {
   const parsedExpr = parseDiceExpression(exprRaw);
   const allowedSidesSet = parseAllowedSidesFromRuleTextEvent(ruleText);
   if (!allowedSidesSet || allowedSidesSet.size === 0) return;
@@ -169,6 +169,7 @@ function rollBaseExpression(exprRaw: string): DiceResult {
     selectionMode,
     exploding: effectiveExplode,
     explosionTriggered,
+    sourceEngine: "native",
   };
 }
 

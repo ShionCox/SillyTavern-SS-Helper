@@ -68,6 +68,8 @@ export function createRoundSummarySnapshotEvent(
       checkDice: event.checkDice,
       compare: deps.normalizeCompareOperatorEvent(event.compare) ?? ">=",
       dc: Number.isFinite(event.dc) ? Number(event.dc) : 0,
+      difficulty: event.difficulty,
+      dcSource: event.dcSource,
       dcReason: String(event.dcReason || ""),
       rollMode: event.rollMode === "auto" ? "auto" : "manual",
       advantageState: normalizeAdvantageStateForSummaryEvent(
@@ -146,6 +148,13 @@ function normalizeAdvantageStateForSummaryEvent(raw: any): "normal" | "advantage
     return raw;
   }
   return "normal";
+}
+
+function formatDifficultyLabelForSummaryEvent(raw: any): string {
+  if (raw === "easy") return "简单";
+  if (raw === "hard") return "困难";
+  if (raw === "extreme") return "极难";
+  return "普通";
 }
 
 function normalizeSummaryInlineTextEvent(raw: string): string {
@@ -249,7 +258,9 @@ function buildSummaryEventNaturalLineByModeEvent(
   const skill = truncateSummaryTextEvent(item.skill, 20);
   const checkDice = truncateSummaryTextEvent(item.checkDice, 24);
   const dcReasonText = item.dcReason ? `（DC原因：${truncateSummaryTextEvent(item.dcReason, 36)}）` : "";
-  const checkText = `${skill} ${checkDice}，条件 ${item.compare} ${item.dc}${dcReasonText}`;
+  const difficultyText = item.difficulty ? `｜难度=${formatDifficultyLabelForSummaryEvent(item.difficulty)}` : "";
+  const thresholdSourceText = item.dcSource === "difficulty_mapped" ? "｜阈值=系统换算" : "";
+  const checkText = `${skill} ${checkDice}，条件 ${item.compare} ${item.dc}${difficultyText}${thresholdSourceText}${dcReasonText}`;
   const advantageText =
     item.advantageState === "normal" ? "" : `｜骰态=${item.advantageState}`;
   const gradeText = item.resultGrade ? `｜分级=${item.resultGrade}` : "";

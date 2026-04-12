@@ -19,8 +19,8 @@ import { appendToConsoleEvent as appendToConsoleCoreEvent } from "../Components/
 import {
   evaluateSuccessEvent as evaluateSuccessCoreEvent,
   parseDiceExpression as parseDiceExpressionCoreEvent,
-  rollExpression as rollExpressionCoreEvent,
 } from "../core/diceEngineEvent";
+import { rollDiceWithEngineEvent as rollDiceWithEngineCoreEvent } from "../core/diceRollRuntimeEvent";
 import {
   createIdEvent as createIdCoreEvent,
   escapeHtmlEvent as escapeHtmlCoreEvent,
@@ -58,7 +58,9 @@ import {
 import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } from "../events/renderEvent";
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
-import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
+import { registerAnimationDebugCommandEvent as registerAnimationDebugCommandModuleEvent } from "../commands/animationDebugCommandEvent";
+import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
+import { playRollAnimation as playRollAnimationCoreEvent, roll3DDice as roll3DDiceCoreEvent } from "../core/diceBox";
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
 import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
 import {
@@ -173,7 +175,7 @@ const rollDepsEvent = {
   getSettingsEvent: getSettingsStoreEvent,
   ensureRoundEventTimersSyncedEvent,
   getLatestRollRecordForEvent,
-  rollExpression: rollExpressionCoreEvent,
+  rollDiceEvent: rollDiceWithEngineCoreEvent,
   parseDiceExpression: parseDiceExpressionCoreEvent,
   resolveSkillModifierBySkillNameEvent: resolveSkillModifierBySkillNameStoreEvent,
   applySkillModifierToDiceResultEvent: applySkillModifierToDiceResultModuleEvent,
@@ -185,7 +187,14 @@ const rollDepsEvent = {
   saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
 };
 
-function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, expectedRoundId?: string): string {
+/**
+ * 功能：在运行时环境中执行一次事件手动掷骰。
+ * @param eventIdRaw 事件 ID
+ * @param overrideExpr 可选的覆盖骰式
+ * @param expectedRoundId 期望轮次 ID
+ * @returns 错误文本；成功时返回空字符串
+ */
+function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, expectedRoundId?: string): Promise<string> {
   return performEventRollByIdModuleEvent(eventIdRaw, overrideExpr, expectedRoundId, {
     ...rollDepsEvent,
     sweepTimeoutFailuresEvent,
@@ -196,7 +205,24 @@ function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, ex
   });
 }
 
-function autoRollEventsByAiModeEvent(round: PendingRoundEvent): string[] {
+/**
+ * 功能：在运行时环境中对已结算事件执行重新投掷。
+ * @param eventIdRaw 事件 ID
+ * @param expectedRoundId 期望轮次 ID
+ * @returns 错误文本；成功时返回空字符串
+ */
+function rerollEventByIdEvent(eventIdRaw: string, expectedRoundId?: string): Promise<string> {
+  return rerollEventByIdModuleEvent(eventIdRaw, expectedRoundId, {
+    ...rollDepsEvent,
+    sweepTimeoutFailuresEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    recordTimeoutFailureIfNeededEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
+    refreshCountdownDomEvent,
+  });
+}
+
+function autoRollEventsByAiModeEvent(round: PendingRoundEvent): Promise<string[]> {
   return autoRollEventsByAiModeModuleEvent(round, {
     ...rollDepsEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
@@ -269,6 +295,7 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
 export function bindEventButtonsEvent(): void {
   bindEventButtonsModuleEvent({
     performEventRollByIdEvent,
+    rerollEventByIdEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
@@ -328,5 +355,16 @@ export function registerDebugCommandEvent(): void {
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,
+  });
+}
+
+export function registerAnimationDebugCommandEvent(): void {
+  const slashCommandRuntime = getTavernSlashCommandRuntimeEvent();
+  registerAnimationDebugCommandModuleEvent({
+    SlashCommandParser: slashCommandRuntime.parser,
+    SlashCommand: slashCommandRuntime.command,
+    appendToConsoleEvent: appendToConsoleCoreEvent,
+    roll3DDice: roll3DDiceCoreEvent,
+    playRollAnimation: playRollAnimationCoreEvent,
   });
 }

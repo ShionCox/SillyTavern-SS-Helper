@@ -59,7 +59,7 @@ export interface HandleGenerationEndedDepsEvent {
   ) => PendingRoundEvent;
   invalidatePendingRoundFloorEvent: (assistantMsgId: string) => boolean;
   invalidateSummaryHistoryFloorEvent: (assistantMsgId: string) => boolean;
-  autoRollEventsByAiModeEvent: (round: PendingRoundEvent) => string[];
+  autoRollEventsByAiModeEvent: (round: PendingRoundEvent) => Promise<string[]>;
   refreshAllWidgetsFromStateEvent: () => void;
   sweepTimeoutFailuresEvent: () => boolean;
   refreshCountdownDomEvent: () => void;
@@ -188,6 +188,46 @@ function collectPendingRoundFloorVersionsEvent(
 }
 
 /**
+ * 功能：收集历史摘要中所有已跟踪楼层的最新消息标识。
+ * @param summaryHistory 历史摘要列表。
+ * @param buildAssistantFloorKeyEvent 楼层键提取函数。
+ * @returns 楼层键到助手消息标识的映射。
+ */
+function collectSummaryHistoryFloorVersionsEvent(
+  summaryHistory: Array<{ sourceAssistantMsgIds?: string[]; events?: Array<{ sourceAssistantMsgId?: string }> }> | undefined,
+  buildAssistantFloorKeyEvent: (assistantMsgId: string) => string | null
+): Map<string, string> {
+  const tracked = new Map<string, string>();
+  if (!Array.isArray(summaryHistory) || summaryHistory.length <= 0) {
+    return tracked;
+  }
+
+  const remember = (assistantMsgId: string | undefined): void => {
+    const normalized = String(assistantMsgId ?? "").trim();
+    if (!normalized) return;
+    const floorKey = buildAssistantFloorKeyEvent(normalized);
+    if (!floorKey) return;
+    tracked.set(floorKey, normalized);
+  };
+
+  for (const snapshot of summaryHistory) {
+    if (!snapshot) continue;
+    if (Array.isArray(snapshot.sourceAssistantMsgIds)) {
+      for (const assistantMsgId of snapshot.sourceAssistantMsgIds) {
+        remember(assistantMsgId);
+      }
+    }
+    if (Array.isArray(snapshot.events)) {
+      for (const event of snapshot.events) {
+        remember(event?.sourceAssistantMsgId);
+      }
+    }
+  }
+
+  return tracked;
+}
+
+/**
  * 功能：把当前可见聊天中的助手楼层与未归档轮次状态做一次对账。
  * @param reason 触发本次对账的原因。
  * @param deps 楼层对账依赖。
@@ -205,7 +245,6 @@ export function reconcilePendingRoundWithCurrentChatEvent(
 
   const meta = deps.getDiceMetaEvent();
   const round = meta.pendingRound;
-  if (!round) return false;
 
   const currentFloors = new Map<string, { assistantMsgId: string; message: TavernMessageEvent }>();
   const chat = liveCtx.chat as TavernMessageEvent[];
@@ -218,7 +257,18 @@ export function reconcilePendingRoundWithCurrentChatEvent(
     currentFloors.set(floorKey, { assistantMsgId, message });
   }
 
-  const trackedFloors = collectPendingRoundFloorVersionsEvent(round, deps.buildAssistantFloorKeyEvent);
+  const trackedFloors = new Map<string, string>();
+  if (round) {
+    for (const [floorKey, assistantMsgId] of collectPendingRoundFloorVersionsEvent(round, deps.buildAssistantFloorKeyEvent)) {
+      trackedFloors.set(floorKey, assistantMsgId);
+    }
+  }
+  for (const [floorKey, assistantMsgId] of collectSummaryHistoryFloorVersionsEvent(meta.summaryHistory, deps.buildAssistantFloorKeyEvent)) {
+    if (!trackedFloors.has(floorKey)) {
+      trackedFloors.set(floorKey, assistantMsgId);
+    }
+  }
+  if (trackedFloors.size <= 0) return false;
   let changed = false;
 
   for (const [floorKey, storedAssistantMsgId] of trackedFloors) {
@@ -327,10 +377,11 @@ export function handleGenerationEndedEvent(
 
   if (events.length > 0) {
     const round = deps.mergeEventsIntoPendingRoundEvent(events, assistantMsgId);
-    deps.autoRollEventsByAiModeEvent(round);
-    deps.sweepTimeoutFailuresEvent();
-    deps.refreshAllWidgetsFromStateEvent();
-    deps.refreshCountdownDomEvent();
+    deps.autoRollEventsByAiModeEvent(round).then(() => {
+      deps.sweepTimeoutFailuresEvent();
+      deps.refreshAllWidgetsFromStateEvent();
+      deps.refreshCountdownDomEvent();
+    });
   } else {
     void chosenEvents;
     void closedByAiDirective;
@@ -404,6 +455,20 @@ function resolveAssistantMessageVersionTokenEvent(message: TavernMessageEvent): 
   return "base";
 }
 
+/**
+ * 功能：解析助手消息的稳定时间戳标识，优先使用宿主保存的消息时间字段。
+ * @param message 助手消息对象。
+ * @returns 规范化后的时间戳文本；不存在时返回空字符串。
+ */
+function resolveAssistantMessageTimestampEvent(message: TavernMessageEvent): string {
+  const value =
+    (message as any)?.create_date ??
+    (message as any)?.create_time ??
+    (message as any)?.timestamp ??
+    "";
+  return String(value ?? "").trim();
+}
+
 export function buildAssistantMessageIdEvent(
   message: TavernMessageEvent,
   index: number,
@@ -415,6 +480,10 @@ export function buildAssistantMessageIdEvent(
   const hash = deps.simpleHashEvent(stableText);
   if (explicitId != null) {
     return `assistant:${String(explicitId)}:${versionToken}:${hash}`;
+  }
+  const timestamp = resolveAssistantMessageTimestampEvent(message);
+  if (timestamp) {
+    return `assistant_ts:${timestamp}:${versionToken}:${hash}`;
   }
   return `assistant_idx:${index}:${versionToken}:${hash}`;
 }
@@ -509,9 +578,14 @@ export interface BindEventButtonsDepsEvent {
     eventIdRaw: string,
     overrideExpr?: string,
     expectedRoundId?: string
-  ) => string;
+  ) => Promise<string>;
+  rerollEventByIdEvent: (
+    eventIdRaw: string,
+    expectedRoundId?: string
+  ) => Promise<string>;
   refreshAllWidgetsFromStateEvent: () => void;
   getSettingsEvent: () => {
+    enableRerollFeature?: boolean;
     enableSkillSystem?: boolean;
     skillTableText?: string;
   };
@@ -801,17 +875,33 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
       const button = target.closest(
         "button[data-dice-event-roll='1']"
       ) as HTMLButtonElement | null;
-      if (!button) return;
+      if (button) {
+        // 当前事件卡在 <summary> 中放置了检定按钮；阻断默认行为可避免触发 details 折叠切换。
+        event.preventDefault();
+        event.stopPropagation();
 
-      // 当前事件卡在 <summary> 中放置了检定按钮；阻断默认行为可避免触发 details 折叠切换。
+        const eventId = button.getAttribute("data-dice-event-id") || "";
+        const expr = button.getAttribute("data-dice-expr") || "";
+        const roundId = button.getAttribute("data-round-id") || "";
+        deps.performEventRollByIdEvent(eventId, expr || undefined, roundId || undefined).then(result => {
+          if (result) logger.warn(result);
+        });
+        return;
+      }
+
+      const rerollButton = target.closest(
+        "button[data-dice-event-reroll='1']"
+      ) as HTMLButtonElement | null;
+      if (!rerollButton) return;
+
       event.preventDefault();
       event.stopPropagation();
 
-      const eventId = button.getAttribute("data-dice-event-id") || "";
-      const expr = button.getAttribute("data-dice-expr") || "";
-      const roundId = button.getAttribute("data-round-id") || "";
-      const result = deps.performEventRollByIdEvent(eventId, expr || undefined, roundId || undefined);
-      if (result) logger.warn(result);
+      const eventId = rerollButton.getAttribute("data-dice-event-id") || "";
+      const roundId = rerollButton.getAttribute("data-round-id") || "";
+      deps.rerollEventByIdEvent(eventId, roundId || undefined).then(result => {
+        if (result) logger.warn(result);
+      });
     },
     true
   );

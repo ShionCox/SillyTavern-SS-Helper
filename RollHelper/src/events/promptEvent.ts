@@ -24,6 +24,7 @@ import type {
 import { logger } from "../../index";
 import { appendSdkPluginChatRecord } from "../../../SDK/db";
 import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
+import { AI_SUPPORTED_DICE_SIDES_Event } from "../settings/constantsEvent";
 
 const DEFAULT_RULE_BLOCK_START_Event = "<dice_rules>";
 const DEFAULT_RULE_BLOCK_END_Event = "</dice_rules>";
@@ -306,7 +307,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   if (settings.enableAdvantageSystem) checkDiceParts.push("[khX|klX]");
   checkDiceParts.push("[+/-B]");
   const checkDicePattern = checkDiceParts.join("");
-  const allowedSides = parseAllowedSidesTextEvent(settings.aiAllowedDiceSidesText);
+  const enabledDiceTypes = formatEnabledDiceTypesTextEvent(settings.aiAllowedDiceSidesText);
 
   const lines: string[] = [];
   lines.push("【事件骰子协议（系统动态）】");
@@ -316,7 +317,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   lines.push("{");
   lines.push('  "type": "dice_events", "version": "1",');
   lines.push('  "events": [{');
-  lines.push('    "id": "str", "title": "str", "dc": num, "desc": "str",');
+  lines.push('    "id": "str", "title": "str", "difficulty": "easy|normal|hard|extreme", "desc": "str",');
   lines.push(`    "checkDice": "${checkDicePattern}",`);
   lines.push('    "skill": "str",');
   lines.push('    "compare": ">=|>|<=|<",');
@@ -350,16 +351,17 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
 
   lines.push("4. 可用能力说明：");
   lines.push(`   - checkDice 仅使用 ${checkDicePattern}，只能写骰式本体，禁止加入技能名、状态名、自然语言、标签或变量,仅允许一个可选修正值，禁止连续修正（如 1d20+1-1）。`);
-  lines.push("   - 合法示例：1d20、2d6+3、2d20kh1、2d20kl1、1d6!+2。");
+  lines.push(`   - 当前已启用的可选骰式：${enabledDiceTypes}。只能从这些骰式中选择使用。`);
+  lines.push("   - 默认只提供 difficulty，不要手写 dc；系统会根据骰式、优劣骰与比较符自动换算实际阈值。");
+  lines.push("   - difficulty 仅允许 easy / normal / hard / extreme。");
+  lines.push("   - compare 默认使用 >=；只有在叙事上确有必要时才改成 > / <= / <。");
+  lines.push("   - 合法示例：1d20、2d20kh1、2d20kl1；若已启用对应骰式，也可使用 2d6+3、1d100。");
   lines.push("   - 非法示例：1d20+1-1、1d20+体能、1d20+[虚弱]、1d20 (优势)。");
   lines.push("   - 若需施加或移除状态，请仅在 outcomes 文本中使用状态标签。");
   if (settings.enableExplodingDice && settings.enableOutcomeBranches && settings.enableExplodeOutcomeBranch) {
     lines.push("   - 只有 checkDice 明确包含 ! 时，才允许提供 outcomes.explode；如果 checkDice 不含 !，必须完全省略 explode 字段。");
     lines.push('   - 正例：{"checkDice":"1d20!","outcomes":{"success":"...","failure":"...","explode":"..."}}');
     lines.push('   - 反例：{"checkDice":"1d20","outcomes":{"success":"...","failure":"...","explode":"..."}}');
-  }
-  if (allowedSides !== "none") {
-    lines.push(`   - 骰子面数限制：${allowedSides}。`);
   }
   if (settings.enableAiRollMode) {
     lines.push("   - 可使用 rollMode=auto|manual 指定是否自动掷骰。");
@@ -378,12 +380,16 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   }
   if (settings.enableAdvantageSystem) {
     lines.push("   - 已启用优势/劣势：可用 advantageState 或 kh/kl，会改变结果并影响剧情走向。");
+    lines.push("   - 重点：优势/劣势是取高或取低，不是把两次结果相加。");
+    lines.push("   - 若使用 2d20kh1 或 2d20kl1，最终只保留 1 颗 d20；未加修正时总值范围仍是 1~20，不是 2~40。");
+    lines.push("   - 生成事件前必须检查判定条件是否可达，避免写出理论上必败或必成的事件。");
+    lines.push("   - 例如：2d20kl1+1 不能搭配 >=30；2d20kh1+0 也不应搭配 >20。");
   }
   if (settings.enableExplodingDice && settings.enableAdvantageSystem) {
     lines.push("   - ! 与 kh/kl 不能同用。");
   }
   if (settings.enableDynamicDcReason) {
-    lines.push("   - 可填写 dc_reason 解释难度依据。");
+    lines.push("   - 可填写 dc_reason 解释难度依据；系统会在展示时追加“按难度自动换算阈值”的说明。");
   }
   if (settings.enableTimeLimit) {
     lines.push("   - 可填写 timeLimit，且必须满足系统最小时限。");
@@ -415,13 +421,29 @@ export function buildFinalRuleTextEvent(settings: DicePluginSettingsEvent): stri
   if (!customRuleText) return systemRuleText;
   return normalizeBlockTextEvent(`${systemRuleText}\n\n【用户自定义补充】\n${customRuleText}`);
 }
-function parseAllowedSidesTextEvent(raw: string): string {
+/**
+ * 功能：解析并规范化已启用的 AI 骰式列表。
+ * @param raw 原始配置文本。
+ * @returns 规范化后的骰面数组；为空时回退到默认 d20。
+ */
+function parseEnabledDiceSidesEvent(raw: string): number[] {
   const parts = String(raw || "")
     .split(/[,\s]+/)
     .map((item) => Number(String(item || "").trim()))
-    .filter((value) => Number.isFinite(value) && Number.isInteger(value) && value > 0);
-  if (parts.length <= 0) return "none";
-  return Array.from(new Set(parts)).sort((a, b) => a - b).join(",");
+    .filter((value) => Number.isFinite(value) && Number.isInteger(value) && AI_SUPPORTED_DICE_SIDES_Event.includes(value as any));
+  const normalized = Array.from(new Set(parts)).sort((left, right) => left - right);
+  return normalized.length > 0 ? normalized : [20];
+}
+
+/**
+ * 功能：把已启用骰式格式化为可读中文文本。
+ * @param raw 原始配置文本。
+ * @returns 形如 d20、d6、d100 的中文列表。
+ */
+function formatEnabledDiceTypesTextEvent(raw: string): string {
+  return parseEnabledDiceSidesEvent(raw)
+    .map((sides) => `d${sides}`)
+    .join("、");
 }
 
 function parseSkillTablePreviewEvent(skillTableText: string, limit = 20): { count: number; preview: string } {
@@ -451,7 +473,9 @@ function buildDiceRuntimePolicyBlockEvent(
   startTag: string,
   endTag: string
 ): string {
-  const allowedSides = parseAllowedSidesTextEvent(settings.aiAllowedDiceSidesText);
+  const enabledDice = parseEnabledDiceSidesEvent(settings.aiAllowedDiceSidesText)
+    .map((sides) => `d${sides}`)
+    .join(",");
   const skillPreview = parseSkillTablePreviewEvent(settings.skillTableText);
   const lines: string[] = [];
   lines.push(startTag);
@@ -474,7 +498,7 @@ function buildDiceRuntimePolicyBlockEvent(
   lines.push(`explode_outcome_enabled=${settings.enableExplodeOutcomeBranch ? 1 : 0}`);
   lines.push(`time_limit_enabled=${settings.enableTimeLimit ? 1 : 0}`);
   lines.push(`min_time_limit_seconds=${Math.max(1, Math.floor(Number(settings.minTimeLimitSeconds) || 1))}`);
-  lines.push(`allowed_sides=${allowedSides}`);
+  lines.push(`enabled_dice=${enabledDice}`);
   lines.push(`skill_system_enabled=${settings.enableSkillSystem ? 1 : 0}`);
   lines.push(`skill_table_count=${skillPreview.count}`);
   lines.push(`skill_table_preview=${skillPreview.preview}`);
@@ -836,4 +860,3 @@ export function handlePromptReadyEvent(
     )})`
   );
 }
-

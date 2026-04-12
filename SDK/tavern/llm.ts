@@ -731,6 +731,23 @@ function extractErrorText(result: unknown): string {
 }
 
 /**
+ * 功能：从可能被字符串包裹的 Chat Completion 响应中提取真正正文。
+ * @param raw 原始字符串。
+ * @returns 提取结果；无法识别信封时返回 undefined。
+ */
+function extractTextFromSerializedCompletionEnvelope(raw: string): string | undefined {
+  const text = String(raw ?? "").trim();
+  if (!text || !text.includes('"choices"')) {
+    return undefined;
+  }
+  const parsed = tryParseJson(text);
+  if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as Record<string, unknown>).choices)) {
+    return undefined;
+  }
+  return extractResultText(parsed);
+}
+
+/**
  * 功能：把返回值统一提取为文本。
  * 参数：
  *   result (unknown)：原始返回值。
@@ -739,6 +756,8 @@ function extractErrorText(result: unknown): string {
  */
 function extractResultText(result: unknown): string {
   if (typeof result === "string") {
+    const envelopeText = extractTextFromSerializedCompletionEnvelope(result);
+    if (envelopeText !== undefined) return envelopeText;
     return result.trim();
   }
 
@@ -756,6 +775,8 @@ function extractResultText(result: unknown): string {
 
   for (const candidate of directCandidates) {
     if (typeof candidate === "string" && candidate.trim()) {
+      const envelopeText = extractTextFromSerializedCompletionEnvelope(candidate);
+      if (envelopeText !== undefined) return envelopeText;
       return candidate.trim();
     }
     if (candidate && typeof candidate === "object") {
@@ -772,16 +793,33 @@ function extractResultText(result: unknown): string {
       if (message && typeof message === "object") {
         const messageRecord = message as Record<string, unknown>;
         if (typeof messageRecord.content === "string" && messageRecord.content.trim()) {
+          const envelopeText = extractTextFromSerializedCompletionEnvelope(messageRecord.content);
+          if (envelopeText !== undefined) return envelopeText;
           return messageRecord.content.trim();
+        }
+        if (Array.isArray(messageRecord.content)) {
+          const text = messageRecord.content
+            .map((item: unknown): string => {
+              if (typeof item === "string") return item;
+              if (!item || typeof item !== "object") return "";
+              const record = item as Record<string, unknown>;
+              return String(record.text ?? record.content ?? "").trim();
+            })
+            .join("")
+            .trim();
+          if (text) return text;
         }
         if (messageRecord.content && typeof messageRecord.content === "object") {
           try { return JSON.stringify(messageRecord.content); } catch { /* skip */ }
         }
       }
       if (typeof firstChoiceRecord.text === "string" && firstChoiceRecord.text.trim()) {
+        const envelopeText = extractTextFromSerializedCompletionEnvelope(firstChoiceRecord.text);
+        if (envelopeText !== undefined) return envelopeText;
         return firstChoiceRecord.text.trim();
       }
     }
+    return "";
   }
 
   try { return JSON.stringify(result); } catch { /* skip */ }
@@ -1086,7 +1124,8 @@ function cloneRequestBody(body: Record<string, unknown>): Record<string, unknown
  */
 function shouldRetryCompatAttempt(result: TavernSingleAttemptResult): boolean {
   const text = `${result.message || ""}\n${result.detail || ""}\n${result.backendMessage || ""}`.toLowerCase();
-  return result.httpStatus === 400
+  return result.errorCode === "EMPTY_RESPONSE"
+    || result.httpStatus === 400
     || text.includes("bad request")
     || text.includes("response_format")
     || text.includes("json_schema");
