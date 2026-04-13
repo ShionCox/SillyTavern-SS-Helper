@@ -1277,32 +1277,67 @@ export interface BuildEventRollResultCardDepsEvent {
   }) => string;
 }
 
+function isBlindRollRecordEvent(record: EventRollRecordEvent): boolean {
+  return record.visibility === "blind" || record.source === "blind_manual_roll";
+}
+
+function getBlindConcealedTextEvent(): string {
+  return "真实结果已隐藏，将通过后续叙事体现";
+}
+
+function getBlindResultCoreTextEvent(): string {
+  return "本次为暗骰，点数、阈值与后果不在卡片中公开";
+}
+
+function getBlindStatusTextEvent(): string {
+  return "暗骰已结算";
+}
+
 export function buildEventRollResultCardEvent(
   event: DiceEventSpecEvent,
   record: EventRollRecordEvent,
   deps: BuildEventRollResultCardDepsEvent
 ): string {
   const settings = deps.getSettingsEvent();
+  const isBlindRecord = isBlindRollRecordEvent(record);
+  const blindConcealedText = getBlindConcealedTextEvent();
   const resolvedOutcome = deps.resolveTriggeredOutcomeEvent(event, record, settings);
-  const outcomeLabel = settings.enableOutcomeBranches
-    ? outcomeKindLabelEvent(resolvedOutcome.kind)
-    : "剧情走向";
-  const outcomeToneClassName = settings.enableOutcomeBranches
-    ? `st-rh-outcome-tone-${resolvedOutcome.kind}`
-    : "st-rh-outcome-tone-neutral";
-  const outcomeText = settings.enableOutcomeBranches ? resolvedOutcome.text : "走向分支已关闭。";
+  const outcomeLabel = isBlindRecord
+    ? "暗骰结果"
+    : settings.enableOutcomeBranches
+      ? outcomeKindLabelEvent(resolvedOutcome.kind)
+      : "剧情走向";
+  const outcomeToneClassName = isBlindRecord
+    ? "st-rh-outcome-tone-neutral"
+    : settings.enableOutcomeBranches
+      ? `st-rh-outcome-tone-${resolvedOutcome.kind}`
+      : "st-rh-outcome-tone-neutral";
+  const outcomeText = isBlindRecord
+    ? getBlindResultCoreTextEvent()
+    : settings.enableOutcomeBranches
+      ? resolvedOutcome.text
+      : "走向分支已关闭。";
   const outcomeTextClean = stripStatusTagsFromTextEvent(outcomeText);
-  const collapsedOutcomePreview = buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
-  const outcomeStatusSummaryText = settings.enableStatusSystem
+  const collapsedOutcomePreview = isBlindRecord
+    ? {
+        text: blindConcealedText,
+        title: blindConcealedText,
+        chipClassName: "st-rh-summary-chip-outcome st-rh-summary-chip-concealed",
+      }
+    : buildCollapsedOutcomePreviewEvent(outcomeLabel, outcomeTextClean);
+  const outcomeStatusSummaryText = isBlindRecord
+    ? ""
+    : settings.enableStatusSystem
     ? buildOutcomeStatusSummaryTextEvent(outcomeText, event.skill)
     : "";
   const collapsedStatusSummaryPreview = buildCollapsedStatusSummaryPreviewEvent(outcomeStatusSummaryText);
-  const currentStatusesSummaryText = settings.enableStatusSystem
+  const currentStatusesSummaryText = isBlindRecord
+    ? ""
+    : settings.enableStatusSystem
     ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
     : "";
-  const isBlindRecord = record.visibility === "blind" || record.source === "blind_manual_roll";
   const status = isBlindRecord
-    ? "结果已隐藏，仅命运知晓"
+    ? getBlindStatusTextEvent()
     : record.success === null
       ? "待定"
       : record.success
@@ -1361,20 +1396,24 @@ export function buildEventRollResultCardEvent(
     )}${modifierBreakdownText ? `（${modifierBreakdownText}）` : ""}`
     : "技能系统已关闭";
   const diceModifierHint =
-    settings.enableSkillSystem && (skillModifierApplied !== 0 || statusModifierApplied !== 0)
+    isBlindRecord
+      ? "结果已隐藏"
+      : settings.enableSkillSystem && (skillModifierApplied !== 0 || statusModifierApplied !== 0)
       ? `技能${deps.formatModifier(skillModifierApplied)} / 状态${deps.formatModifier(statusModifierApplied)}`
       : "";
   let explodeInfoText = "未请求爆骰";
-  const modifierBreakdownHtml = buildModifierBreakdownHtmlEvent(
-    baseModifierUsed,
-    skillModifierApplied,
-    statusModifierApplied,
-    finalModifierUsed,
-    event.skill,
-    Array.isArray(record.statusModifiersApplied) ? record.statusModifiersApplied : [],
-    deps.escapeHtmlEvent,
-    deps.escapeAttrEvent
-  );
+  const modifierBreakdownHtml = isBlindRecord
+    ? ""
+    : buildModifierBreakdownHtmlEvent(
+        baseModifierUsed,
+        skillModifierApplied,
+        statusModifierApplied,
+        finalModifierUsed,
+        event.skill,
+        Array.isArray(record.statusModifiersApplied) ? record.statusModifiersApplied : [],
+        deps.escapeHtmlEvent,
+        deps.escapeAttrEvent
+      );
   if (record.explodePolicyApplied === "disabled_globally") {
     explodeInfoText = "已请求，系统关闭，按普通骰";
   } else if (record.explodePolicyApplied === "downgraded_by_ai_limit") {
@@ -1384,8 +1423,12 @@ export function buildEventRollResultCardEvent(
   } else if (record.result.exploding) {
     explodeInfoText = record.result.explosionTriggered ? "已请求，已触发连爆" : "已请求，未触发连爆";
   }
-  const statusImpactHtml =
-    statusModifierApplied !== 0
+  if (isBlindRecord) {
+    explodeInfoText = "结果已隐藏";
+  }
+  const statusImpactHtml = isBlindRecord
+    ? ""
+    : statusModifierApplied !== 0
       ? `受状态影响 ${deps.formatModifier(statusModifierApplied)}${Array.isArray(record.statusModifiersApplied) && record.statusModifiersApplied.length > 0
         ? `（${record.statusModifiersApplied
           .map((item) => `${item.name}${deps.formatModifier(item.modifier)}`)
@@ -1472,7 +1515,7 @@ export function buildEventRollResultCardEvent(
     modifierBreakdownHtml,
     compareHtml: deps.escapeHtmlEvent(isBlindRecord ? "?" : record.compareUsed),
     dcText: isBlindRecord ? "已隐藏" : String(record.dcUsed ?? "未设置"),
-    dcReasonHtml: dcDescriptionHtml,
+    dcReasonHtml: isBlindRecord ? "" : dcDescriptionHtml,
     statusText: status,
     statusColor,
     totalText: isBlindRecord ? "已隐藏" : String(record.result.total),

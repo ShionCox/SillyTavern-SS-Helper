@@ -720,7 +720,10 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.enableOutcomeBranches = bucket.enableOutcomeBranches !== false;
   bucket.enableExplodeOutcomeBranch = bucket.enableExplodeOutcomeBranch !== false;
   bucket.includeOutcomeInSummary = bucket.includeOutcomeInSummary !== false;
-  bucket.showOutcomePreviewInListCard = bucket.showOutcomePreviewInListCard !== false;
+  bucket.showOutcomePreviewInListCard =
+    typeof (source as any)?.showOutcomePreviewInListCard === "boolean"
+      ? bucket.showOutcomePreviewInListCard !== false
+      : DEFAULT_SETTINGS_Event.showOutcomePreviewInListCard;
   const rawSummaryDetail = String((source as any)?.summaryDetailMode || "").toLowerCase();
   bucket.summaryDetailMode =
     rawSummaryDetail === "balanced" || rawSummaryDetail === "detailed"

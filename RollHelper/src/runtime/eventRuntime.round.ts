@@ -68,7 +68,14 @@ import {
   normalizeBlankLinesEvent as normalizeBlankLinesCoreEvent,
 } from "../core/utilsEvent";
 import { parseDiceExpression as parseDiceExpressionCoreEvent } from "../core/diceEngineEvent";
-import type { DiceEventSpecEvent, EventRollRecordEvent, PendingRoundEvent, RoundSummarySnapshotEvent, SummaryDetailModeEvent } from "../types/eventDomainEvent";
+import type {
+  DiceEventSpecEvent,
+  DicePluginSettingsEvent,
+  EventRollRecordEvent,
+  PendingRoundEvent,
+  RoundSummarySnapshotEvent,
+  SummaryDetailModeEvent,
+} from "../types/eventDomainEvent";
 import type { DiceResult } from "../types/diceEvent";
 
 export type RemovalRangeEvent = { start: number; end: number };
@@ -222,9 +229,10 @@ export function buildSummaryBlockFromHistoryEvent(
   history: RoundSummarySnapshotEvent[],
   detailMode: SummaryDetailModeEvent,
   lastNRounds: number,
-  includeOutcomeInSummary: boolean
+  includeOutcomeInSummary: boolean,
+  settings: DicePluginSettingsEvent
 ): string {
-  return buildSummaryBlockFromHistoryModuleEvent(history, detailMode, lastNRounds, includeOutcomeInSummary, {
+  return buildSummaryBlockFromHistoryModuleEvent(history, detailMode, lastNRounds, includeOutcomeInSummary, settings, {
     SUMMARY_HISTORY_ROUNDS_MAX_Event,
     SUMMARY_HISTORY_ROUNDS_MIN_Event,
     SUMMARY_MAX_EVENTS_Event,

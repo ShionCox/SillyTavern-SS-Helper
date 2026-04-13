@@ -267,10 +267,10 @@ export function buildSettingsCardHtmlTemplateEvent(
 
           ${buildCheckboxItemEvent(
             ids.listOutcomePreviewId,
-            "列表卡预览走向",
-            "未掷骰时先预览可能结果。",
+            "列表卡预览走向（可能剧透）",
+            "在未掷骰前预览成功、失败、爆骰后果。建议默认关闭；开启后可能削弱暗骰与悬疑体验。",
             "list outcome preview",
-            "在列表里预览结果分支。",
+            "开启后会在事件列表中提前显示可能走向，可能剧透未结算事件后果。",
             )}
 
           <div class="st-roll-divider"><i class="fa-solid fa-file-lines"></i><span>摘要注入</span><div class="st-roll-divider-line"></div></div>

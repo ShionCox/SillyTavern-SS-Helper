@@ -72,7 +72,7 @@ export interface DicePluginSettingsEvent {
   enableNarrativeCostEnforcement: boolean;
   worldbookPassiveMode: "disabled" | "read_only" | "read_write";
   blindUiWarnInConsole: boolean;
-  blindRevealInSummary: boolean;
+  blindRevealInSummary: boolean; // 仅控制摘要是否允许揭示暗骰 outcome 文本，不影响结果卡隐藏策略
   skillTableText: string;
   skillPresetStoreText: string;
   ruleTextModeVersion: number;

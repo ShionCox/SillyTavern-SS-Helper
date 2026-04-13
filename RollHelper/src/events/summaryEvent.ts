@@ -193,7 +193,7 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
     return "超时未操作，系统判定失败";
   }
   if (item.visibility === "blind" || item.resultSource === "blind_manual_roll") {
-    return "暗骰检定已结算（结果已隐藏）";
+    return "暗骰检定已结算（结果隐藏，将通过叙事体现）";
   }
 
   const totalText = item.total == null ? "-" : String(item.total);
@@ -215,7 +215,14 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
   return `已完成（总值 ${totalText}）`;
 }
 
-function toSummaryOutcomeSentenceEvent(item: RoundSummaryEventItemEvent): string {
+function toSummaryOutcomeSentenceEvent(
+  item: RoundSummaryEventItemEvent,
+  settings: DicePluginSettingsEvent
+): string {
+  const isBlind = item.visibility === "blind" || item.resultSource === "blind_manual_roll";
+  if (isBlind && !settings.blindRevealInSummary) {
+    return "";
+  }
   const text = truncateSummaryTextEvent(item.outcomeText || "", 120);
   if (item.outcomeKind === "explode") {
     return `爆骰走向：${text}`;
@@ -232,13 +239,16 @@ function toSummaryOutcomeSentenceEvent(item: RoundSummaryEventItemEvent): string
 function buildSummaryEventNaturalLineByModeEvent(
   item: RoundSummaryEventItemEvent,
   detailMode: SummaryDetailModeEvent,
-  includeOutcomeInSummary: boolean
+  includeOutcomeInSummary: boolean,
+  settings: DicePluginSettingsEvent
 ): string {
   const title = truncateSummaryTextEvent(item.title, 48);
   const desc = truncateSummaryTextEvent(item.desc, getSummaryDescMaxLenByModeEvent(detailMode));
   const target = truncateSummaryTextEvent(item.targetLabel || "未指定", 20);
   const resultSentence = toSummaryResultSentenceEvent(item);
-  const outcomeSentence = includeOutcomeInSummary ? toSummaryOutcomeSentenceEvent(item) : "";
+  const outcomeSentence = includeOutcomeInSummary
+    ? toSummaryOutcomeSentenceEvent(item, settings)
+    : "";
   const baseModifierUsed = Number.isFinite(Number(item.baseModifierUsed))
     ? Number(item.baseModifierUsed)
     : 0;
@@ -256,7 +266,7 @@ function buildSummaryEventNaturalLineByModeEvent(
   )} + 状态 ${formatModifier(statusModifierApplied)} = ${formatModifier(finalModifierUsed)}`;
 
   if (detailMode === "minimal") {
-    return includeOutcomeInSummary
+    return includeOutcomeInSummary && outcomeSentence
       ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜结果：${resultSentence}｜${outcomeSentence}`
       : `- 标题：${title}｜对象：${target}｜描述：${desc}｜结果：${resultSentence}`;
   }
@@ -272,7 +282,7 @@ function buildSummaryEventNaturalLineByModeEvent(
   const gradeText = item.resultGrade ? `｜分级=${item.resultGrade}` : "";
 
   if (detailMode === "balanced") {
-    return includeOutcomeInSummary
+    return includeOutcomeInSummary && outcomeSentence
       ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜结果：${resultSentence}${gradeText}｜${outcomeSentence}`
       : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜结果：${resultSentence}${gradeText}`;
   }
@@ -282,7 +292,7 @@ function buildSummaryEventNaturalLineByModeEvent(
     formatIsoDurationNaturalLanguageEvent(item.timeLimit || "none"),
     26
   );
-  return includeOutcomeInSummary
+  return includeOutcomeInSummary && outcomeSentence
     ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}｜${outcomeSentence}`
     : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}`;
 }
@@ -301,6 +311,7 @@ export function buildSummaryBlockFromHistoryEvent(
   detailMode: SummaryDetailModeEvent,
   lastNRounds: number,
   includeOutcomeInSummary: boolean,
+  settings: DicePluginSettingsEvent,
   deps: BuildSummaryBlockFromHistoryDepsEvent
 ): string {
   if (!Array.isArray(history) || history.length === 0) return "";
@@ -335,7 +346,7 @@ export function buildSummaryBlockFromHistoryEvent(
         truncatedByTotalLimit = true;
         break;
       }
-      lines.push(buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary));
+      lines.push(buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary, settings));
       emittedEventLines++;
     }
 

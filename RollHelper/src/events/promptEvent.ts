@@ -774,7 +774,8 @@ export interface HandlePromptReadyDepsEvent {
     history: RoundSummarySnapshotEvent[],
     detailMode: DicePluginSettingsEvent["summaryDetailMode"],
     lastNRounds: number,
-    includeOutcomeInSummary: boolean
+    includeOutcomeInSummary: boolean,
+    settings: DicePluginSettingsEvent
   ) => string;
   saveMetadataSafeEvent: () => void;
 }
@@ -901,7 +902,8 @@ export function handlePromptReadyEvent(
       history,
       settings.summaryDetailMode,
       settings.summaryHistoryRounds,
-      settings.includeOutcomeInSummary
+      settings.includeOutcomeInSummary,
+      settings
     );
     summaryBlockText = normalizeBlockTextEvent(built);
     if (summaryBlockText) {

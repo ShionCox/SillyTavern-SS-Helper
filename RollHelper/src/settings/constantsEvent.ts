@@ -430,7 +430,7 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enableOutcomeBranches: true,
   enableExplodeOutcomeBranch: true,
   includeOutcomeInSummary: true,
-  showOutcomePreviewInListCard: true,
+  showOutcomePreviewInListCard: false,
   enableTimeLimit: true,
   minTimeLimitSeconds: 10,
   enableSkillSystem: true,
