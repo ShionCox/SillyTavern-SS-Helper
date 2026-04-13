@@ -785,6 +785,45 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind card visibility remove placeholder">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">暗骰事件卡显示策略</div>
+              <div class="st-roll-item-desc">控制暗骰事件在公开事件列表中是直接移除，还是保留“已暗投”的占位卡。</div>
+            </div>
+            <div class="st-roll-row">
+              <select id="${ids.blindEventCardVisibilityModeId}" data-tip="设置暗骰事件卡在公开面板中的显示方式。">
+                <option value="remove">直接移除</option>
+                <option value="placeholder">保留占位卡</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind prompt inject max count">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">单次 Prompt 最大暗投注入数</div>
+              <div class="st-roll-item-desc">限制一次发给 AI 的暗骰条数，避免提示词膨胀与叙事焦点分散。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.maxBlindGuidanceInjectedPerPromptId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置单次 Prompt 最多注入多少条暗骰引导。",
+                },
+              })}
+            </div>
+          </div>
+
+          ${buildCheckboxItemEvent(
+            ids.enableBlindDebugInfoId,
+            "显示暗骰调试信息",
+            "开启后，暗骰列表会显示更多轮次、楼层、去重键与生命周期状态，便于排查问题。",
+            "blind debug info guidance state floor round dedupe",
+            "开启暗骰调试信息展示。"
+            )}
+
           ${buildCheckboxItemEvent(
             ids.passiveCheckEnabledId,
             "启用被动检定",

@@ -120,6 +120,9 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -268,6 +271,9 @@ export function buildSettingsCardTemplateIdsEvent(
     blindGuidanceTtlSecondsId: deps.SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
     blindGuidanceDedupId: deps.SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
     blindDedupScopeId: deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
+    blindEventCardVisibilityModeId: deps.SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
+    maxBlindGuidanceInjectedPerPromptId: deps.SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
+    enableBlindDebugInfoId: deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
     passiveCheckEnabledId: deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
     passiveFormulaBaseId: deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
     passiveAliasesId: deps.SETTINGS_PASSIVE_ALIASES_ID_Event,

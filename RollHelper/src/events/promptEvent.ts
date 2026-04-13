@@ -28,7 +28,11 @@ import { logger } from "../../index";
 import { appendSdkPluginChatRecord } from "../../../SDK/db";
 import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
 import { AI_SUPPORTED_DICE_SIDES_Event } from "../settings/constantsEvent";
-import { buildAssistantFloorKeyEvent, pruneExpiredBlindGuidanceQueueEvent } from "./roundEvent";
+import {
+  buildAssistantFloorKeyEvent,
+  pruneExpiredBlindGuidanceQueueEvent,
+  updateBlindHistoryStateByRollIdEvent,
+} from "./roundEvent";
 import {
   buildBlindGuidanceBlockEvent,
   buildPassiveDiscoveryBlockEvent,
@@ -461,6 +465,10 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   }
   if (settings.enableOutcomeBranches) {
     lines.push("   - outcomes 走向文本会直接影响后续剧情叙事。");
+    lines.push("   - 严禁在 outcomes.success / failure / explode、desc、dc_reason、note 或任何 rolljson 字段中写入 <rh-trigger>。");
+    lines.push("   - rh-trigger 只能写在最终回复的剧情正文里，而且必须落在真正关键、值得继续调查或点击的短词上。");
+    lines.push("   - 正例：正文写“你注意到书架边缘有一道<rh-trigger action=\"调查\" skill=\"调查\">异常的刮痕</rh-trigger>。”");
+    lines.push("   - 反例：在 outcomes.success、事件 desc 或其他 rolljson 字段里塞入 <rh-trigger>。");
     if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
       lines.push("   - 爆骰触发时优先使用 outcomes.explode。");
       lines.push("   - 如果你设想了“只有爆骰才发生”的特殊后果，就必须同时在 checkDice 中写 !；否则请把该后果合并到 success 或 failure。");
@@ -484,6 +492,8 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
       .join("、") || "洞察、潜行、搜查、历史、调查";
     lines.push("6. 正文中的可交互线索请使用交互标记：");
     lines.push('   - 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" blind="1" sourceId="bookshelf_scratches">异常的刮痕</rh-trigger>');
+    lines.push("   - 只标剧情正文中的关键线索短词或短语，不要放在 rolljson、outcomes、desc、dc_reason、状态标签、规则块或摘要块里。");
+    lines.push("   - 不要把 rh-trigger 写成骰子走向的一部分；走向只负责叙事结果，交互标记只负责正文中的下一步调查入口。");
     lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
     lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
     lines.push("   - difficulty 仅允许 easy / normal / hard / extreme，由系统自动换算阈值；不要手写成功点数。");
@@ -679,6 +689,7 @@ function resolvePromptGuidanceInjectionEvent(
 
 function resolvePromptBlindGuidanceInjectionEvent(
   meta: DiceMetaEvent,
+  settings: DicePluginSettingsEvent,
   userMsgId: string,
   isSameUserPrompt: boolean,
   blindStartTag: string,
@@ -694,7 +705,6 @@ function resolvePromptBlindGuidanceInjectionEvent(
       changedMeta: false,
     };
   }
-  const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
   const pruned = pruneExpiredBlindGuidanceQueueEvent(meta);
   const normalizedQueue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
   if (normalizedQueue.length <= 0) {
@@ -725,22 +735,68 @@ function resolvePromptBlindGuidanceInjectionEvent(
   const nextQueue: BlindGuidanceEvent[] = [];
   const consumed: BlindGuidanceEvent[] = [];
   const now = Date.now();
+  const injectionLimit = Math.max(1, Number(settings.maxBlindGuidanceInjectedPerPrompt) || 1);
   for (const item of normalizedQueue) {
-    if (!item || item.consumed) continue;
-    if (item.expiresAt != null && now > item.expiresAt) continue;
+    if (!item || item.consumed || item.state && item.state !== "queued") {
+      nextQueue.push(item);
+      continue;
+    }
+    if (item.expiresAt != null && now > item.expiresAt) {
+      const expiredItem = {
+        ...item,
+        state: "expired" as const,
+      };
+      nextQueue.push(expiredItem);
+      updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+        state: "expired",
+      });
+      continue;
+    }
     if (item.roundId) {
       if (!currentRound || currentRound.status !== "open" || currentRound.roundId !== item.roundId) {
+        const invalidatedItem = {
+          ...item,
+          state: "invalidated" as const,
+          invalidatedAt: item.invalidatedAt ?? now,
+        };
+        nextQueue.push(invalidatedItem);
+        updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+          state: "invalidated",
+          invalidatedAt: item.invalidatedAt ?? now,
+        });
         continue;
       }
     }
     if (item.sourceFloorKey) {
       if (!currentRound || currentFloorKeys.size <= 0 || !currentFloorKeys.has(item.sourceFloorKey)) {
+        const invalidatedItem = {
+          ...item,
+          state: "invalidated" as const,
+          invalidatedAt: item.invalidatedAt ?? now,
+        };
+        nextQueue.push(invalidatedItem);
+        updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+          state: "invalidated",
+          invalidatedAt: item.invalidatedAt ?? now,
+        });
         continue;
       }
     }
-    consumed.push({
+    if (consumed.length >= injectionLimit) {
+      nextQueue.push(item);
+      continue;
+    }
+    const consumedItem = {
       ...item,
       consumed: true,
+      consumedAt: now,
+      state: "consumed" as const,
+    };
+    consumed.push(consumedItem);
+    nextQueue.push(consumedItem);
+    updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+      consumedAt: now,
+      state: "consumed",
     });
   }
 
@@ -1040,6 +1096,7 @@ export function handlePromptReadyEvent(
   }
   const blindResolved = resolvePromptBlindGuidanceInjectionEvent(
     meta,
+    settings,
     userMsgId,
     isSameUserPrompt,
     blindStartTag,

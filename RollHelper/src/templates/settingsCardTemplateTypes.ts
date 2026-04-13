@@ -61,6 +61,9 @@ export interface SettingsCardTemplateIdsEvent {
   blindGuidanceTtlSecondsId: string;
   blindGuidanceDedupId: string;
   blindDedupScopeId: string;
+  blindEventCardVisibilityModeId: string;
+  maxBlindGuidanceInjectedPerPromptId: string;
+  enableBlindDebugInfoId: string;
   passiveCheckEnabledId: string;
   passiveFormulaBaseId: string;
   passiveAliasesId: string;

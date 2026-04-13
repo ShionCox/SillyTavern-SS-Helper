@@ -599,6 +599,9 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -643,6 +646,9 @@ export interface BindBasicSettingsInputsDepsEvent {
     blindGuidanceTtlSeconds?: number;
     enableBlindGuidanceDedup?: boolean;
     blindDedupScope?: "same_round" | "same_floor";
+    blindEventCardVisibilityMode?: "remove" | "placeholder";
+    maxBlindGuidanceInjectedPerPrompt?: number;
+    enableBlindDebugInfo?: boolean;
     enablePassiveCheck?: boolean;
     passiveFormulaBase?: number;
     passiveSkillAliasesText?: string;
@@ -718,6 +724,15 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const blindDedupScopeInput = document.getElementById(
     deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event
   ) as HTMLSelectElement | null;
+  const blindEventCardVisibilityModeInput = document.getElementById(
+    deps.SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event
+  ) as HTMLSelectElement | null;
+  const maxBlindGuidanceInjectedPerPromptInput = document.getElementById(
+    deps.SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event
+  ) as HTMLInputElement | null;
+  const enableBlindDebugInfoInput = document.getElementById(
+    deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -881,6 +896,19 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   blindDedupScopeInput?.addEventListener("change", (event) => {
     const value = String((event.target as HTMLSelectElement).value || "");
     deps.updateSettingsEvent({ blindDedupScope: value === "same_floor" ? "same_floor" : "same_round" });
+  });
+  blindEventCardVisibilityModeInput?.addEventListener("change", (event) => {
+    const value = String((event.target as HTMLSelectElement).value || "");
+    deps.updateSettingsEvent({
+      blindEventCardVisibilityMode: value === "placeholder" ? "placeholder" : "remove",
+    });
+  });
+  maxBlindGuidanceInjectedPerPromptInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ maxBlindGuidanceInjectedPerPrompt: value });
+  });
+  enableBlindDebugInfoInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableBlindDebugInfo: Boolean((event.target as HTMLInputElement).checked) });
   });
   passiveCheckEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enablePassiveCheck: Boolean((event.target as HTMLInputElement).checked) });
@@ -1083,6 +1111,9 @@ export interface SyncSettingsUiDepsEvent {
     blindGuidanceTtlSeconds: number;
     enableBlindGuidanceDedup: boolean;
     blindDedupScope: "same_round" | "same_floor";
+    blindEventCardVisibilityMode: "remove" | "placeholder";
+    maxBlindGuidanceInjectedPerPrompt: number;
+    enableBlindDebugInfo: boolean;
     enablePassiveCheck: boolean;
     passiveFormulaBase: number;
     passiveSkillAliasesText: string;
@@ -1123,6 +1154,9 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -1219,6 +1253,15 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const blindDedupScopeInput = document.getElementById(
     deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event
   ) as HTMLSelectElement | null;
+  const blindEventCardVisibilityModeInput = document.getElementById(
+    deps.SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event
+  ) as HTMLSelectElement | null;
+  const maxBlindGuidanceInjectedPerPromptInput = document.getElementById(
+    deps.SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event
+  ) as HTMLInputElement | null;
+  const enableBlindDebugInfoInput = document.getElementById(
+    deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -1328,6 +1371,16 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (blindDedupScopeInput) {
     blindDedupScopeInput.value = settings.blindDedupScope === "same_floor" ? "same_floor" : "same_round";
+  }
+  if (blindEventCardVisibilityModeInput) {
+    blindEventCardVisibilityModeInput.value =
+      settings.blindEventCardVisibilityMode === "placeholder" ? "placeholder" : "remove";
+  }
+  if (maxBlindGuidanceInjectedPerPromptInput) {
+    maxBlindGuidanceInjectedPerPromptInput.value = String(settings.maxBlindGuidanceInjectedPerPrompt);
+  }
+  if (enableBlindDebugInfoInput) {
+    enableBlindDebugInfoInput.checked = Boolean(settings.enableBlindDebugInfo);
   }
   if (passiveCheckEnabledInput) {
     passiveCheckEnabledInput.checked = Boolean(settings.enablePassiveCheck);

@@ -45,6 +45,99 @@ export interface BaseRollCommandDepsEvent {
   playDiceRevealOnlyEvent?: () => Promise<void>;
 }
 
+type ParsedBlindRollInputEvent = {
+  diceExpr: string;
+  skillName: string;
+  targetLabel: string;
+  note: string;
+};
+
+/**
+ * 功能：判断一段文本是否看起来像骰子表达式。
+ * @param raw 待判断文本。
+ * @returns 若文本符合常见骰式格式则返回 true。
+ */
+function isLikelyDiceExprEvent(raw: string): boolean {
+  return /^\d+d\d+(?:!|kh\d+|kl\d+|[+-]\d+)*$/i.test(String(raw ?? "").trim());
+}
+
+/**
+ * 功能：从无空格的自然输入中按白名单技能前缀拆出技能与目标。
+ * @param raw 原始输入。
+ * @param settings 当前设置。
+ * @returns 命中的技能名与目标；未命中时返回空字符串。
+ */
+function resolveBlindSkillPrefixEvent(
+  raw: string,
+  settings: DicePluginSettingsEvent
+): { skillName: string; targetLabel: string } {
+  const normalizedRaw = String(raw ?? "").trim();
+  if (!normalizedRaw) {
+    return { skillName: "", targetLabel: "" };
+  }
+  const candidates = String(settings.defaultBlindSkillsText ?? "")
+    .split(/[\n,|]+/)
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  for (const skillName of candidates) {
+    if (!normalizedRaw.startsWith(skillName)) continue;
+    const targetLabel = normalizedRaw.slice(skillName.length).trim();
+    return { skillName, targetLabel };
+  }
+  return { skillName: "", targetLabel: "" };
+}
+
+/**
+ * 功能：把 `/broll` 输入解析为结构化暗骰请求。
+ * @param raw 未命名参数原文。
+ * @param namedArgs 命名参数集合。
+ * @param settings 当前设置。
+ * @returns 结构化暗骰输入。
+ */
+function parseBlindRollInputEvent(
+  raw: string,
+  namedArgs: Record<string, any>,
+  settings: DicePluginSettingsEvent
+): ParsedBlindRollInputEvent {
+  const rawText = String(raw ?? "").trim();
+  const namedSkill = String(namedArgs.skill ?? namedArgs.s ?? "").trim();
+  const namedTarget = String(namedArgs.target ?? namedArgs.t ?? "").trim();
+  const namedNote = String(namedArgs.note ?? namedArgs.n ?? "").trim();
+  const namedDiceExpr = String(namedArgs.dice ?? namedArgs.expr ?? "").trim();
+
+  let diceExpr = isLikelyDiceExprEvent(namedDiceExpr) ? namedDiceExpr : "";
+  let skillName = namedSkill;
+  let targetLabel = namedTarget;
+
+  if (!diceExpr && rawText && isLikelyDiceExprEvent(rawText)) {
+    diceExpr = rawText;
+  }
+
+  if (!diceExpr && !skillName && rawText) {
+    const tokens = rawText.split(/\s+/).filter(Boolean);
+    if (tokens.length > 1) {
+      skillName = tokens[0] ?? "";
+      targetLabel = targetLabel || tokens.slice(1).join(" ").trim();
+    } else {
+      const prefixed = resolveBlindSkillPrefixEvent(rawText, settings);
+      skillName = prefixed.skillName || rawText;
+      targetLabel = targetLabel || prefixed.targetLabel;
+    }
+  }
+
+  if (!diceExpr) {
+    diceExpr = "1d20";
+  }
+
+  return {
+    diceExpr,
+    skillName: String(skillName ?? "").trim(),
+    targetLabel: String(targetLabel ?? "").trim(),
+    note: namedNote,
+  };
+}
+
 export function registerBaseMacrosAndCommandsEvent(
   deps: BaseRollCommandDepsEvent
 ): void {
@@ -135,8 +228,33 @@ export function registerBaseMacrosAndCommandsEvent(
     SlashCommand.fromProps({
       name: "broll",
       aliases: ["blindroll"],
-      returns: "暗骰：支持 /broll 1d20、/broll 察觉、/broll 调查宝箱",
-      namedArgumentList: [],
+      returns: "暗骰：支持 /broll 调查 宝箱、/broll skill=调查 target=宝箱、/broll 1d20",
+      namedArgumentList: [
+        SlashCommandArgument.fromProps({
+          name: "skill",
+          description: "技能名，例如 调查、察觉。",
+          typeList: ARGUMENT_TYPE.STRING,
+          isRequired: false,
+        }),
+        SlashCommandArgument.fromProps({
+          name: "target",
+          description: "目标或对象说明。",
+          typeList: ARGUMENT_TYPE.STRING,
+          isRequired: false,
+        }),
+        SlashCommandArgument.fromProps({
+          name: "note",
+          description: "附加备注，仅写入暗骰历史与引导。",
+          typeList: ARGUMENT_TYPE.STRING,
+          isRequired: false,
+        }),
+        SlashCommandArgument.fromProps({
+          name: "expr",
+          description: "覆盖默认骰式，例如 1d100。",
+          typeList: ARGUMENT_TYPE.STRING,
+          isRequired: false,
+        }),
+      ],
       unnamedArgumentList: [
         SlashCommandArgument.fromProps({
           description: "技能名或骰子表达式；若不是骰式则按技能名处理，默认使用 1d20。",
@@ -144,15 +262,18 @@ export function registerBaseMacrosAndCommandsEvent(
           isRequired: false,
         }),
       ],
-      callback: async (_namedArgs: Record<string, any>, unnamedArgs: any) => {
+      callback: async (namedArgs: Record<string, any>, unnamedArgs: any) => {
         const raw = String(unnamedArgs ?? "").trim();
         const settings = getSettingsEvent();
         if (!settings.enableBlindRoll) {
           appendToConsoleEvent("暗骰功能已关闭，请先在设置中启用。", "warn");
           return "";
         }
-        const expr = /\d+d\d+/i.test(raw) ? raw : "1d20";
-        const skillName = raw && !/\d+d\d+/i.test(raw) ? raw : "";
+        const parsedInput = parseBlindRollInputEvent(raw, namedArgs, settings);
+        const expr = parsedInput.diceExpr;
+        const skillName = parsedInput.skillName;
+        const targetLabel = parsedInput.targetLabel || skillName || expr;
+        const note = parsedInput.note;
         const meta = getDiceMetaEvent();
         const round = meta.pendingRound && meta.pendingRound.status === "open" ? meta.pendingRound : null;
         if (!round || !Array.isArray(round.sourceAssistantMsgIds) || round.sourceAssistantMsgIds.length <= 0) {
@@ -168,10 +289,10 @@ export function registerBaseMacrosAndCommandsEvent(
         const dedupeKey = buildBlindGuidanceDedupKeyEvent({
           roundId: round.roundId,
           skill: skillName || "未指定",
-          targetLabel: skillName || expr,
+          targetLabel,
           sourceFloorKey,
           origin: "slash_broll",
-        });
+        }, settings);
         const enqueueCheck = canEnqueueBlindGuidanceEvent({
           meta,
           settings,
@@ -207,12 +328,14 @@ export function registerBaseMacrosAndCommandsEvent(
             success: null,
             resultGrade: natState === "nat20" ? "critical_success" : natState === "nat1" ? "critical_failure" : total >= 10 ? "success" : "failure",
             natState,
+            targetLabel,
             rolledAt: now,
             source: "blind_manual_roll",
             roundId: round.roundId,
             sourceAssistantMsgId: sourceAssistantMsgId || undefined,
             sourceFloorKey,
             origin: "slash_broll",
+            note: note || undefined,
             createdAt: now,
             consumed: false,
             dedupeKey,
@@ -230,7 +353,7 @@ export function registerBaseMacrosAndCommandsEvent(
           }
           appendBlindHistoryFromGuidanceEvent(meta, blindItem, appendBlindHistoryRecordEvent);
           saveMetadataSafeEvent();
-          appendToConsoleEvent("暗骰已记录，可在小工具栏的“暗骰列表”中查看。");
+          appendToConsoleEvent(`暗骰已记录：${skillName || expr}${targetLabel ? ` → ${targetLabel}` : ""}`);
           if (settings.blindUiWarnInConsole) {
             appendToConsoleEvent("查看暗骰真实结果会破坏跑团体验哦。", "warn");
           }

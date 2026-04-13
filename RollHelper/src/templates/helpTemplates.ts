@@ -9,6 +9,9 @@ export function buildRollCommandHelpTemplateEvent(): string {
         <li><code>/roll 3d6+2</code></li>
         <li><code>/roll 2d10-1</code></li>
         <li><code>/broll 察觉</code>（按技能名发起暗骰，默认使用 <code>1d20</code>）</li>
+        <li><code>/broll 调查 宝箱</code>（首词按技能，剩余内容按目标）</li>
+        <li><code>/broll 调查宝箱</code>（会优先按白名单技能前缀尝试拆分）</li>
+        <li><code>/broll skill=调查 target=宝箱</code>（命名参数写法）</li>
         <li><code>/broll 1d20</code>（直接发起暗骰）</li>
         <li><code>/roll 1d6!+2</code>（<code>!</code> 表示爆骰）</li>
         <li><code>/roll 2d20kh1</code>（保留最高 1 个）</li>

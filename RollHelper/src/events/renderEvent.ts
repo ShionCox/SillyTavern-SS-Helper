@@ -661,7 +661,8 @@ export function buildEventListCardEvent(
   deps.ensureRoundEventTimersSyncedEvent(round);
   const visibleEvents = round.events.filter((event) => {
     const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
-    return !isBlindResultRecordEvent(lastRecord);
+    if (!isBlindResultRecordEvent(lastRecord)) return true;
+    return settings.blindEventCardVisibilityMode === "placeholder";
   });
   if (visibleEvents.length <= 0) return "";
   const buildItemHtmlByVariantEvent = (templateVariant: "desktop" | "mobile"): string =>
@@ -669,6 +670,7 @@ export function buildEventListCardEvent(
     .map((event) => {
       const compare = event.compare ?? ">=";
       const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
+      const isBlindRecord = isBlindResultRecordEvent(lastRecord);
       const runtime = deps.getEventRuntimeViewStateEvent(round, event, Date.now());
       const runtimeStyle = deps.getRuntimeToneStyleEvent(runtime.tone);
       const detailsIdAttr = deps.escapeAttrEvent(
@@ -685,7 +687,7 @@ export function buildEventListCardEvent(
           deps.escapeHtmlEvent(deps.formatRollRecordSummaryEvent(lastRecord, event))
         )
         : "";
-      const outcomePreviewHtml = buildOutcomePreviewHtmlRichEvent(event, settings, deps.escapeHtmlEvent);
+      const outcomePreviewHtml = isBlindRecord ? "" : buildOutcomePreviewHtmlRichEvent(event, settings, deps.escapeHtmlEvent);
 
       const deadlineAttr =
         typeof event.deadlineAt === "number" && Number.isFinite(event.deadlineAt)
@@ -695,7 +697,7 @@ export function buildEventListCardEvent(
       const buttonStateStyle = runtime.locked
         ? "opacity:0.4;cursor:not-allowed;filter:grayscale(1);"
         : "cursor:pointer;";
-      const showRollButton = !runtime.locked && !lastRecord;
+      const showRollButton = !runtime.locked && !lastRecord && !isBlindRecord;
       const timeLimitLabel = settings.enableTimeLimit ? (event.timeLimit ? event.timeLimit : "无") : "关闭";
       const timeLimitLabelDisplay = settings.enableTimeLimit
         ? formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无")
@@ -808,7 +810,9 @@ export function buildEventListCardEvent(
       })();
 
       const rollModeBadgeHtml =
-        event.rollMode === "auto"
+        isBlindRecord
+          ? `<span class="st-rh-badge-role st-rh-badge-role-auto">${deps.escapeHtmlEvent("已暗投")}</span>`
+          : event.rollMode === "auto"
           ? `<span class="st-rh-badge-role st-rh-badge-role-auto">${deps.escapeHtmlEvent("自动结算")}</span>`
           : `<span class="st-rh-badge-role st-rh-badge-role-manual">${deps.escapeHtmlEvent("需检定")}</span>`;
 
@@ -818,30 +822,34 @@ export function buildEventListCardEvent(
         titleHtml: deps.escapeHtmlEvent(event.title),
         rollModeBadgeHtml,
         eventIdHtml: deps.escapeHtmlEvent(event.id),
-        collapsedCheckHtml: deps.escapeHtmlEvent(`${event.checkDice} ${compare} ${String(event.dc)}`),
-        collapsedRuntimeHtml: deps.escapeHtmlEvent(runtime.text),
-        descHtml: deps.escapeHtmlEvent(event.desc),
+        collapsedCheckHtml: deps.escapeHtmlEvent(isBlindRecord ? "已暗投" : `${event.checkDice} ${compare} ${String(event.dc)}`),
+        collapsedRuntimeHtml: deps.escapeHtmlEvent(isBlindRecord ? "结果将通过后续叙事体现" : runtime.text),
+        descHtml: deps.escapeHtmlEvent(isBlindRecord ? "该事件已按暗骰方式处理，真实结果不会在公开面板显示。" : event.desc),
         targetHtml: deps.escapeHtmlEvent(event.targetLabel),
         skillHtml: deps.escapeHtmlEvent(event.skill),
         skillTitleAttr: deps.escapeAttrEvent(skillHoverTextFinal),
         advantageStateHtml: deps.escapeHtmlEvent(advantageStateText),
-        modifierTextHtml,
-        checkDiceHtml: deps.escapeHtmlEvent(event.checkDice),
+        modifierTextHtml: isBlindRecord ? "" : modifierTextHtml,
+        checkDiceHtml: deps.escapeHtmlEvent(isBlindRecord ? "结果已隐藏" : event.checkDice),
         difficultyHtml: deps.escapeHtmlEvent(difficultyText),
         difficultyTitleAttr: deps.escapeAttrEvent(difficultyTitleAttr),
-        compareHtml: deps.escapeHtmlEvent(compare),
-        dcText: String(event.dc),
-        dcReasonHtml: dcDescriptionHtml,
-        timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabelDisplay),
+        compareHtml: deps.escapeHtmlEvent(isBlindRecord ? "?" : compare),
+        dcText: isBlindRecord ? "已隐藏" : String(event.dc),
+        dcReasonHtml: isBlindRecord ? "" : dcDescriptionHtml,
+        timeLimitHtml: deps.escapeHtmlEvent(isBlindRecord ? "已处理" : timeLimitLabelDisplay),
         roundIdAttr: deps.escapeAttrEvent(round.roundId),
         eventIdAttr: deps.escapeAttrEvent(event.id),
         deadlineAttr: deps.escapeAttrEvent(deadlineAttr),
-        runtimeStyleAttr: `style="border:${runtimeStyle.border};background:${runtimeStyle.background};color:${runtimeStyle.color};"`,
-        runtimeTextHtml: deps.escapeHtmlEvent(runtime.text),
+        runtimeStyleAttr: isBlindRecord
+          ? `style="border:1px solid rgba(127,109,255,0.45);background:rgba(44,35,89,0.45);color:#d9d2ff;"`
+          : `style="border:${runtimeStyle.border};background:${runtimeStyle.background};color:${runtimeStyle.color};"`,
+        runtimeTextHtml: deps.escapeHtmlEvent(isBlindRecord ? "已暗投" : runtime.text),
         rolledBlockHtml: rolledBlock,
         outcomePreviewHtml,
-        commandTextHtml: `/eventroll roll ${deps.escapeHtmlEvent(event.id)}`,
-        rollButtonHtml,
+        commandTextHtml: isBlindRecord ? "" : `/eventroll roll ${deps.escapeHtmlEvent(event.id)}`,
+        rollButtonHtml: isBlindRecord
+          ? `<span class="st-rh-summary-lock st-rh-mono" style="color:#c7b9ff;border:1px dashed rgba(151,121,255,0.35);"><i class="fa-solid fa-user-secret fa-fw st-rh-fa-icon" style="margin-right:6px;"></i>已暗投</span>`
+          : rollButtonHtml,
       });
     })
     .join("");

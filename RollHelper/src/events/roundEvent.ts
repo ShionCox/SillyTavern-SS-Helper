@@ -1,6 +1,7 @@
 import type { DiceOptions, DiceResult } from "../types/diceEvent";
 import type {
   AdvantageStateEvent,
+  BlindGuidanceStateEvent,
   BlindHistoryItemEvent,
   BlindGuidanceEvent,
   CompareOperatorEvent,
@@ -195,6 +196,28 @@ function normalizeBlindSkillNameEvent(raw: string): string {
   return String(raw ?? "").trim().toLowerCase();
 }
 
+function isBlindGuidanceActiveStateEvent(state: BlindGuidanceStateEvent | undefined): boolean {
+  return !state || state === "queued";
+}
+
+function matchesBlindDedupScopeEvent(args: {
+  existing: BlindGuidanceEvent;
+  incoming: {
+    roundId?: string;
+    sourceFloorKey?: string | null;
+  };
+  settings: DicePluginSettingsEvent;
+}): boolean {
+  if (args.settings.blindDedupScope === "same_floor") {
+    const existingFloorKey = String(args.existing.sourceFloorKey ?? "").trim();
+    const incomingFloorKey = String(args.incoming.sourceFloorKey ?? "").trim();
+    return !!existingFloorKey && existingFloorKey === incomingFloorKey;
+  }
+  const existingRoundId = String(args.existing.roundId ?? "").trim();
+  const incomingRoundId = String(args.incoming.roundId ?? "").trim();
+  return !!existingRoundId && existingRoundId === incomingRoundId;
+}
+
 export function parseAllowedBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<string> {
   return new Set(
     String(settings.defaultBlindSkillsText ?? "")
@@ -224,7 +247,11 @@ export function countQueuedBlindGuidanceInRoundEvent(
 ): number {
   if (!roundId) return 0;
   const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
-  return queue.filter((item) => item?.roundId === roundId && item?.consumed !== true).length;
+  return queue.filter((item) =>
+    item?.roundId === roundId
+    && item?.consumed !== true
+    && isBlindGuidanceActiveStateEvent(item?.state)
+  ).length;
 }
 
 export function buildBlindGuidanceDedupKeyEvent(input: {
@@ -235,7 +262,7 @@ export function buildBlindGuidanceDedupKeyEvent(input: {
   sourceFloorKey?: string | null;
   sourceId?: string;
   origin?: BlindGuidanceEvent["origin"];
-}): string {
+}, settings: Pick<DicePluginSettingsEvent, "blindDedupScope">): string {
   const roundId = String(input.roundId ?? "").trim() || "_";
   const skill = normalizeBlindSkillNameEvent(input.skill ?? "") || "_";
   const eventId = String(input.eventId ?? "").trim();
@@ -243,14 +270,15 @@ export function buildBlindGuidanceDedupKeyEvent(input: {
   const sourceFloorKey = String(input.sourceFloorKey ?? "").trim() || "_";
   const sourceId = String(input.sourceId ?? "").trim() || "_";
   const origin = input.origin ?? "event_blind";
+  const scopeKey = settings.blindDedupScope === "same_floor" ? sourceFloorKey : roundId;
 
   if (origin === "event_blind" && eventId) {
-    return `event:${roundId}:${eventId}`;
+    return `event:${scopeKey}:${eventId}`;
   }
   if (origin === "interactive_blind") {
-    return `interactive:${roundId}:${sourceFloorKey}:${sourceId}`;
+    return `interactive:${scopeKey}:${sourceId}`;
   }
-  return `slash:${roundId}:${skill}:${targetLabel}`;
+  return `slash:${scopeKey}:${skill}:${targetLabel}`;
 }
 
 export function pruneExpiredBlindGuidanceQueueEvent(
@@ -259,14 +287,33 @@ export function pruneExpiredBlindGuidanceQueueEvent(
 ): boolean {
   const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
   const openRoundId = meta.pendingRound?.status === "open" ? meta.pendingRound.roundId : "";
-  const nextQueue = queue.filter((item) => {
-    if (!item || item.consumed) return false;
-    if (item.expiresAt != null && item.expiresAt <= now) return false;
-    if (item.roundId && (!openRoundId || item.roundId !== openRoundId)) return false;
-    return true;
+  const nextQueue = queue.map((item) => {
+    if (!item) return item;
+    if (!isBlindGuidanceActiveStateEvent(item.state)) return item;
+    if (item.expiresAt != null && item.expiresAt <= now) {
+      updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+        state: "expired",
+      });
+      return {
+        ...item,
+        state: "expired" as BlindGuidanceStateEvent,
+      };
+    }
+    if (item.roundId && (!openRoundId || item.roundId !== openRoundId)) {
+      updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+        state: "invalidated",
+        invalidatedAt: item.invalidatedAt ?? now,
+      });
+      return {
+        ...item,
+        state: "invalidated" as BlindGuidanceStateEvent,
+        invalidatedAt: item.invalidatedAt ?? now,
+      };
+    }
+    return item;
   });
   meta.pendingBlindGuidanceQueue = nextQueue;
-  return nextQueue.length !== queue.length;
+  return JSON.stringify(nextQueue) !== JSON.stringify(queue);
 }
 
 export function canEnqueueBlindGuidanceEvent(args: {
@@ -299,7 +346,8 @@ export function canEnqueueBlindGuidanceEvent(args: {
   }
 
   const queue = Array.isArray(args.meta.pendingBlindGuidanceQueue) ? args.meta.pendingBlindGuidanceQueue : [];
-  if (queue.length >= Math.max(1, Number(args.settings.maxQueuedBlindGuidance) || 1)) {
+  const activeQueue = queue.filter((item) => item && item.consumed !== true && isBlindGuidanceActiveStateEvent(item.state));
+  if (activeQueue.length >= Math.max(1, Number(args.settings.maxQueuedBlindGuidance) || 1)) {
     return {
       ok: false,
       reason: "待处理暗骰队列已满，请先推进对话消费已有暗骰。",
@@ -307,11 +355,24 @@ export function canEnqueueBlindGuidanceEvent(args: {
   }
 
   if (args.settings.enableBlindGuidanceDedup) {
-    const duplicated = queue.some((item) => {
+    const duplicated = activeQueue.find((item) => {
       if (!item || item.consumed) return false;
+      if (!matchesBlindDedupScopeEvent({
+        existing: item,
+        incoming: {
+          roundId: round?.roundId,
+          sourceFloorKey: args.sourceFloorKey,
+        },
+        settings: args.settings,
+      })) {
+        return false;
+      }
       return item.dedupeKey === args.dedupeKey;
     });
     if (duplicated) {
+      logger.info(
+        `[暗骰去重] 已拒绝重复暗骰 scope=${args.settings.blindDedupScope} key=${args.dedupeKey} existing=${duplicated.rollId}`
+      );
       return {
         ok: false,
         reason: "相同内容的暗骰已存在，本轮无需重复暗骰。",
@@ -345,7 +406,7 @@ export function enqueueBlindGuidanceSafeEvent(args: {
       sourceFloorKey,
       sourceId: args.item.sourceId,
       origin: args.item.origin,
-    });
+    }, args.settings);
   const allowed = canEnqueueBlindGuidanceEvent({
     meta: args.meta,
     settings: args.settings,
@@ -367,6 +428,7 @@ export function enqueueBlindGuidanceSafeEvent(args: {
     createdAt: args.item.createdAt ?? now,
     expiresAt: args.item.expiresAt ?? (now + ttlMs),
     consumed: false,
+    state: "queued",
     dedupeKey,
   });
   return { ok: true };
@@ -477,8 +539,93 @@ export function normalizeBlindHistoryItemEvent(input: BlindHistoryItemEvent): Bl
         ? input.origin
         : undefined,
     sourceAssistantMsgId: String(input.sourceAssistantMsgId ?? "").trim() || undefined,
+    sourceFloorKey: String(input.sourceFloorKey ?? "").trim() || undefined,
     note: String(input.note ?? "").trim() || undefined,
+    createdAt: Number.isFinite(Number(input.createdAt)) ? Number(input.createdAt) : undefined,
+    expiresAt: Number.isFinite(Number(input.expiresAt)) ? Number(input.expiresAt) : undefined,
+    consumedAt: Number.isFinite(Number(input.consumedAt)) ? Number(input.consumedAt) : undefined,
+    invalidatedAt: Number.isFinite(Number(input.invalidatedAt)) ? Number(input.invalidatedAt) : undefined,
+    archivedAt: Number.isFinite(Number(input.archivedAt)) ? Number(input.archivedAt) : undefined,
+    dedupeKey: String(input.dedupeKey ?? "").trim() || undefined,
+    state:
+      input.state === "consumed"
+      || input.state === "expired"
+      || input.state === "invalidated"
+      || input.state === "archived"
+        ? input.state
+        : "queued",
   };
+}
+
+/**
+ * 功能：根据暗骰引导条目推导其当前生命周期状态。
+ * 参数：
+ *   item：暗骰引导条目。
+ *   now：当前时间戳。
+ * 返回：
+ *   BlindGuidanceStateEvent：当前生命周期状态。
+ */
+export function resolveBlindGuidanceStateEvent(
+  item: BlindGuidanceEvent | BlindHistoryItemEvent | null | undefined,
+  now = Date.now()
+): BlindGuidanceStateEvent {
+  if (!item) return "invalidated";
+  if (item.state === "consumed" || item.state === "expired" || item.state === "invalidated" || item.state === "archived") {
+    return item.state;
+  }
+  if (Number.isFinite(Number(item.expiresAt)) && Number(item.expiresAt) <= now) {
+    return "expired";
+  }
+  if (Number.isFinite(Number(item.invalidatedAt))) {
+    return "invalidated";
+  }
+  if (Number.isFinite(Number(item.consumedAt))) {
+    return "consumed";
+  }
+  if (Number.isFinite(Number(item.archivedAt))) {
+    return "archived";
+  }
+  return "queued";
+}
+
+/**
+ * 功能：把暗骰生命周期状态转换为可读中文标签。
+ * 参数：
+ *   state：暗骰生命周期状态。
+ * 返回：
+ *   string：用于界面展示的中文状态标签。
+ */
+export function formatBlindGuidanceStateLabelEvent(state: BlindGuidanceStateEvent): string {
+  if (state === "consumed") return "已消费";
+  if (state === "expired") return "已过期";
+  if (state === "invalidated") return "已失效";
+  if (state === "archived") return "已归档";
+  return "待注入";
+}
+
+/**
+ * 功能：按 rollId 同步暗骰历史条目的生命周期状态。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   rollId：暗骰记录 ID。
+ *   patch：需要写回历史条目的字段。
+ * 返回：
+ *   void
+ */
+export function updateBlindHistoryStateByRollIdEvent(
+  meta: DiceMetaEvent,
+  rollId: string,
+  patch: Partial<BlindHistoryItemEvent>
+): void {
+  const list = ensureBlindHistoryEvent(meta);
+  const normalizedRollId = String(rollId ?? "").trim();
+  if (!normalizedRollId) return;
+  const index = list.findIndex((item) => String(item?.rollId ?? "").trim() === normalizedRollId);
+  if (index < 0) return;
+  list[index] = normalizeBlindHistoryItemEvent({
+    ...list[index],
+    ...patch,
+  });
 }
 
 /**
@@ -553,6 +700,8 @@ export function appendBlindHistoryFromRecordEvent(
     source: record.source,
     origin,
     sourceAssistantMsgId: String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim() || undefined,
+    sourceFloorKey: buildAssistantFloorKeyEvent(String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim()) || undefined,
+    state: "queued",
   }, persistBlindHistoryRecordEvent);
 }
 
@@ -581,7 +730,15 @@ export function appendBlindHistoryFromGuidanceEvent(
     source: item.source,
     origin: item.origin,
     sourceAssistantMsgId: item.sourceAssistantMsgId,
+    sourceFloorKey: item.sourceFloorKey,
     note: item.note,
+    createdAt: item.createdAt,
+    expiresAt: item.expiresAt,
+    consumedAt: item.consumedAt,
+    invalidatedAt: item.invalidatedAt,
+    archivedAt: item.archivedAt,
+    dedupeKey: item.dedupeKey,
+    state: resolveBlindGuidanceStateEvent(item),
   }, persistBlindHistoryRecordEvent);
 }
 
@@ -627,7 +784,7 @@ function enqueueBlindGuidanceFromRecordEvent(
         targetLabel: record.targetLabelUsed || event.targetLabel,
         sourceFloorKey: sourceAssistantMsgId ? buildAssistantFloorKeyEvent(sourceAssistantMsgId) || undefined : undefined,
         origin: "event_blind",
-      }),
+      }, settings),
     }),
     now: createdAt,
   });
@@ -848,9 +1005,18 @@ export function invalidatePendingRoundFloorEvent(
   }
 
   const blindQueue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
-  const nextBlindQueue = blindQueue.filter((item) => {
-    if (!item?.sourceAssistantMsgId) return true;
-    return !isSameAssistantFloorEvent(item.sourceAssistantMsgId, assistantMsgId);
+  const nextBlindQueue = blindQueue.map((item) => {
+    if (!item?.sourceAssistantMsgId) return item;
+    if (!isSameAssistantFloorEvent(item.sourceAssistantMsgId, assistantMsgId)) return item;
+    updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
+      state: "invalidated",
+      invalidatedAt: Date.now(),
+    });
+    return {
+      ...item,
+      state: "invalidated",
+      invalidatedAt: Date.now(),
+    };
   });
 
   const resultGuidanceQueue = Array.isArray(meta.pendingResultGuidanceQueue) ? meta.pendingResultGuidanceQueue : [];
@@ -861,7 +1027,7 @@ export function invalidatePendingRoundFloorEvent(
     || nextRolls.length !== round.rolls.length
     || nextSourceAssistantMsgIds.length !== round.sourceAssistantMsgIds.length
     || timerChanged
-    || nextBlindQueue.length !== blindQueue.length
+    || JSON.stringify(nextBlindQueue) !== JSON.stringify(blindQueue)
     || nextResultGuidanceQueue.length !== resultGuidanceQueue.length;
 
   if (!changed) return false;

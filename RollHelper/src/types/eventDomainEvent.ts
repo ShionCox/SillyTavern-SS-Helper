@@ -19,6 +19,12 @@ export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
 export type RollVisibilityEvent = "public" | "blind" | "passive";
+export type BlindGuidanceStateEvent =
+  | "queued"
+  | "consumed"
+  | "expired"
+  | "invalidated"
+  | "archived";
 export type EventResultGradeEvent =
   | "critical_success"
   | "partial_success"
@@ -71,6 +77,9 @@ export interface DicePluginSettingsEvent {
   blindGuidanceTtlSeconds: number;
   enableBlindGuidanceDedup: boolean;
   blindDedupScope: "same_round" | "same_floor";
+  blindEventCardVisibilityMode: "remove" | "placeholder";
+  maxBlindGuidanceInjectedPerPrompt: number;
+  enableBlindDebugInfo: boolean;
   enablePassiveCheck: boolean;
   passiveFormulaBase: number;
   passiveSkillAliasesText: string;
@@ -252,6 +261,10 @@ export interface BlindGuidanceEvent {
   createdAt?: number;
   expiresAt?: number | null;
   consumed?: boolean;
+  consumedAt?: number;
+  invalidatedAt?: number;
+  archivedAt?: number;
+  state?: BlindGuidanceStateEvent;
   dedupeKey?: string;
 }
 
@@ -267,7 +280,15 @@ export interface BlindHistoryItemEvent {
   source: EventRollSourceEvent;
   origin?: "slash_broll" | "event_blind" | "interactive_blind";
   sourceAssistantMsgId?: string;
+  sourceFloorKey?: string;
   note?: string;
+  createdAt?: number;
+  expiresAt?: number | null;
+  consumedAt?: number;
+  invalidatedAt?: number;
+  archivedAt?: number;
+  dedupeKey?: string;
+  state?: BlindGuidanceStateEvent;
 }
 
 export interface InteractiveTriggerEvent {

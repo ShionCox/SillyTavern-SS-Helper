@@ -820,6 +820,13 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.enableBlindGuidanceDedup = (source as any)?.enableBlindGuidanceDedup !== false;
   bucket.blindDedupScope =
     (source as any)?.blindDedupScope === "same_floor" ? "same_floor" : "same_round";
+  bucket.blindEventCardVisibilityMode =
+    (source as any)?.blindEventCardVisibilityMode === "placeholder" ? "placeholder" : "remove";
+  const maxBlindGuidanceInjectedPerPromptRaw = Number((source as any)?.maxBlindGuidanceInjectedPerPrompt);
+  bucket.maxBlindGuidanceInjectedPerPrompt = Number.isFinite(maxBlindGuidanceInjectedPerPromptRaw)
+    ? Math.max(1, Math.floor(maxBlindGuidanceInjectedPerPromptRaw))
+    : DEFAULT_SETTINGS_Event.maxBlindGuidanceInjectedPerPrompt;
+  bucket.enableBlindDebugInfo = (source as any)?.enableBlindDebugInfo === true;
   bucket.enablePassiveCheck = bucket.enablePassiveCheck !== false;
   const passiveFormulaBaseRaw = Number((source as any)?.passiveFormulaBase);
   bucket.passiveFormulaBase = Number.isFinite(passiveFormulaBaseRaw)

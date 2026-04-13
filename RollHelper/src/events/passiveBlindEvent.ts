@@ -293,7 +293,7 @@ export function buildPassiveDiscoveryBlockEvent(
       )}"`
     );
     lines.push(`  reveal: ${normalizeInlineTextEvent(item.content)}`);
-    lines.push("  instruction: 这是被动检定自动发现的信息。请自然描写，不要提及系统、DC、被动检定或暗骰；如果其中有值得继续追查的短词或线索，可以继续用 rh-trigger 标记。");
+    lines.push("  instruction: 这是被动检定自动发现的信息。请自然描写，不要提及系统、DC、被动检定或暗骰；如果其中有值得继续追查的线索，只能在最终剧情正文的关键短词上使用 rh-trigger，严禁写进 outcomes、事件 desc 或其他结构化字段。");
   }
   lines.push(endTag);
   return lines.join("\n");
@@ -329,6 +329,10 @@ export function normalizeBlindGuidanceEvent(input: {
   createdAt?: number;
   expiresAt?: number | null;
   consumed?: boolean;
+  consumedAt?: number;
+  invalidatedAt?: number;
+  archivedAt?: number;
+  state?: BlindGuidanceEvent["state"];
   dedupeKey?: string;
 }): BlindGuidanceEvent {
   return {
@@ -353,6 +357,10 @@ export function normalizeBlindGuidanceEvent(input: {
     createdAt: input.createdAt,
     expiresAt: input.expiresAt,
     consumed: input.consumed === true,
+    consumedAt: input.consumedAt,
+    invalidatedAt: input.invalidatedAt,
+    archivedAt: input.archivedAt,
+    state: input.state,
     dedupeKey: input.dedupeKey,
   };
 }
@@ -402,7 +410,7 @@ export function buildPassiveWorldbookTemplateEvent(): string {
     "2. `type` 目前支持 perception / investigation / insight。",
     "3. `dc` 是被动检定门槛，`id` 用于去重，`priority` 越高越优先注入，`scope` 可选 once 或 persistent。",
     "4. RH_PASSIVE 后面的正文就是命中后提供给 AI 的隐藏信息；未命中时这段信息不会注入。",
-    '5. 如果命中后的信息里有值得继续点击或调查的词，AI 下一轮可以把它写成 <rh-trigger action="调查" skill="调查">词语</rh-trigger> 交互片段。',
+    '5. 如果命中后的信息里有值得继续点击或调查的词，AI 下一轮只能把它写在剧情正文的关键位置，例如 <rh-trigger action="调查" skill="调查">词语</rh-trigger>；不要把 rh-trigger 放进 outcomes、事件 desc 或任何结构化字段。',
   ].join("\n");
 }
 

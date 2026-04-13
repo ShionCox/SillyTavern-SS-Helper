@@ -44,6 +44,9 @@ export const SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event = "st-roll-settings-Eve
 export const SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event = "st-roll-settings-Event-blind-guidance-ttl-seconds";
 export const SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event = "st-roll-settings-Event-blind-guidance-dedup";
 export const SETTINGS_BLIND_DEDUP_SCOPE_ID_Event = "st-roll-settings-Event-blind-dedup-scope";
+export const SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event = "st-roll-settings-Event-blind-event-card-visibility-mode";
+export const SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event = "st-roll-settings-Event-max-blind-guidance-injected-per-prompt";
+export const SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event = "st-roll-settings-Event-enable-blind-debug-info";
 export const SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event = "st-roll-settings-Event-passive-check-enabled";
 export const SETTINGS_PASSIVE_FORMULA_BASE_ID_Event = "st-roll-settings-Event-passive-formula-base";
 export const SETTINGS_PASSIVE_ALIASES_ID_Event = "st-roll-settings-Event-passive-aliases";
@@ -192,6 +195,9 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -291,6 +297,9 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -361,6 +370,9 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
   SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
   SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
+  SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
+  SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
+  SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -465,6 +477,9 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   blindGuidanceTtlSeconds: 180,
   enableBlindGuidanceDedup: true,
   blindDedupScope: "same_round",
+  blindEventCardVisibilityMode: "remove",
+  maxBlindGuidanceInjectedPerPrompt: 2,
+  enableBlindDebugInfo: false,
   enablePassiveCheck: true,
   passiveFormulaBase: 10,
   passiveSkillAliasesText: JSON.stringify(

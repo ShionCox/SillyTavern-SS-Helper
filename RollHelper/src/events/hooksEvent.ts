@@ -19,6 +19,7 @@ import {
   resetAssistantSwipeRuntimeStateEvent,
   sanitizeAssistantMessageArtifactsEvent,
 } from "./messageSanitizerEvent";
+import { formatBlindGuidanceStateLabelEvent, resolveBlindGuidanceStateEvent } from "./roundEvent";
 import { copyTextToClipboardEvent } from "../settings/skillEditorUiEvent";
 
 const RH_COPY_SOURCE_BUTTON_ATTR_Event = "data-rh-copy-source";
@@ -1126,7 +1127,10 @@ function formatBlindHistoryTimeEvent(value: number): string {
  * 返回：
  *   string：暗骰历史列表 HTML。
  */
-function buildBlindHistoryPreviewHtmlEvent(meta: DiceMetaEvent): string {
+function buildBlindHistoryPreviewHtmlEvent(
+  meta: DiceMetaEvent,
+  settings: { enableBlindDebugInfo?: boolean }
+): string {
   const history = Array.isArray(meta.blindHistory) ? [...meta.blindHistory] : [];
   if (history.length <= 0) {
     return `<div class="st-rh-preview-empty">当前还没有暗骰记录。</div>`;
@@ -1140,7 +1144,17 @@ function buildBlindHistoryPreviewHtmlEvent(meta: DiceMetaEvent): string {
       const expr = escapePreviewHtmlEvent(item.diceExpr || "1d20");
       const origin = escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin));
       const rolledAt = escapePreviewHtmlEvent(formatBlindHistoryTimeEvent(item.rolledAt));
-      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>目标：${target}</div><div>骰式：${expr}</div><div>来源：${origin}</div><div>时间：${rolledAt}</div></li>`;
+      const stateText = escapePreviewHtmlEvent(
+        formatBlindGuidanceStateLabelEvent(resolveBlindGuidanceStateEvent(item))
+      );
+      const debugHtml = settings.enableBlindDebugInfo
+        ? [
+            item.roundId ? `<div>轮次：${escapePreviewHtmlEvent(String(item.roundId).slice(0, 24))}</div>` : "",
+            item.sourceFloorKey ? `<div>楼层：${escapePreviewHtmlEvent(item.sourceFloorKey)}</div>` : "",
+            item.dedupeKey ? `<div>去重键：${escapePreviewHtmlEvent(item.dedupeKey)}</div>` : "",
+          ].filter(Boolean).join("")
+        : "";
+      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>目标：${target}</div><div>骰式：${expr}</div><div>状态：${stateText}</div><div>来源：${origin}</div><div>时间：${rolledAt}</div>${debugHtml}</li>`;
     })
     .join("")}</ul>`;
 }
@@ -1159,7 +1173,7 @@ function openPreviewDialogEvent(kind: "skills" | "statuses" | "blind-history", d
       : buildSkillPreviewHtmlEvent(String(settings.skillTableText ?? "{}"));
   } else if (kind === "blind-history") {
     titleNode.textContent = "暗骰列表（当前聊天）";
-    bodyNode.innerHTML = buildBlindHistoryPreviewHtmlEvent(deps.getDiceMetaEvent());
+    bodyNode.innerHTML = buildBlindHistoryPreviewHtmlEvent(deps.getDiceMetaEvent(), settings);
   } else {
     titleNode.textContent = "状态预览（当前生效）";
     bodyNode.innerHTML = buildStatusPreviewHtmlEvent(deps.getDiceMetaEvent());
