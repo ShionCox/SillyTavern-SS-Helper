@@ -39,6 +39,11 @@ export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allo
 export const SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event = "st-roll-settings-Event-interactive-triggers-enabled";
 export const SETTINGS_BLIND_ROLL_ENABLED_ID_Event = "st-roll-settings-Event-blind-roll-enabled";
 export const SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event = "st-roll-settings-Event-default-blind-skills";
+export const SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event = "st-roll-settings-Event-max-blind-rolls-per-round";
+export const SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event = "st-roll-settings-Event-max-queued-blind-guidance";
+export const SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event = "st-roll-settings-Event-blind-guidance-ttl-seconds";
+export const SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event = "st-roll-settings-Event-blind-guidance-dedup";
+export const SETTINGS_BLIND_DEDUP_SCOPE_ID_Event = "st-roll-settings-Event-blind-dedup-scope";
 export const SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event = "st-roll-settings-Event-passive-check-enabled";
 export const SETTINGS_PASSIVE_FORMULA_BASE_ID_Event = "st-roll-settings-Event-passive-formula-base";
 export const SETTINGS_PASSIVE_ALIASES_ID_Event = "st-roll-settings-Event-passive-aliases";
@@ -182,6 +187,11 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -276,6 +286,11 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -341,6 +356,11 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -438,6 +458,11 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   interactiveTriggerMode: "ai_markup",
   enableBlindRoll: true,
   defaultBlindSkillsText: "洞察\n潜行\n搜查\n历史\n调查",
+  maxBlindRollsPerRound: 1,
+  maxQueuedBlindGuidance: 5,
+  blindGuidanceTtlSeconds: 180,
+  enableBlindGuidanceDedup: true,
+  blindDedupScope: "same_round",
   enablePassiveCheck: true,
   passiveFormulaBase: 10,
   passiveSkillAliasesText: JSON.stringify(

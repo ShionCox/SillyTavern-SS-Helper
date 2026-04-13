@@ -608,6 +608,10 @@ export interface BindEventButtonsDepsEvent {
     eventIdRaw: string,
     expectedRoundId?: string
   ) => Promise<string>;
+  rerollBlindEventByIdEvent: (
+    eventIdRaw: string,
+    expectedRoundId?: string
+  ) => Promise<string>;
   refreshAllWidgetsFromStateEvent: () => void;
   getSettingsEvent: () => {
     enableRerollFeature?: boolean;
@@ -926,7 +930,16 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
 
       const eventId = rerollButton.getAttribute("data-dice-event-id") || "";
       const roundId = rerollButton.getAttribute("data-round-id") || "";
-      deps.rerollEventByIdEvent(eventId, roundId || undefined).then(result => {
+      const visibility =
+        rerollButton.getAttribute("data-reroll-visibility")
+        || rerollButton.getAttribute("data-roll-visibility")
+        || "public";
+      logger.info(`[重投] event=${eventId} visibility=${visibility}`);
+      const reroll =
+        visibility === "blind"
+          ? deps.rerollBlindEventByIdEvent
+          : deps.rerollEventByIdEvent;
+      reroll(eventId, roundId || undefined).then(result => {
         if (result) logger.warn(result);
       });
     },

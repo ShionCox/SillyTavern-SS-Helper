@@ -14,6 +14,7 @@ import {
 } from "../../../SDK/tavern";
 import type { SdkTavernPromptTargetEvent } from "../../../SDK/tavern";
 import type {
+  BlindGuidanceEvent,
   DiceMetaEvent,
   DicePluginSettingsEvent,
   EventResultGradeEvent,
@@ -25,6 +26,7 @@ import { logger } from "../../index";
 import { appendSdkPluginChatRecord } from "../../../SDK/db";
 import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
 import { AI_SUPPORTED_DICE_SIDES_Event } from "../settings/constantsEvent";
+import { buildAssistantFloorKeyEvent, pruneExpiredBlindGuidanceQueueEvent } from "./roundEvent";
 import {
   buildBlindGuidanceBlockEvent,
   buildPassiveDiscoveryBlockEvent,
@@ -659,19 +661,76 @@ function resolvePromptBlindGuidanceInjectionEvent(
     };
   }
   const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
-  if (queue.length <= 0) {
+  const pruned = pruneExpiredBlindGuidanceQueueEvent(meta);
+  const normalizedQueue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
+  if (normalizedQueue.length <= 0) {
     if (meta.outboundBlindGuidance) {
       delete meta.outboundBlindGuidance;
       return { text: "", changedMeta: true };
     }
-    return { text: "", changedMeta: false };
+    return { text: "", changedMeta: pruned };
   }
-  const consumed = queue.splice(0, queue.length);
+
+  const currentRound = meta.pendingRound;
+  const currentFloorKeys = new Set<string>();
+  if (currentRound) {
+    for (const assistantMsgId of currentRound.sourceAssistantMsgIds || []) {
+      const floorKey = buildAssistantFloorKeyEvent(assistantMsgId);
+      if (floorKey) currentFloorKeys.add(floorKey);
+    }
+    for (const event of currentRound.events || []) {
+      const floorKey = buildAssistantFloorKeyEvent(String(event?.sourceAssistantMsgId ?? ""));
+      if (floorKey) currentFloorKeys.add(floorKey);
+    }
+    for (const record of currentRound.rolls || []) {
+      const floorKey = buildAssistantFloorKeyEvent(String(record?.sourceAssistantMsgId ?? ""));
+      if (floorKey) currentFloorKeys.add(floorKey);
+    }
+  }
+
+  const nextQueue: BlindGuidanceEvent[] = [];
+  const consumed: BlindGuidanceEvent[] = [];
+  const now = Date.now();
+  for (const item of normalizedQueue) {
+    if (!item || item.consumed) continue;
+    if (item.expiresAt != null && now > item.expiresAt) continue;
+    if (item.roundId) {
+      if (!currentRound || currentRound.status !== "open" || currentRound.roundId !== item.roundId) {
+        continue;
+      }
+    }
+    if (item.sourceFloorKey) {
+      if (!currentRound || currentFloorKeys.size <= 0 || !currentFloorKeys.has(item.sourceFloorKey)) {
+        continue;
+      }
+    }
+    consumed.push({
+      ...item,
+      consumed: true,
+    });
+  }
+
+  const changedMeta =
+    consumed.length > 0
+    || normalizedQueue.length !== nextQueue.length
+    || pruned
+    || Boolean(meta.outboundBlindGuidance);
+
+  meta.pendingBlindGuidanceQueue = nextQueue;
+  if (consumed.length <= 0) {
+    if (meta.outboundBlindGuidance) {
+      delete meta.outboundBlindGuidance;
+      return { text: "", changedMeta: true };
+    }
+    return { text: "", changedMeta };
+  }
+
   const guidanceText = buildBlindGuidanceBlockEvent(consumed, blindStartTag, blindEndTag);
   meta.outboundBlindGuidance = {
     userMsgId,
     rollId: consumed[consumed.length - 1]?.rollId || "",
     guidanceText,
+    roundId: consumed[consumed.length - 1]?.roundId,
   };
   return { text: guidanceText, changedMeta: true };
 }

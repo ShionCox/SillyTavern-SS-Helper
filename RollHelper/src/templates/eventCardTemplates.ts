@@ -422,7 +422,9 @@ export interface EventRerollButtonTemplateParamsEvent {
   roundIdAttr: string;
   eventIdAttr: string;
   rollIdAttr: string;
+  rerollVisibilityAttr: string;
   buttonTitleAttr: string;
+  buttonLabelHtml: string;
 }
 
 function buildTipLabelTemplateEvent(label: string, tip: string): string {
@@ -453,8 +455,8 @@ export function buildEventRollButtonTemplateEvent(params: EventRollButtonTemplat
  */
 export function buildEventRerollButtonTemplateEvent(params: EventRerollButtonTemplateParamsEvent): string {
   return `<button type="button" class="st-rh-reroll-btn" data-dice-event-reroll="1" data-round-id="${params.roundIdAttr}"
-  data-dice-event-id="${params.eventIdAttr}" data-roll-id="${params.rollIdAttr}" data-tip="${params.buttonTitleAttr}">
-  <i class="fa-solid fa-rotate-right fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.92;"></i>重新投掷
+  data-dice-event-id="${params.eventIdAttr}" data-roll-id="${params.rollIdAttr}" data-reroll-visibility="${params.rerollVisibilityAttr}" data-tip="${params.buttonTitleAttr}">
+  <i class="fa-solid fa-rotate-right fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.92;"></i>${params.buttonLabelHtml}
 </button>`;
 }
 

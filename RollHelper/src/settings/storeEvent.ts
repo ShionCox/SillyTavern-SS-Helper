@@ -750,6 +750,21 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
     typeof bucket.defaultBlindSkillsText === "string" && bucket.defaultBlindSkillsText.trim().length > 0
       ? bucket.defaultBlindSkillsText
       : DEFAULT_SETTINGS_Event.defaultBlindSkillsText;
+  const maxBlindRollsPerRoundRaw = Number((source as any)?.maxBlindRollsPerRound);
+  bucket.maxBlindRollsPerRound = Number.isFinite(maxBlindRollsPerRoundRaw)
+    ? Math.max(1, Math.floor(maxBlindRollsPerRoundRaw))
+    : DEFAULT_SETTINGS_Event.maxBlindRollsPerRound;
+  const maxQueuedBlindGuidanceRaw = Number((source as any)?.maxQueuedBlindGuidance);
+  bucket.maxQueuedBlindGuidance = Number.isFinite(maxQueuedBlindGuidanceRaw)
+    ? Math.max(1, Math.floor(maxQueuedBlindGuidanceRaw))
+    : DEFAULT_SETTINGS_Event.maxQueuedBlindGuidance;
+  const blindGuidanceTtlSecondsRaw = Number((source as any)?.blindGuidanceTtlSeconds);
+  bucket.blindGuidanceTtlSeconds = Number.isFinite(blindGuidanceTtlSecondsRaw)
+    ? Math.max(30, Math.floor(blindGuidanceTtlSecondsRaw))
+    : DEFAULT_SETTINGS_Event.blindGuidanceTtlSeconds;
+  bucket.enableBlindGuidanceDedup = (source as any)?.enableBlindGuidanceDedup !== false;
+  bucket.blindDedupScope =
+    (source as any)?.blindDedupScope === "same_floor" ? "same_floor" : "same_round";
   bucket.enablePassiveCheck = bucket.enablePassiveCheck !== false;
   const passiveFormulaBaseRaw = Number((source as any)?.passiveFormulaBase);
   bucket.passiveFormulaBase = Number.isFinite(passiveFormulaBaseRaw)

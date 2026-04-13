@@ -56,6 +56,11 @@ export interface SettingsCardTemplateIdsEvent {
   interactiveTriggersEnabledId: string;
   blindRollEnabledId: string;
   defaultBlindSkillsId: string;
+  maxBlindRollsPerRoundId: string;
+  maxQueuedBlindGuidanceId: string;
+  blindGuidanceTtlSecondsId: string;
+  blindGuidanceDedupId: string;
+  blindDedupScopeId: string;
   passiveCheckEnabledId: string;
   passiveFormulaBaseId: string;
   passiveAliasesId: string;

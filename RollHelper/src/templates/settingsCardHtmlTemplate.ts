@@ -702,11 +702,86 @@ export function buildSettingsCardHtmlTemplateEvent(
 
           <div class="st-roll-item st-roll-item-stack st-roll-editor-item st-roll-search-item" data-st-roll-search="default blind skills default blind dark skills">
             <div class="st-roll-item-main">
-              <div class="st-roll-item-title">默认暗骰技能</div>
-              <div class="st-roll-item-desc">每行一个技能名。上下文触发命中这些技能时，会默认走暗骰。</div>
+              <div class="st-roll-item-title">允许暗骰的技能列表</div>
+              <div class="st-roll-item-desc">只有命中此列表的技能，才允许显示暗骰按钮或作为 /broll 技能模式写入叙事引导。每行、逗号或竖线分隔。</div>
             </div>
             <div class="st-roll-row st-roll-editor-row">
               <textarea id="${ids.defaultBlindSkillsId}" class="st-roll-rule-textarea" rows="6" data-tip="编辑默认暗骰技能列表。"></textarea>
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind limit max blind rolls per round">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">每轮暗骰上限</div>
+              <div class="st-roll-item-desc">限制每个未结束轮次最多允许多少次暗骰。达到上限后，新暗骰不会再进入叙事引导队列。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.maxBlindRollsPerRoundId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置每轮暗骰上限。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind queue max queued blind guidance">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">暗骰队列上限</div>
+              <div class="st-roll-item-desc">限制待注入的暗骰引导最多保留多少条。队列满时将拒绝新增，避免旧暗骰堆积。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.maxQueuedBlindGuidanceId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置暗骰队列上限。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind ttl blind guidance ttl seconds">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">暗骰过期时间（秒）</div>
+              <div class="st-roll-item-desc">暗骰结果在超过该时长后失效，不再注入后续 prompt。轮次关闭后也会提前失效。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.blindGuidanceTtlSecondsId,
+                type: "number",
+                attributes: {
+                  min: 30,
+                  step: 10,
+                  "data-tip": "设置暗骰过期时间（秒）。",
+                },
+              })}
+            </div>
+          </div>
+
+          ${buildCheckboxItemEvent(
+            ids.blindGuidanceDedupId,
+            "启用暗骰去重",
+            "同轮次内重复的同类暗骰只保留一次，避免刷同技能或同事件。",
+            "blind dedup queue guidance",
+            "开启暗骰去重。"
+            )}
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind dedup scope same round same floor">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">暗骰去重范围</div>
+              <div class="st-roll-item-desc">控制去重按同轮次还是同楼层生效。一般建议保留“同轮次”。</div>
+            </div>
+            <div class="st-roll-row">
+              <select id="${ids.blindDedupScopeId}" data-tip="设置暗骰去重范围。">
+                <option value="same_round">同轮次</option>
+                <option value="same_floor">同楼层</option>
+              </select>
             </div>
           </div>
 

@@ -66,6 +66,11 @@ export interface DicePluginSettingsEvent {
   interactiveTriggerMode: "ai_markup";
   enableBlindRoll: boolean;
   defaultBlindSkillsText: string;
+  maxBlindRollsPerRound: number;
+  maxQueuedBlindGuidance: number;
+  blindGuidanceTtlSeconds: number;
+  enableBlindGuidanceDedup: boolean;
+  blindDedupScope: "same_round" | "same_floor";
   enablePassiveCheck: boolean;
   passiveFormulaBase: number;
   passiveSkillAliasesText: string;
@@ -168,7 +173,7 @@ export interface EventRollRecordEvent {
   targetLabelUsed: string;
   rolledAt: number;
   source: EventRollSourceEvent;
-  visibility?: RollVisibilityEvent;
+  visibility?: RollVisibilityEvent; // 首投决定，重投必须继承，不能通过重投切换
   concealResult?: boolean;
   natState?: "nat1" | "nat20" | "none";
   timeoutAt?: number | null;
@@ -221,6 +226,7 @@ export interface OutboundResultGuidanceCacheEvent {
 
 export interface BlindGuidanceEvent {
   rollId: string;
+  roundId?: string;
   eventId: string;
   eventTitle: string;
   skill: string;
@@ -232,8 +238,15 @@ export interface BlindGuidanceEvent {
   targetLabel: string;
   rolledAt: number;
   source: EventRollSourceEvent;
+  sourceAssistantMsgId?: string;
+  sourceFloorKey?: string;
+  origin?: "slash_broll" | "event_blind" | "interactive_blind";
   sourceId?: string;
   note?: string;
+  createdAt?: number;
+  expiresAt?: number | null;
+  consumed?: boolean;
+  dedupeKey?: string;
 }
 
 export interface InteractiveTriggerEvent {
@@ -272,6 +285,7 @@ export interface OutboundBlindGuidanceCacheEvent {
   userMsgId: string;
   rollId: string;
   guidanceText: string;
+  roundId?: string;
 }
 
 export interface OutboundPassiveDiscoveryCacheEvent {
@@ -343,7 +357,9 @@ export interface DiceMetaEvent {
   outboundSummary?: OutboundSummaryCacheEvent;
   pendingResultGuidanceQueue?: PendingResultGuidanceEvent[];
   outboundResultGuidance?: OutboundResultGuidanceCacheEvent;
+  // 仅保留当前仍有效轮次/楼层可注入到下一次 prompt 的暗骰引导。
   pendingBlindGuidanceQueue?: BlindGuidanceEvent[];
+  // 当前 user prompt 已构造出的暗骰引导缓存，仅用于避免同一次 prompt 重复拼装。
   outboundBlindGuidance?: OutboundBlindGuidanceCacheEvent;
   pendingPassiveDiscoveries?: PassiveDiscoveryEvent[];
   outboundPassiveDiscovery?: OutboundPassiveDiscoveryCacheEvent;
@@ -351,6 +367,7 @@ export interface DiceMetaEvent {
   lastPassiveContextHash?: string;
   summaryHistory?: RoundSummarySnapshotEvent[];
   lastPromptUserMsgId?: string;
+  // 记录最近一次 generation 后处理过的助手消息版本，避免重复清洗同一版本。
   lastProcessedAssistantMsgId?: string;
 }
 

@@ -309,6 +309,7 @@ export function resolveNatStateEvent(rolls: number[] | undefined, sides: number)
 
 export function normalizeBlindGuidanceEvent(input: {
   rollId: string;
+  roundId?: string;
   eventId?: string;
   eventTitle: string;
   skill: string;
@@ -320,9 +321,19 @@ export function normalizeBlindGuidanceEvent(input: {
   targetLabel?: string;
   rolledAt: number;
   source: BlindGuidanceEvent["source"];
+  sourceAssistantMsgId?: string;
+  sourceFloorKey?: string;
+  origin?: BlindGuidanceEvent["origin"];
+  sourceId?: string;
+  note?: string;
+  createdAt?: number;
+  expiresAt?: number | null;
+  consumed?: boolean;
+  dedupeKey?: string;
 }): BlindGuidanceEvent {
   return {
     rollId: input.rollId,
+    roundId: input.roundId,
     eventId: String(input.eventId ?? input.rollId),
     eventTitle: input.eventTitle,
     skill: input.skill,
@@ -334,6 +345,15 @@ export function normalizeBlindGuidanceEvent(input: {
     targetLabel: String(input.targetLabel ?? ""),
     rolledAt: input.rolledAt,
     source: input.source,
+    sourceAssistantMsgId: input.sourceAssistantMsgId,
+    sourceFloorKey: input.sourceFloorKey,
+    origin: input.origin,
+    sourceId: input.sourceId,
+    note: input.note,
+    createdAt: input.createdAt,
+    expiresAt: input.expiresAt,
+    consumed: input.consumed === true,
+    dedupeKey: input.dedupeKey,
   };
 }
 

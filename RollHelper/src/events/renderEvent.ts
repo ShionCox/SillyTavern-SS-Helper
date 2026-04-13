@@ -18,6 +18,7 @@ import {
   stripStatusTagsFromTextEvent,
 } from "./statusEvent";
 import { logger } from "../../index";
+import { countBlindRollsInRoundEvent, countQueuedBlindGuidanceInRoundEvent, isBlindSkillAllowedEvent } from "./roundEvent";
 
 export type EventRuntimeToneEvent = "neutral" | "warn" | "danger" | "success";
 
@@ -520,6 +521,24 @@ function canShowRerollActionEvent(
   return latestRecord?.rollId === record.rollId;
 }
 
+function canShowBlindRollActionEvent(
+  event: DiceEventSpecEvent,
+  round: PendingRoundEvent,
+  meta: DiceMetaEvent,
+  settings: DicePluginSettingsEvent
+): boolean {
+  if (!settings.enableBlindRoll) return false;
+  if (round.status !== "open") return false;
+  if (!isBlindSkillAllowedEvent(event.skill, settings)) return false;
+  const blindCount =
+    countBlindRollsInRoundEvent(round)
+    + countQueuedBlindGuidanceInRoundEvent(meta, round.roundId);
+  if (blindCount >= Math.max(1, Number(settings.maxBlindRollsPerRound) || 1)) return false;
+  const latestRecord = getLatestRollRecordForEventInRoundEvent(round, event.id);
+  if (latestRecord && isBlindRollRecordEvent(latestRecord)) return false;
+  return true;
+}
+
 function toDomIdTokenEvent(raw: string): string {
   const normalized = String(raw ?? "")
     .trim()
@@ -761,7 +780,7 @@ export function buildEventListCardEvent(
           buttonDisabledAttr: buttonDisabled,
           buttonStateStyle,
         });
-        if (!settings.enableBlindRoll) return publicButtonHtml;
+        if (!canShowBlindRollActionEvent(event, round, meta, settings)) return publicButtonHtml;
         const blindButtonHtml = deps.buildEventRollButtonTemplateEvent({
           roundIdAttr: deps.escapeAttrEvent(round.roundId),
           eventIdAttr: deps.escapeAttrEvent(event.id),
@@ -1216,7 +1235,9 @@ export interface BuildEventRollResultCardDepsEvent {
     roundIdAttr: string;
     eventIdAttr: string;
     rollIdAttr: string;
+    rerollVisibilityAttr: string;
     buttonTitleAttr: string;
+    buttonLabelHtml: string;
   }) => string;
   formatModifier: (mod: number) => string;
   buildEventRollResultCardTemplateEvent: (params: {
@@ -1468,7 +1489,13 @@ export function buildEventRollResultCardEvent(
       roundIdAttr: deps.escapeAttrEvent(record.roundId),
       eventIdAttr: deps.escapeAttrEvent(event.id),
       rollIdAttr: deps.escapeAttrEvent(record.rollId),
-      buttonTitleAttr: deps.escapeAttrEvent("重新投掷会保留历史记录，并以本次结果作为当前生效结果。"),
+      rerollVisibilityAttr: deps.escapeAttrEvent(isBlindRecord ? "blind" : "public"),
+      buttonTitleAttr: deps.escapeAttrEvent(
+        isBlindRecord
+          ? "按暗骰方式重新结算，点数与后果仍不会公开显示。"
+          : "重新投掷会保留历史记录，并以本次结果作为当前生效结果。"
+      ),
+      buttonLabelHtml: deps.escapeHtmlEvent(isBlindRecord ? "重新暗骰" : "重新投掷"),
     })
     : "";
 

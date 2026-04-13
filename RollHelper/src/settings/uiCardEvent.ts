@@ -115,6 +115,11 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -258,6 +263,11 @@ export function buildSettingsCardTemplateIdsEvent(
     interactiveTriggersEnabledId: deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
     blindRollEnabledId: deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
     defaultBlindSkillsId: deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
+    maxBlindRollsPerRoundId: deps.SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
+    maxQueuedBlindGuidanceId: deps.SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event,
+    blindGuidanceTtlSecondsId: deps.SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event,
+    blindGuidanceDedupId: deps.SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event,
+    blindDedupScopeId: deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event,
     passiveCheckEnabledId: deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
     passiveFormulaBaseId: deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
     passiveAliasesId: deps.SETTINGS_PASSIVE_ALIASES_ID_Event,

@@ -30,7 +30,6 @@ import {
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
-
 type ParseDiceExpressionFnEvent = (exprRaw: string) => {
   count: number;
   sides: number;
@@ -166,6 +165,15 @@ function evaluateResultGradeEvent(
   return { resultGrade: "failure", marginToDc };
 }
 
+function resolveRecordVisibilityEvent(
+  record: EventRollRecordEvent | null | undefined
+): "public" | "blind" {
+  if (!record) return "public";
+  return record.visibility === "blind" || record.source === "blind_manual_roll"
+    ? "blind"
+    : "public";
+}
+
 type RollVisualStatusEvent = "critical_success" | "critical_failure" | "partial_success" | "success" | "failure";
 
 /**
@@ -179,6 +187,187 @@ function resolveRollVisualStatusFromGradeEvent(resultGrade: EventResultGradeEven
   if (resultGrade === "partial_success") return "partial_success";
   if (resultGrade === "success") return "success";
   return "failure";
+}
+
+function normalizeBlindSkillNameEvent(raw: string): string {
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+export function parseAllowedBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<string> {
+  return new Set(
+    String(settings.defaultBlindSkillsText ?? "")
+      .split(/[\n,|]+/)
+      .map((item) => normalizeBlindSkillNameEvent(item))
+      .filter(Boolean)
+  );
+}
+
+export function isBlindSkillAllowedEvent(
+  skillName: string,
+  settings: DicePluginSettingsEvent
+): boolean {
+  const normalized = normalizeBlindSkillNameEvent(skillName);
+  if (!normalized) return false;
+  return parseAllowedBlindSkillsEvent(settings).has(normalized);
+}
+
+export function countBlindRollsInRoundEvent(round: PendingRoundEvent | null | undefined): number {
+  if (!round || !Array.isArray(round.rolls)) return 0;
+  return round.rolls.filter((record) => resolveRecordVisibilityEvent(record) === "blind").length;
+}
+
+export function countQueuedBlindGuidanceInRoundEvent(
+  meta: DiceMetaEvent,
+  roundId: string | undefined
+): number {
+  if (!roundId) return 0;
+  const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
+  return queue.filter((item) => item?.roundId === roundId && item?.consumed !== true).length;
+}
+
+export function buildBlindGuidanceDedupKeyEvent(input: {
+  roundId?: string;
+  skill?: string;
+  eventId?: string;
+  targetLabel?: string;
+  sourceFloorKey?: string | null;
+  sourceId?: string;
+  origin?: BlindGuidanceEvent["origin"];
+}): string {
+  const roundId = String(input.roundId ?? "").trim() || "_";
+  const skill = normalizeBlindSkillNameEvent(input.skill ?? "") || "_";
+  const eventId = String(input.eventId ?? "").trim();
+  const targetLabel = normalizeBlindSkillNameEvent(input.targetLabel ?? "") || "_";
+  const sourceFloorKey = String(input.sourceFloorKey ?? "").trim() || "_";
+  const sourceId = String(input.sourceId ?? "").trim() || "_";
+  const origin = input.origin ?? "event_blind";
+
+  if (origin === "event_blind" && eventId) {
+    return `event:${roundId}:${eventId}`;
+  }
+  if (origin === "interactive_blind") {
+    return `interactive:${roundId}:${sourceFloorKey}:${sourceId}`;
+  }
+  return `slash:${roundId}:${skill}:${targetLabel}`;
+}
+
+export function pruneExpiredBlindGuidanceQueueEvent(
+  meta: DiceMetaEvent,
+  now = Date.now()
+): boolean {
+  const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
+  const openRoundId = meta.pendingRound?.status === "open" ? meta.pendingRound.roundId : "";
+  const nextQueue = queue.filter((item) => {
+    if (!item || item.consumed) return false;
+    if (item.expiresAt != null && item.expiresAt <= now) return false;
+    if (item.roundId && (!openRoundId || item.roundId !== openRoundId)) return false;
+    return true;
+  });
+  meta.pendingBlindGuidanceQueue = nextQueue;
+  return nextQueue.length !== queue.length;
+}
+
+export function canEnqueueBlindGuidanceEvent(args: {
+  meta: DiceMetaEvent;
+  settings: DicePluginSettingsEvent;
+  round: PendingRoundEvent | null;
+  dedupeKey: string;
+  sourceFloorKey?: string | null;
+  origin: BlindGuidanceEvent["origin"];
+  now?: number;
+}): { ok: boolean; reason?: string } {
+  const now = args.now ?? Date.now();
+  pruneExpiredBlindGuidanceQueueEvent(args.meta, now);
+  const round = args.round;
+  if (!round || round.status !== "open" || !Array.isArray(round.sourceAssistantMsgIds) || round.sourceAssistantMsgIds.length <= 0) {
+    return {
+      ok: false,
+      reason: "当前没有可绑定的最新轮次，暗骰不会进入后续叙事。请等待新一轮事件，或改用普通 /roll。",
+    };
+  }
+
+  const roundBlindCount =
+    countBlindRollsInRoundEvent(round)
+    + countQueuedBlindGuidanceInRoundEvent(args.meta, round.roundId);
+  if (roundBlindCount >= Math.max(1, Number(args.settings.maxBlindRollsPerRound) || 1)) {
+    return {
+      ok: false,
+      reason: "本轮暗骰次数已达到上限，新的暗骰不会再进入叙事引导。",
+    };
+  }
+
+  const queue = Array.isArray(args.meta.pendingBlindGuidanceQueue) ? args.meta.pendingBlindGuidanceQueue : [];
+  if (queue.length >= Math.max(1, Number(args.settings.maxQueuedBlindGuidance) || 1)) {
+    return {
+      ok: false,
+      reason: "待处理暗骰队列已满，请先推进对话消费已有暗骰。",
+    };
+  }
+
+  if (args.settings.enableBlindGuidanceDedup) {
+    const duplicated = queue.some((item) => {
+      if (!item || item.consumed) return false;
+      return item.dedupeKey === args.dedupeKey;
+    });
+    if (duplicated) {
+      return {
+        ok: false,
+        reason: "相同内容的暗骰已存在，本轮无需重复暗骰。",
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+export function enqueueBlindGuidanceSafeEvent(args: {
+  meta: DiceMetaEvent;
+  settings: DicePluginSettingsEvent;
+  round: PendingRoundEvent | null;
+  item: BlindGuidanceEvent;
+  now?: number;
+}): { ok: boolean; reason?: string } {
+  const now = args.now ?? Date.now();
+  const round = args.round;
+  const sourceFloorKey =
+    args.item.sourceFloorKey
+    || buildAssistantFloorKeyEvent(String(args.item.sourceAssistantMsgId ?? ""))
+    || null;
+  const dedupeKey =
+    args.item.dedupeKey
+    || buildBlindGuidanceDedupKeyEvent({
+      roundId: args.item.roundId || round?.roundId,
+      skill: args.item.skill,
+      eventId: args.item.eventId,
+      targetLabel: args.item.targetLabel,
+      sourceFloorKey,
+      sourceId: args.item.sourceId,
+      origin: args.item.origin,
+    });
+  const allowed = canEnqueueBlindGuidanceEvent({
+    meta: args.meta,
+    settings: args.settings,
+    round,
+    dedupeKey,
+    sourceFloorKey,
+    origin: args.item.origin,
+    now,
+  });
+  if (!allowed.ok) return allowed;
+
+  const queue = ensureBlindGuidanceQueueEvent(args.meta);
+  const ttlMs = Math.max(30, Math.floor(Number(args.settings.blindGuidanceTtlSeconds) || 180)) * 1000;
+  queue.push({
+    ...args.item,
+    roundId: args.item.roundId || round?.roundId,
+    sourceFloorKey: sourceFloorKey || undefined,
+    origin: args.item.origin || "event_blind",
+    createdAt: args.item.createdAt ?? now,
+    expiresAt: args.item.expiresAt ?? (now + ttlMs),
+    consumed: false,
+    dedupeKey,
+  });
+  return { ok: true };
 }
 
 /**
@@ -242,15 +431,23 @@ function ensureBlindGuidanceQueueEvent(meta: DiceMetaEvent): BlindGuidanceEvent[
 
 function enqueueBlindGuidanceFromRecordEvent(
   meta: DiceMetaEvent,
+  settings: DicePluginSettingsEvent,
+  round: PendingRoundEvent,
   event: DiceEventSpecEvent,
   record: EventRollRecordEvent
 ): void {
   if (record.visibility !== "blind") return;
-  const queue = ensureBlindGuidanceQueueEvent(meta);
-  if (queue.some((item) => item.rollId === record.rollId)) return;
-  queue.push(
-    normalizeBlindGuidanceEvent({
+  const createdAt = Date.now();
+  const sourceAssistantMsgId = String(
+    record.sourceAssistantMsgId || event.sourceAssistantMsgId || ""
+  ).trim();
+  const enqueueResult = enqueueBlindGuidanceSafeEvent({
+    meta,
+    settings,
+    round,
+    item: normalizeBlindGuidanceEvent({
       rollId: record.rollId,
+      roundId: record.roundId,
       eventId: event.id,
       eventTitle: event.title,
       skill: event.skill,
@@ -262,8 +459,25 @@ function enqueueBlindGuidanceFromRecordEvent(
       targetLabel: record.targetLabelUsed || event.targetLabel,
       rolledAt: record.rolledAt,
       source: record.source,
-    })
-  );
+      sourceAssistantMsgId: sourceAssistantMsgId || undefined,
+      sourceFloorKey: sourceAssistantMsgId ? buildAssistantFloorKeyEvent(sourceAssistantMsgId) || undefined : undefined,
+      origin: "event_blind",
+      createdAt,
+      consumed: false,
+      dedupeKey: buildBlindGuidanceDedupKeyEvent({
+        roundId: record.roundId,
+        eventId: event.id,
+        skill: event.skill,
+        targetLabel: record.targetLabelUsed || event.targetLabel,
+        sourceFloorKey: sourceAssistantMsgId ? buildAssistantFloorKeyEvent(sourceAssistantMsgId) || undefined : undefined,
+        origin: "event_blind",
+      }),
+    }),
+    now: createdAt,
+  });
+  if (!enqueueResult.ok && enqueueResult.reason) {
+    logger.warn(`[暗骰入队已拒绝] event=${event.id} reason=${enqueueResult.reason}`);
+  }
 }
 
 export interface CreateSyntheticTimeoutDiceResultDepsEvent {
@@ -477,17 +691,30 @@ export function invalidatePendingRoundFloorEvent(
     timerChanged = true;
   }
 
+  const blindQueue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
+  const nextBlindQueue = blindQueue.filter((item) => {
+    if (!item?.sourceAssistantMsgId) return true;
+    return !isSameAssistantFloorEvent(item.sourceAssistantMsgId, assistantMsgId);
+  });
+
+  const resultGuidanceQueue = Array.isArray(meta.pendingResultGuidanceQueue) ? meta.pendingResultGuidanceQueue : [];
+  const nextResultGuidanceQueue = resultGuidanceQueue.filter((item) => !removedEventIds.has(item?.eventId ?? ""));
+
   const changed =
     nextEvents.length !== round.events.length
     || nextRolls.length !== round.rolls.length
     || nextSourceAssistantMsgIds.length !== round.sourceAssistantMsgIds.length
-    || timerChanged;
+    || timerChanged
+    || nextBlindQueue.length !== blindQueue.length
+    || nextResultGuidanceQueue.length !== resultGuidanceQueue.length;
 
   if (!changed) return false;
 
   round.events = nextEvents;
   round.rolls = nextRolls;
   round.sourceAssistantMsgIds = nextSourceAssistantMsgIds;
+  meta.pendingBlindGuidanceQueue = nextBlindQueue;
+  meta.pendingResultGuidanceQueue = nextResultGuidanceQueue;
   deps.saveMetadataSafeEvent();
   return true;
 }
@@ -934,6 +1161,31 @@ export interface PerformInteractiveTriggerRollResultEvent {
   record: EventRollRecordEvent;
 }
 
+function buildInteractiveTriggerEventIdEvent(trigger: InteractiveTriggerEvent): string {
+  const sourceMessageId = String(trigger.sourceMessageId || "msg").trim() || "msg";
+  const sourceId = String(trigger.sourceId || trigger.label || "trigger").trim() || "trigger";
+  const skill = String(trigger.skill || trigger.action || "check").trim() || "check";
+  const occurrenceIndex = Number.isFinite(Number(trigger.occurrenceIndex))
+    ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex)))
+    : 0;
+  const raw = `${sourceMessageId}:${sourceId}:${skill}:${occurrenceIndex}`;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 160);
+  return `itr:${normalized}`;
+}
+
+export function isInteractiveTriggerResolvedEvent(
+  round: PendingRoundEvent | null | undefined,
+  trigger: InteractiveTriggerEvent
+): boolean {
+  if (!round) return false;
+  const eventId = buildInteractiveTriggerEventIdEvent(trigger);
+  return round.rolls.some((record) => record?.eventId === eventId);
+}
+
 function buildInteractiveTriggerEventSpecEvent(
   trigger: InteractiveTriggerEvent,
   eventId: string
@@ -970,7 +1222,7 @@ function buildInteractiveTriggerEventSpecEvent(
       success: `${action}成功，围绕「${label}」获得更明确的进展。`,
       failure: `${action}失败，围绕「${label}」产生误判、延误或新的风险。`,
     },
-    sourceAssistantMsgId: "",
+    sourceAssistantMsgId: String(trigger.sourceMessageId || "").trim(),
   };
 }
 
@@ -986,10 +1238,19 @@ export async function performInteractiveTriggerRollEvent(
 
   const meta = deps.getDiceMetaEvent();
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
-  const eventId = deps.createIdEvent("itr_event");
-  const event = buildInteractiveTriggerEventSpecEvent(trigger, eventId);
-  round.events.push(event);
+  const eventId = buildInteractiveTriggerEventIdEvent(trigger);
+  let event = round.events.find((item) => item.id === eventId);
+  if (!event) {
+    event = buildInteractiveTriggerEventSpecEvent(trigger, eventId);
+    round.events.push(event);
+  }
   round.sourceAssistantMsgIds = Array.isArray(round.sourceAssistantMsgIds) ? round.sourceAssistantMsgIds : [];
+  if (event.sourceAssistantMsgId && !round.sourceAssistantMsgIds.includes(event.sourceAssistantMsgId)) {
+    round.sourceAssistantMsgIds.push(event.sourceAssistantMsgId);
+  }
+  if (isInteractiveTriggerResolvedEvent(round, trigger)) {
+    throw new Error(`「${String(trigger.label || trigger.action || trigger.skill || "该线索")}」已经检定过了。`);
+  }
 
   const exprRaw = String(event.checkDice || "").trim();
   if (!exprRaw) {
@@ -1074,11 +1335,11 @@ export async function performInteractiveTriggerRollEvent(
     sourceAssistantMsgId: event.sourceAssistantMsgId,
   };
 
+  enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
   }
-  enqueueBlindGuidanceFromRecordEvent(meta, event, record);
   applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
   deps.saveMetadataSafeEvent();
   deps.refreshAllWidgetsFromStateEvent();
@@ -1110,7 +1371,7 @@ async function executeManualEventRollEvent(
   deps: PerformEventRollByIdDepsEvent
 ): Promise<string> {
   const allowExistingRecord = mode === "reroll" || mode === "blind_reroll";
-  const isBlindMode = mode === "blind_initial" || mode === "blind_reroll";
+  const requestedBlindMode = mode === "blind_initial" || mode === "blind_reroll";
   deps.sweepTimeoutFailuresEvent();
   const eventId = String(eventIdRaw || "").trim();
   if (!eventId) {
@@ -1162,6 +1423,19 @@ async function executeManualEventRollEvent(
     return "❌ 当前事件还没有可重投的结算结果。";
   }
 
+  const existingVisibility = resolveRecordVisibilityEvent(existingRecord);
+  const effectiveBlindMode = allowExistingRecord
+    ? existingVisibility === "blind"
+    : requestedBlindMode;
+  if (allowExistingRecord) {
+    const requestedVisibility = requestedBlindMode ? "blind" : "public";
+    if (requestedVisibility !== existingVisibility) {
+      logger.warn(
+        `[重投可见性纠正] event=${event.id} requested=${requestedVisibility} actual=${existingVisibility}`
+      );
+    }
+  }
+
   const exprRaw = (overrideExpr || event.checkDice || "").trim();
   if (!exprRaw) {
     return `❌ 事件 ${eventId} 缺少可用骰式。`;
@@ -1206,7 +1480,7 @@ async function executeManualEventRollEvent(
   const compareUsed = deps.normalizeCompareOperatorEvent(event.compare) ?? ">=";
   const dcUsed = Number.isFinite(event.dc) ? Number(event.dc) : null;
   const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
-  const recordSource: EventRollRecordEvent["source"] = isBlindMode ? "blind_manual_roll" : "manual_roll";
+  const recordSource: EventRollRecordEvent["source"] = effectiveBlindMode ? "blind_manual_roll" : "manual_roll";
   const natState = resolveNatStateEvent(result.rolls, Number(result.sides) || 0);
   const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, recordSource);
   if (shouldPlay3DRollAnimationEvent(settings, result)) {
@@ -1236,8 +1510,8 @@ async function executeManualEventRollEvent(
     targetLabelUsed: event.targetLabel,
     rolledAt: Date.now(),
     source: recordSource,
-    visibility: isBlindMode ? "blind" : "public",
-    concealResult: isBlindMode,
+    visibility: effectiveBlindMode ? "blind" : "public",
+    concealResult: effectiveBlindMode,
     natState,
     timeoutAt: null,
     explodePolicyApplied,
@@ -1245,11 +1519,11 @@ async function executeManualEventRollEvent(
     sourceAssistantMsgId: event.sourceAssistantMsgId,
   };
 
+  enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
   }
-  enqueueBlindGuidanceFromRecordEvent(meta, event, record);
   applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
   deps.saveMetadataSafeEvent();
   deps.refreshAllWidgetsFromStateEvent();
@@ -1518,7 +1792,7 @@ export function formatRollRecordSummaryEvent(
     return `超时自动判定失败${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
   }
   if (record.source === "blind_manual_roll" || record.visibility === "blind") {
-    return `暗骰检定已结算（结果已隐藏，仅命运知晓）${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
+    return "暗骰检定已结算（真实结果已隐藏，将通过后续叙事体现）";
   }
   if (record.source === "ai_auto_roll") {
     const status = record.success === null ? "未判定" : record.success ? "成功" : "失败";

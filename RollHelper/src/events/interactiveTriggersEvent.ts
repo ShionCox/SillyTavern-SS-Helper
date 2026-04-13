@@ -1,8 +1,8 @@
 import { showSharedContextMenu } from "../../../_Components/sharedContextMenu";
 import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { logger } from "../../index";
-import { pushToChat } from "../core/chatEvent";
 import type {
+  DiceMetaEvent,
   DicePluginSettingsEvent,
   InteractiveTriggerEvent,
   TavernMessageEvent,
@@ -46,7 +46,7 @@ function parseDefaultBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<st
   );
 }
 
-function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent): string {
+function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolved = false): string {
   const tooltip = buildInteractiveTriggerTooltipHtmlEvent(payload);
   const hoverEnabled = typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(hover: hover) and (pointer: fine)").matches
@@ -67,7 +67,7 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent): string {
     Number(payload.occurrenceIndex)
   )
     ? String(Math.max(0, Math.floor(Number(payload.occurrenceIndex))))
-    : "0"}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
+    : "0"}" data-resolved="${resolved ? "1" : "0"}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
 }
 
 function resolveMessageContainerIdEvent(node: HTMLElement): string {
@@ -132,16 +132,25 @@ function sanitizeLegacyTriggerTextNodesEvent(node: HTMLElement): boolean {
     current = walker.nextNode();
   }
 
-  let changed = false;
-  for (const textNode of textNodes) {
-    const raw = textNode.nodeValue ?? "";
-    if (!raw.includes("rh-trigger")) continue;
-    const cleaned = stripLooseTriggerTokensEvent(stripInteractiveTriggerMarkupFromTextEvent(raw));
-    if (cleaned === raw) continue;
-    textNode.nodeValue = cleaned;
-    changed = true;
+  if (textNodes.length <= 0) return false;
+  const rawJoined = textNodes.map((textNode) => textNode.nodeValue ?? "").join("");
+  if (!rawJoined.includes("rh-trigger")) return false;
+
+  const cleanedJoined = stripLooseTriggerTokensEvent(stripInteractiveTriggerMarkupFromTextEvent(rawJoined));
+  if (cleanedJoined === rawJoined) return false;
+
+  let offset = 0;
+  for (let index = 0; index < textNodes.length; index += 1) {
+    const textNode = textNodes[index];
+    const originalLength = (textNode.nodeValue ?? "").length;
+    if (index === textNodes.length - 1) {
+      textNode.nodeValue = cleanedJoined.slice(offset);
+      continue;
+    }
+    textNode.nodeValue = cleanedJoined.slice(offset, offset + originalLength);
+    offset += originalLength;
   }
-  return changed;
+  return true;
 }
 
 function collectTextMatchesEvent(text: string, needle: string): number[] {
@@ -206,9 +215,9 @@ function buildRenderableTriggerRangesEvent(
   return ranges;
 }
 
-function createTriggerNodeEvent(trigger: InteractiveTriggerEvent): HTMLElement {
+function createTriggerNodeEvent(trigger: InteractiveTriggerEvent, resolved = false): HTMLElement {
   const template = document.createElement("template");
-  template.innerHTML = buildTriggerMarkupEvent(trigger);
+  template.innerHTML = buildTriggerMarkupEvent(trigger, resolved);
   return template.content.firstElementChild as HTMLElement;
 }
 
@@ -228,9 +237,25 @@ function buildTriggerSignatureEvent(text: string, triggers: InteractiveTriggerEv
   });
 }
 
+function isTriggerResolvedEvent(
+  trigger: InteractiveTriggerEvent,
+  meta: DiceMetaEvent | null | undefined
+): boolean {
+  const round = meta?.pendingRound;
+  if (!round) return false;
+  return round.rolls.some((record) => {
+    const event = round.events.find((item) => item.id === record?.eventId);
+    if (!event) return false;
+    return String(event.sourceAssistantMsgId || "").trim() === String(trigger.sourceMessageId || "").trim()
+      && String(event.targetName || "").trim() === String(trigger.sourceId || trigger.label || "").trim()
+      && String(event.skill || "").trim() === String(trigger.skill || "").trim();
+  });
+}
+
 function enhanceMessageNodeEvent(
   node: HTMLElement,
-  message: TavernMessageEvent | null
+  message: TavernMessageEvent | null,
+  meta: DiceMetaEvent | null | undefined
 ): boolean {
   const triggers = getMessageInteractiveTriggersEvent(message).filter((trigger) => normalizeInlineTextEvent(trigger.label));
   let changed = false;
@@ -265,7 +290,7 @@ function enhanceMessageNodeEvent(
       if (localStart > cursor) {
         fragment.appendChild(document.createTextNode(raw.slice(cursor, localStart)));
       }
-      fragment.appendChild(createTriggerNodeEvent(range.trigger));
+      fragment.appendChild(createTriggerNodeEvent(range.trigger, isTriggerResolvedEvent(range.trigger, meta)));
       cursor = localEnd;
     }
     if (cursor < raw.length) {
@@ -306,12 +331,25 @@ function ensureTriggerStylesEvent(): void {
       box-shadow: inset 0 -0.15em 0 rgba(197, 160, 89, 0.22), 0 0 10px rgba(197, 160, 89, 0.18);
       color: #f4deb0;
     }
+    .st-rh-inline-trigger[data-resolved="1"] {
+      cursor: default;
+      opacity: 0.58;
+      border-bottom-color: rgba(153, 153, 153, 0.45);
+      box-shadow: inset 0 -0.08em 0 rgba(153, 153, 153, 0.12);
+    }
+    .st-rh-inline-trigger[data-resolved="1"]:hover,
+    .st-rh-inline-trigger[data-resolved="1"].is-active {
+      color: inherit;
+      border-bottom-color: rgba(153, 153, 153, 0.45);
+      box-shadow: inset 0 -0.08em 0 rgba(153, 153, 153, 0.12);
+    }
   `;
   document.head.appendChild(style);
 }
 
 export interface ExecuteInteractiveTriggerDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
+  getDiceMetaEvent?: () => DiceMetaEvent | null | undefined;
   getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null;
   persistChatSafeEvent?: () => void;
   refreshInteractiveTriggersInDomEvent?: () => void;
@@ -335,29 +373,18 @@ export async function executeInteractiveTriggerEvent(
   trigger: InteractiveTriggerEvent,
   deps: ExecuteInteractiveTriggerDepsEvent
 ): Promise<void> {
-  const settings = deps.getSettingsEvent();
-  const resolved = await deps.performInteractiveTriggerRollEvent(trigger);
-  const total = Number(resolved.record.result?.total || 0);
-  const expr = normalizeInlineTextEvent(resolved.record.diceExpr) || "1d20";
-  const skillModifier = Number(resolved.record.skillModifierApplied || 0);
-
-  if (resolved.record.source === "blind_manual_roll") {
-    deps.appendToConsoleEvent(
-      deps.buildBlindResultMessage(`暗骰 ${normalizeInlineTextEvent(trigger.action || trigger.skill || expr)}`),
-      "card"
-    );
-    pushToChat(`🎲 ${normalizeInlineTextEvent(trigger.action || trigger.skill || "检定")}：命运的齿轮转动中……结果已隐藏，仅命运知晓。`);
-    if (settings.blindUiWarnInConsole) {
-      deps.appendToConsoleEvent("查看暗骰真实结果会破坏跑团体验哦。", "warn");
+  try {
+    await deps.performInteractiveTriggerRollEvent(trigger);
+    deps.persistChatSafeEvent?.();
+    setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
+    setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
+  } catch (error) {
+    logger.warn("交互触发检定失败", error);
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (message) {
+      deps.appendToConsoleEvent(message, "warn");
     }
-  } else {
-    deps.appendToConsoleEvent(deps.buildResultMessage(resolved.record.result), "info");
-    pushToChat(`🎲 ${normalizeInlineTextEvent(trigger.action || trigger.skill || "检定")}：${expr}${skillModifier ? ` ${skillModifier > 0 ? "+" : ""}${skillModifier}` : ""} = ${total}`);
   }
-
-  deps.persistChatSafeEvent?.();
-  setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
-  setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
 }
 
 function buildTriggerMenuItemsEvent(
@@ -481,14 +508,15 @@ function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTrigger
 
 export function enhanceInteractiveTriggersInDomEvent(
   settings: DicePluginSettingsEvent,
-  getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null
+  getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null,
+  getDiceMetaEvent?: () => DiceMetaEvent | null | undefined
 ): void {
   ensureTriggerStylesEvent();
   ensureSharedTooltip();
   document.querySelectorAll<HTMLElement>(".mes_text").forEach((node) => {
     try {
       const message = resolveMessageRecordEvent(node, getLiveContextEvent);
-      enhanceMessageNodeEvent(node, message);
+      enhanceMessageNodeEvent(node, message, getDiceMetaEvent?.());
     } catch (error) {
       logger.warn("交互高亮增强失败", error);
     }
@@ -513,7 +541,7 @@ export function bindInteractiveTriggerDomEventsEvent(
       globalRef.__stRollInteractiveTriggerRefreshQueuedEvent = true;
       requestAnimationFrame(() => {
         globalRef.__stRollInteractiveTriggerRefreshQueuedEvent = false;
-        enhanceInteractiveTriggersInDomEvent(settings, deps.getLiveContextEvent);
+        enhanceInteractiveTriggersInDomEvent(settings, deps.getLiveContextEvent, deps.getDiceMetaEvent);
       });
     });
     globalRef.__stRollInteractiveTriggerObserverEvent.observe(document.body, {
@@ -532,6 +560,7 @@ export function bindInteractiveTriggerDomEventsEvent(
       const target = event.target as HTMLElement | null;
       const triggerNode = target?.closest(".st-rh-inline-trigger") as HTMLElement | null;
       if (!triggerNode) return;
+      if (triggerNode.dataset.resolved === "1") return;
       event.preventDefault();
       event.stopPropagation();
       const trigger = buildTriggerFromNodeEvent(triggerNode);
@@ -551,6 +580,7 @@ export function bindInteractiveTriggerDomEventsEvent(
       const selection = window.getSelection();
       const selectedTriggerNode = resolveSelectionTriggerNodeEvent(selection);
       if (selectedTriggerNode) {
+        if (selectedTriggerNode.dataset.resolved === "1") return;
         const trigger = buildTriggerFromNodeEvent(selectedTriggerNode);
         const rect = selectedTriggerNode.getBoundingClientRect();
         showTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, deps);

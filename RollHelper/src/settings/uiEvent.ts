@@ -594,6 +594,11 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -633,6 +638,11 @@ export interface BindBasicSettingsInputsDepsEvent {
     enableInteractiveTriggers?: boolean;
     enableBlindRoll?: boolean;
     defaultBlindSkillsText?: string;
+    maxBlindRollsPerRound?: number;
+    maxQueuedBlindGuidance?: number;
+    blindGuidanceTtlSeconds?: number;
+    enableBlindGuidanceDedup?: boolean;
+    blindDedupScope?: "same_round" | "same_floor";
     enablePassiveCheck?: boolean;
     passiveFormulaBase?: number;
     passiveSkillAliasesText?: string;
@@ -693,6 +703,21 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const defaultBlindSkillsInput = document.getElementById(
     deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event
   ) as HTMLTextAreaElement | null;
+  const maxBlindRollsPerRoundInput = document.getElementById(
+    deps.SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event
+  ) as HTMLInputElement | null;
+  const maxQueuedBlindGuidanceInput = document.getElementById(
+    deps.SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event
+  ) as HTMLInputElement | null;
+  const blindGuidanceTtlSecondsInput = document.getElementById(
+    deps.SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event
+  ) as HTMLInputElement | null;
+  const blindGuidanceDedupInput = document.getElementById(
+    deps.SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event
+  ) as HTMLInputElement | null;
+  const blindDedupScopeInput = document.getElementById(
+    deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event
+  ) as HTMLSelectElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -837,6 +862,25 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   });
   defaultBlindSkillsInput?.addEventListener("change", (event) => {
     deps.updateSettingsEvent({ defaultBlindSkillsText: String((event.target as HTMLTextAreaElement).value ?? "") });
+  });
+  maxBlindRollsPerRoundInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ maxBlindRollsPerRound: value });
+  });
+  maxQueuedBlindGuidanceInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ maxQueuedBlindGuidance: value });
+  });
+  blindGuidanceTtlSecondsInput?.addEventListener("change", (event) => {
+    const value = Math.max(30, Math.floor(Number((event.target as HTMLInputElement).value) || 30));
+    deps.updateSettingsEvent({ blindGuidanceTtlSeconds: value });
+  });
+  blindGuidanceDedupInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableBlindGuidanceDedup: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  blindDedupScopeInput?.addEventListener("change", (event) => {
+    const value = String((event.target as HTMLSelectElement).value || "");
+    deps.updateSettingsEvent({ blindDedupScope: value === "same_floor" ? "same_floor" : "same_round" });
   });
   passiveCheckEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enablePassiveCheck: Boolean((event.target as HTMLInputElement).checked) });
@@ -1034,6 +1078,11 @@ export interface SyncSettingsUiDepsEvent {
     enableInteractiveTriggers: boolean;
     enableBlindRoll: boolean;
     defaultBlindSkillsText: string;
+    maxBlindRollsPerRound: number;
+    maxQueuedBlindGuidance: number;
+    blindGuidanceTtlSeconds: number;
+    enableBlindGuidanceDedup: boolean;
+    blindDedupScope: "same_round" | "same_floor";
     enablePassiveCheck: boolean;
     passiveFormulaBase: number;
     passiveSkillAliasesText: string;
@@ -1069,6 +1118,11 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
+  SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
+  SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event: string;
+  SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event: string;
+  SETTINGS_BLIND_DEDUP_SCOPE_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -1150,6 +1204,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const defaultBlindSkillsInput = document.getElementById(
     deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event
   ) as HTMLTextAreaElement | null;
+  const maxBlindRollsPerRoundInput = document.getElementById(
+    deps.SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event
+  ) as HTMLInputElement | null;
+  const maxQueuedBlindGuidanceInput = document.getElementById(
+    deps.SETTINGS_MAX_QUEUED_BLIND_GUIDANCE_ID_Event
+  ) as HTMLInputElement | null;
+  const blindGuidanceTtlSecondsInput = document.getElementById(
+    deps.SETTINGS_BLIND_GUIDANCE_TTL_SECONDS_ID_Event
+  ) as HTMLInputElement | null;
+  const blindGuidanceDedupInput = document.getElementById(
+    deps.SETTINGS_BLIND_GUIDANCE_DEDUP_ID_Event
+  ) as HTMLInputElement | null;
+  const blindDedupScopeInput = document.getElementById(
+    deps.SETTINGS_BLIND_DEDUP_SCOPE_ID_Event
+  ) as HTMLSelectElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -1244,6 +1313,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (defaultBlindSkillsInput) {
     defaultBlindSkillsInput.value = String(settings.defaultBlindSkillsText ?? "");
+  }
+  if (maxBlindRollsPerRoundInput) {
+    maxBlindRollsPerRoundInput.value = String(settings.maxBlindRollsPerRound);
+  }
+  if (maxQueuedBlindGuidanceInput) {
+    maxQueuedBlindGuidanceInput.value = String(settings.maxQueuedBlindGuidance);
+  }
+  if (blindGuidanceTtlSecondsInput) {
+    blindGuidanceTtlSecondsInput.value = String(settings.blindGuidanceTtlSeconds);
+  }
+  if (blindGuidanceDedupInput) {
+    blindGuidanceDedupInput.checked = Boolean(settings.enableBlindGuidanceDedup);
+  }
+  if (blindDedupScopeInput) {
+    blindDedupScopeInput.value = settings.blindDedupScope === "same_floor" ? "same_floor" : "same_round";
   }
   if (passiveCheckEnabledInput) {
     passiveCheckEnabledInput.checked = Boolean(settings.enablePassiveCheck);

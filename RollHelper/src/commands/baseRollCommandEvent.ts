@@ -2,6 +2,13 @@ import { buildRollCommandHelpTemplateEvent } from "../templates/helpTemplates";
 import type { DiceResult } from "../types/diceEvent";
 import type { BlindGuidanceEvent, DiceMetaEvent, DicePluginSettingsEvent } from "../types/eventDomainEvent";
 import { normalizeBlindGuidanceEvent, resolveNatStateEvent } from "../events/passiveBlindEvent";
+import {
+  buildAssistantFloorKeyEvent,
+  buildBlindGuidanceDedupKeyEvent,
+  canEnqueueBlindGuidanceEvent,
+  enqueueBlindGuidanceSafeEvent,
+  isBlindSkillAllowedEvent,
+} from "../events/roundEvent";
 
 type DiceMetaLikeEvent = {
   last?: DiceResult;
@@ -135,6 +142,37 @@ export function registerBaseMacrosAndCommandsEvent(
         }
         const expr = /\d+d\d+/i.test(raw) ? raw : "1d20";
         const skillName = raw && !/\d+d\d+/i.test(raw) ? raw : "";
+        const meta = getDiceMetaEvent();
+        const round = meta.pendingRound && meta.pendingRound.status === "open" ? meta.pendingRound : null;
+        if (!round || !Array.isArray(round.sourceAssistantMsgIds) || round.sourceAssistantMsgIds.length <= 0) {
+          appendToConsoleEvent("当前没有可绑定的最新轮次，暗骰不会进入后续叙事。请等待新一轮事件，或改用普通 /roll。", "warn");
+          return "";
+        }
+        if (skillName && !isBlindSkillAllowedEvent(skillName, settings)) {
+          appendToConsoleEvent(`技能「${skillName}」当前不允许作为暗骰使用。`, "warn");
+          return "";
+        }
+        const sourceAssistantMsgId = String(round.sourceAssistantMsgIds[round.sourceAssistantMsgIds.length - 1] ?? "").trim();
+        const sourceFloorKey = buildAssistantFloorKeyEvent(sourceAssistantMsgId) || undefined;
+        const dedupeKey = buildBlindGuidanceDedupKeyEvent({
+          roundId: round.roundId,
+          skill: skillName || "未指定",
+          targetLabel: skillName || expr,
+          sourceFloorKey,
+          origin: "slash_broll",
+        });
+        const enqueueCheck = canEnqueueBlindGuidanceEvent({
+          meta,
+          settings,
+          round,
+          dedupeKey,
+          sourceFloorKey,
+          origin: "slash_broll",
+        });
+        if (!enqueueCheck.ok) {
+          appendToConsoleEvent(enqueueCheck.reason || "暗骰当前无法加入叙事引导。", "warn");
+          return "";
+        }
         try {
           let result = await rollDiceEvent(expr);
           const skillModifier = skillName ? resolveSkillModifierBySkillNameEvent(skillName, settings) : 0;
@@ -148,10 +186,12 @@ export function registerBaseMacrosAndCommandsEvent(
           saveLastRoll(result);
           const natState = resolveNatStateEvent(result.rolls, Number(result.sides) || 0);
           const total = Number(result.total || 0);
-          const blindQueue = Array.isArray(getDiceMetaEvent().pendingBlindGuidanceQueue)
-            ? getDiceMetaEvent().pendingBlindGuidanceQueue as BlindGuidanceEvent[]
-            : ((getDiceMetaEvent().pendingBlindGuidanceQueue = []) as BlindGuidanceEvent[]);
-          blindQueue.push(
+          const now = Date.now();
+          const enqueueResult = enqueueBlindGuidanceSafeEvent({
+            meta,
+            settings,
+            round,
+            item:
             normalizeBlindGuidanceEvent({
               rollId: createIdEvent("broll"),
               eventTitle: skillName ? `暗骰【${skillName}】` : `暗骰【${expr}】`,
@@ -161,10 +201,22 @@ export function registerBaseMacrosAndCommandsEvent(
               success: null,
               resultGrade: natState === "nat20" ? "critical_success" : natState === "nat1" ? "critical_failure" : total >= 10 ? "success" : "failure",
               natState,
-              rolledAt: Date.now(),
+              rolledAt: now,
               source: "blind_manual_roll",
-            })
-          );
+              roundId: round.roundId,
+              sourceAssistantMsgId: sourceAssistantMsgId || undefined,
+              sourceFloorKey,
+              origin: "slash_broll",
+              createdAt: now,
+              consumed: false,
+              dedupeKey,
+            }),
+            now,
+          });
+          if (!enqueueResult.ok) {
+            appendToConsoleEvent(enqueueResult.reason || "暗骰当前无法加入叙事引导。", "warn");
+            return "";
+          }
           saveMetadataSafeEvent();
           appendToConsoleEvent(buildBlindResultMessage(skillName ? `暗骰 ${skillName}` : `暗骰 ${expr}`));
           if (settings.blindUiWarnInConsole) {
