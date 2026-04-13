@@ -465,6 +465,10 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   }
   if (settings.enableOutcomeBranches) {
     lines.push("   - outcomes 走向文本会直接影响后续剧情叙事。");
+    lines.push("   - 只要该事件属于暗骰语境，就必须提供结构化 outcomes，至少写出 success 与 failure 两个分支，不能只靠后续正文临场发挥。");
+    lines.push("   - 暗骰的大成功如果需要独立后果，优先使用 outcomes.explode 承载；没有 explode 字段时，系统只会回退到 success。");
+    lines.push("   - 当前结构没有单独的“大失败”字段；如果你希望大失败与普通失败明显不同，请把更重的失败后果写进 failure。");
+    lines.push("   - 暗骰的结构化 outcomes 才是系统选择走向的主来源；后续 blind guidance 只负责把已选中的后果自然融入叙事，不能替代 outcomes 本身。");
     lines.push("   - 严禁在 outcomes.success / failure / explode、desc、dc_reason、note 或任何 rolljson 字段中写入 <rh-trigger>。");
     lines.push("   - rh-trigger 只能写在最终回复的剧情正文里，而且必须落在真正关键、值得继续调查或点击的短词上。");
     lines.push("   - 正例：正文写“你注意到书架边缘有一道<rh-trigger action=\"调查\" skill=\"调查\">异常的刮痕</rh-trigger>。”");
@@ -494,10 +498,14 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push('   - 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" blind="1" sourceId="bookshelf_scratches">异常的刮痕</rh-trigger>');
     lines.push("   - 只标剧情正文中的关键线索短词或短语，不要放在 rolljson、outcomes、desc、dc_reason、状态标签、规则块或摘要块里。");
     lines.push("   - 不要把 rh-trigger 写成骰子走向的一部分；走向只负责叙事结果，交互标记只负责正文中的下一步调查入口。");
+    lines.push("   - 如果本次暗骰后果、被动发现或剧情推进里出现了新的可继续调查线索，就必须在最终剧情正文对应的关键短词上补一个 rh-trigger，不能只写线索却不给点击入口。");
+    lines.push("   - 只有当该线索明确不适合继续互动、不可进一步检定，或只是纯氛围描写时，才允许不写 rh-trigger。");
     lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
     lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
     lines.push("   - difficulty 仅允许 easy / normal / hard / extreme，由系统自动换算阈值；不要手写成功点数。");
     lines.push(`   - 下列技能通常应默认暗骰：${blindSkillText}。适用时请写 blind="1"。`);
+    lines.push("   - 如果你在正文里给某个 rh-trigger 标成暗骰，请确保对应的剧情后果已经在结构化 outcomes 中写全，不要把暗骰成功/失败走向塞进 trigger 文案。");
+    lines.push("   - 对于提示、痕迹、异响、异常气味、可疑人物反应、隐藏机关、错误线索等可追查对象，优先把最关键的那个短词标成 rh-trigger。");
     lines.push("   - 被动检定自动发现的信息，如果值得继续追查，也可以继续标成可点击词。");
   }
 
@@ -705,7 +713,12 @@ function resolvePromptBlindGuidanceInjectionEvent(
       changedMeta: false,
     };
   }
-  const pruned = pruneExpiredBlindGuidanceQueueEvent(meta);
+  const pruned = pruneExpiredBlindGuidanceQueueEvent(
+    meta,
+    Date.now(),
+    Boolean(settings.blindHistoryAutoArchiveEnabled),
+    Number(settings.blindHistoryAutoArchiveAfterHours ?? 24)
+  );
   const normalizedQueue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
   if (normalizedQueue.length <= 0) {
     if (meta.outboundBlindGuidance) {

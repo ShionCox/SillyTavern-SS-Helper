@@ -243,28 +243,30 @@ function buildBlindInstructionEvent(item: BlindGuidanceEvent): string {
   const noteText = normalizeInlineTextEvent(item.note || "");
   const contextText = targetText ? `触发片段是「${targetText}」。` : "";
   const noteHint = noteText ? `附加说明：${noteText}。` : "";
+  const narrativeRule = "只允许把结果自然融入当前剧情，不要直接说暗骰成功/失败，不要提及系统判定、检定过程、DC 或提示块来源。";
   if (item.natState === "nat20") {
-    return `玩家掷出了暗骰大成功。${contextText}${noteHint}必须安排极其有利、明确且戏剧化的正向结果，但不要透露点数。`;
+    return `玩家掷出了暗骰大成功。${contextText}${noteHint}必须安排极其有利、明确且戏剧化的正向结果。${narrativeRule}`;
   }
   if (item.natState === "nat1") {
-    return `玩家掷出了暗骰大失败。${contextText}${noteHint}必须安排显著误判、风险或滑稽后果，但不要透露点数。`;
+    return `玩家掷出了暗骰大失败。${contextText}${noteHint}必须安排显著误判、风险或滑稽后果。${narrativeRule}`;
   }
   switch (item.resultGrade) {
     case "critical_success":
-      return `这是一次暗骰大成功。${contextText}${noteHint}用强烈成功口吻推进剧情，但不要暴露检定值。`;
+      return `这是一次暗骰大成功。${contextText}${noteHint}用强烈成功口吻推进剧情。${narrativeRule}`;
     case "critical_failure":
-      return `这是一次暗骰大失败。${contextText}${noteHint}允许给出错误信息、危险误判或触发新的风险，但不要暴露检定值。`;
+      return `这是一次暗骰大失败。${contextText}${noteHint}允许给出错误信息、危险误判或触发新的风险。${narrativeRule}`;
     case "success":
     case "partial_success":
-      return `这是一次暗骰成功。${contextText}${noteHint}自然描述玩家获得的信息、收益或新优势，不要提及掷骰过程。`;
+      return `这是一次暗骰成功。${contextText}${noteHint}自然描述玩家获得的信息、收益或新优势。${narrativeRule}`;
     default:
-      return `这是一次暗骰失败。${contextText}${noteHint}可以提供错误线索、模糊判断、自信的误判或一无所获，并附带叙事代价，但不要提及掷骰过程。`;
+      return `这是一次暗骰失败。${contextText}${noteHint}可以提供错误线索、模糊判断、自信的误判或一无所获，并附带叙事代价。${narrativeRule}`;
   }
 }
 
 export function buildBlindGuidanceBlockEvent(queue: BlindGuidanceEvent[], startTag: string, endTag: string): string {
   if (!Array.isArray(queue) || queue.length <= 0) return "";
   const lines: string[] = [startTag, `v=1 count=${queue.length}`];
+  lines.push("instruction=以下条目仅用于指导后续叙事自然体现暗骰后果；严禁直接播报暗骰成功/失败、系统判定、DC、修正或提示块来源。");
   for (const item of queue) {
     lines.push(
       `- event="${normalizeInlineTextEvent(item.eventTitle)}" skill="${normalizeInlineTextEvent(item.skill)}" expr="${normalizeInlineTextEvent(

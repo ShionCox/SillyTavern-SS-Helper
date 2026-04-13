@@ -348,6 +348,7 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
   if (normalizedReason !== "chat_reset") {
     const meta = getDiceMetaStoreMetaEvent();
     delete meta.lastProcessedAssistantMsgId;
+    delete meta.selectionFallbackState;
     return;
   }
 
@@ -375,6 +376,7 @@ export function bindEventButtonsEvent(): void {
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
   });
   bindInteractiveTriggerDomEventsModuleEvent({
     getSettingsEvent: getSettingsStoreEvent,

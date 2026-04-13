@@ -7,15 +7,22 @@ import type {
   EventRollRecordEvent,
   RollVisibilityEvent,
   InteractiveTriggerEvent,
+  SelectionFallbackLimitModeEvent,
+  SelectionFallbackStateEvent,
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import {
   buildInteractiveTriggerTooltipHtmlEvent,
   getMessageInteractiveTriggersEvent,
 } from "./interactiveTriggerMetadataEvent";
+import { formatResultGradeLabelEvent } from "./roundEvent";
 
 const TRIGGER_STYLE_ID_Event = "st-rh-inline-trigger-style";
 const TRIGGER_SIGNATURE_ATTR_Event = "data-rh-trigger-signature";
+const SELECTION_FALLBACK_TRIED_KEYS_LIMIT_Event = 120;
+const SELECTION_FALLBACK_MULTI_SPACE_REGEX_Event = /\s{2,}/;
+// 只把真正的句末标点视为分句边界，避免半句里的逗号、顿号被误判成多句。
+const SELECTION_FALLBACK_SENTENCE_SPLIT_REGEX_Event = /[。！？；!?;]+/;
 
 type ResolvedTriggerStateEvent = {
   resolved: boolean;
@@ -77,13 +84,9 @@ function formatTriggerCheckNameEvent(trigger: InteractiveTriggerEvent): string {
 function buildResolvedTriggerStatusLabelEvent(record: EventRollRecordEvent): string {
   const visibility = record.visibility || "public";
   if (visibility === "blind") {
-    if (record.success === true) return "该线索已暗骰通过";
-    if (record.success === false) return "该线索已暗骰失败";
-    return "该线索已完成暗骰";
+    return formatResultGradeLabelEvent(record.resultGrade, "blind");
   }
-  if (record.success === true) return "该线索已检定通过";
-  if (record.success === false) return "该线索已检定失败";
-  return "该线索已完成检定";
+  return formatResultGradeLabelEvent(record.resultGrade, "public");
 }
 
 /**
@@ -142,7 +145,7 @@ function buildTriggerTooltipHtmlEvent(
     return baseTooltip;
   }
   const resolvedDesc = resolvedState.visibility === "blind"
-    ? "这条线索已经按暗骰方式结算，点数不会公开。"
+    ? `结果等级：${resolvedState.statusLabel}。真实点数、DC 与修正不会公开。`
     : "这条线索已经完成检定，可点击查看状态。";
   return `${baseTooltip}<br><span class="st-rh-trigger-tip-state">${escapeHtmlEvent(resolvedState.statusLabel)}｜${resolvedDesc}</span>`;
 }
@@ -164,7 +167,9 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolvedState
     payload.action
   )}" data-skill="${escapeHtmlEvent(payload.skill)}" data-blind="${payload.blind ? "1" : "0"}" data-source-id="${escapeHtmlEvent(
     payload.sourceId
-  )}" data-source-message-id="${escapeHtmlEvent(payload.sourceMessageId)}" data-note="${escapeHtmlEvent(
+  )}" data-source-floor-key="${escapeHtmlEvent(payload.sourceFloorKey || "")}" data-source-message-id="${escapeHtmlEvent(
+    payload.sourceMessageId
+  )}" data-note="${escapeHtmlEvent(
     payload.note || ""
   )}" data-lore-type="${escapeHtmlEvent(payload.loreType || "")}" data-dc-hint="${Number.isFinite(
     Number(payload.dcHint)
@@ -202,6 +207,228 @@ function resolveMessageRecordEvent(
   const messageIndex = Number(resolveMessageContainerIdEvent(node));
   if (!Number.isFinite(messageIndex) || messageIndex < 0 || messageIndex >= chat.length) return null;
   return (chat[messageIndex] as TavernMessageEvent) ?? null;
+}
+
+function normalizeSelectionFallbackTextEvent(text: string): string {
+  return normalizeInlineTextEvent(text).replace(/\s+/g, "");
+}
+
+/**
+ * 功能：统计自由划词文本中的有效句段数量。
+ * @param text 原始划词文本。
+ * @returns 归一化后的有效句段数量。
+ */
+function countSelectionFallbackSentencesEvent(text: string): number {
+  return String(text ?? "")
+    .split(SELECTION_FALLBACK_SENTENCE_SPLIT_REGEX_Event)
+    .map((item) => normalizeInlineTextEvent(item))
+    .filter(Boolean)
+    .length;
+}
+
+/**
+ * 功能：读取当前自由划词限制模式。
+ * @param settings 当前插件设置。
+ * @returns 当前生效的限制模式。
+ */
+function resolveSelectionFallbackLimitModeEvent(
+  settings: DicePluginSettingsEvent
+): SelectionFallbackLimitModeEvent {
+  return settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count";
+}
+
+function buildSelectionFallbackFloorKeyEvent(node: HTMLElement, message: TavernMessageEvent | null): string {
+  const rawMesId = resolveMessageContainerIdEvent(node);
+  if (rawMesId) return `floor:${rawMesId}`;
+  const explicitId = String(message?.id ?? message?.cid ?? message?.uid ?? "").trim();
+  if (explicitId) return `floor_msg:${explicitId}`;
+  return "floor:unknown";
+}
+
+function buildSelectionFallbackSourceMessageIdEvent(node: HTMLElement, message: TavernMessageEvent | null): string {
+  const rawMesId = resolveMessageContainerIdEvent(node);
+  if (rawMesId) return rawMesId;
+  const explicitId = String(message?.id ?? message?.cid ?? message?.uid ?? "").trim();
+  if (explicitId) return explicitId;
+  return "";
+}
+
+function buildSelectionFallbackKeyEvent(floorKey: string, text: string): string {
+  return `${floorKey}::${normalizeSelectionFallbackTextEvent(text).toLowerCase()}`;
+}
+
+function ensureSelectionFallbackStateEvent(meta: DiceMetaEvent): SelectionFallbackStateEvent {
+  if (!meta.selectionFallbackState) {
+    meta.selectionFallbackState = {
+      roundId: undefined,
+      roundUsedCount: 0,
+      floorUsedCountMap: {},
+      triedKeys: [],
+    };
+  }
+  if (!meta.selectionFallbackState.floorUsedCountMap || typeof meta.selectionFallbackState.floorUsedCountMap !== "object") {
+    meta.selectionFallbackState.floorUsedCountMap = {};
+  }
+  if (!Array.isArray(meta.selectionFallbackState.triedKeys)) {
+    meta.selectionFallbackState.triedKeys = [];
+  }
+  return meta.selectionFallbackState;
+}
+
+function syncSelectionFallbackStateWithRoundEvent(meta: DiceMetaEvent, roundId: string): SelectionFallbackStateEvent {
+  const state = ensureSelectionFallbackStateEvent(meta);
+  if (state.roundId !== roundId) {
+    state.roundId = roundId;
+    state.roundUsedCount = 0;
+    state.floorUsedCountMap = {};
+    state.triedKeys = [];
+  }
+  return state;
+}
+
+function canUseSelectionFallbackEvent(args: {
+  meta: DiceMetaEvent;
+  settings: DicePluginSettingsEvent;
+  roundId: string;
+  floorKey: string;
+  selectionKey: string;
+}): { ok: boolean; reason?: string; remainingRound: number; remainingFloor: number } {
+  const state = syncSelectionFallbackStateWithRoundEvent(args.meta, args.roundId);
+  const usedFloorCount = Number(state.floorUsedCountMap[args.floorKey] || 0);
+  const remainingRound = Math.max(0, args.settings.selectionFallbackMaxPerRound - state.roundUsedCount);
+  const remainingFloor = Math.max(0, args.settings.selectionFallbackMaxPerFloor - usedFloorCount);
+  if (state.triedKeys.includes(args.selectionKey)) {
+    return { ok: false, reason: "该文本在当前楼层已经尝试过。", remainingRound, remainingFloor };
+  }
+  if (remainingRound <= 0) {
+    return { ok: false, reason: "本轮自由划词次数已用完。", remainingRound, remainingFloor };
+  }
+  if (remainingFloor <= 0) {
+    return { ok: false, reason: "当前楼层自由划词次数已用完。", remainingRound, remainingFloor };
+  }
+  return { ok: true, remainingRound, remainingFloor };
+}
+
+function consumeSelectionFallbackUsageEvent(args: {
+  meta: DiceMetaEvent;
+  roundId: string;
+  floorKey: string;
+  selectionKey: string;
+}): void {
+  const state = syncSelectionFallbackStateWithRoundEvent(args.meta, args.roundId);
+  state.roundUsedCount += 1;
+  state.floorUsedCountMap[args.floorKey] = Number(state.floorUsedCountMap[args.floorKey] || 0) + 1;
+  if (!state.triedKeys.includes(args.selectionKey)) {
+    state.triedKeys.push(args.selectionKey);
+    if (state.triedKeys.length > SELECTION_FALLBACK_TRIED_KEYS_LIMIT_Event) {
+      state.triedKeys = state.triedKeys.slice(-SELECTION_FALLBACK_TRIED_KEYS_LIMIT_Event);
+    }
+  }
+}
+
+function resolveSelectionFallbackRoundIdEvent(meta: DiceMetaEvent): string {
+  const roundId = String(meta.pendingRound?.roundId ?? "").trim();
+  return roundId || "__no_round__";
+}
+
+function buildSelectionFallbackStatusTextEvent(args: {
+  settings: DicePluginSettingsEvent;
+  roundRemaining: number;
+  floorRemaining: number;
+}): string[] {
+  const limitMode = resolveSelectionFallbackLimitModeEvent(args.settings);
+  const limitText = limitMode === "char_count"
+    ? `规则：按字数 ${args.settings.selectionFallbackMinTextLength}-${args.settings.selectionFallbackMaxTextLength} 字`
+    : `规则：按句数最多 ${args.settings.selectionFallbackMaxSentences} 句`;
+  return [
+    `自由划词检定`,
+    limitText,
+    `剩余：本轮 ${Math.max(0, args.roundRemaining)}/${args.settings.selectionFallbackMaxPerRound} ｜ 本楼层 ${Math.max(0, args.floorRemaining)}/${args.settings.selectionFallbackMaxPerFloor}`,
+  ];
+}
+
+function resolveSelectionFallbackBlockEvent(node: Node | null, scope: HTMLElement): HTMLElement | null {
+  let current = node instanceof HTMLElement ? node : node?.parentElement ?? null;
+  while (current && current !== scope) {
+    if (current.parentElement === scope) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return scope;
+}
+
+function isSelectionFallbackTextAllowedEvent(
+  text: string,
+  settings: DicePluginSettingsEvent
+): { ok: boolean; reason?: string } {
+  const raw = String(text ?? "");
+  const normalized = normalizeInlineTextEvent(raw);
+  const compact = normalizeSelectionFallbackTextEvent(raw);
+  const limitMode = resolveSelectionFallbackLimitModeEvent(settings);
+  if (!normalized || !compact) {
+    return { ok: false, reason: "请选择有效的正文片段。" };
+  }
+  if (raw.includes("\n") || raw.includes("\r")) {
+    return { ok: false, reason: "自由划词不能跨行或跨段。"};
+  }
+  if (SELECTION_FALLBACK_MULTI_SPACE_REGEX_Event.test(raw)) {
+    return { ok: false, reason: "自由划词不能包含多个连续空格。" };
+  }
+  if (limitMode === "char_count") {
+    if (compact.length < settings.selectionFallbackMinTextLength) {
+      return { ok: false, reason: `当前为按字数限制，至少需要 ${settings.selectionFallbackMinTextLength} 个字。` };
+    }
+    if (compact.length > settings.selectionFallbackMaxTextLength) {
+      return { ok: false, reason: `当前为按字数限制，最多允许 ${settings.selectionFallbackMaxTextLength} 个字。` };
+    }
+    return { ok: true };
+  }
+
+  const sentenceCount = countSelectionFallbackSentencesEvent(raw);
+  if (sentenceCount <= 0) {
+    return { ok: false, reason: "当前选区没有可识别的有效句段。" };
+  }
+  if (sentenceCount > settings.selectionFallbackMaxSentences) {
+    return { ok: false, reason: `当前为按句数限制，最多允许 ${settings.selectionFallbackMaxSentences} 句。` };
+  }
+  return { ok: true };
+}
+
+function isSelectionFallbackRangeAllowedEvent(
+  selection: Selection | null
+): { ok: boolean; scopeNode: HTMLElement | null; reason?: string } {
+  if (!selection || selection.rangeCount <= 0 || selection.isCollapsed) {
+    return { ok: false, scopeNode: null, reason: "请选择一个短词或短短语。" };
+  }
+  const range = selection.getRangeAt(0);
+  const anchorElement = selection.anchorNode instanceof HTMLElement
+    ? selection.anchorNode
+    : selection.anchorNode?.parentElement ?? null;
+  const focusElement = selection.focusNode instanceof HTMLElement
+    ? selection.focusNode
+    : selection.focusNode?.parentElement ?? null;
+  const anchorScope = anchorElement?.closest(".mes_text") as HTMLElement | null;
+  const focusScope = focusElement?.closest(".mes_text") as HTMLElement | null;
+  if (!anchorScope || !focusScope || anchorScope !== focusScope) {
+    return { ok: false, scopeNode: null, reason: "自由划词不能跨多个消息文本区域。" };
+  }
+  const startBlock = resolveSelectionFallbackBlockEvent(range.startContainer, anchorScope);
+  const endBlock = resolveSelectionFallbackBlockEvent(range.endContainer, anchorScope);
+  if (!startBlock || !endBlock || startBlock !== endBlock) {
+    return { ok: false, scopeNode: anchorScope, reason: "自由划词不能跨多个段落或多个文本块。" };
+  }
+  const triggerNodes = Array.from(anchorScope.querySelectorAll<HTMLElement>(".st-rh-inline-trigger"));
+  for (const triggerNode of triggerNodes) {
+    try {
+      if (range.intersectsNode(triggerNode)) {
+        return { ok: false, scopeNode: anchorScope, reason: "请直接点击 AI 标记的线索词，不要混选现有 trigger。"};
+      }
+    } catch {
+      continue;
+    }
+  }
+  return { ok: true, scopeNode: anchorScope };
 }
 
 function collectRenderableTextNodesEvent(node: HTMLElement): Array<{ node: Text; start: number; end: number }> {
@@ -321,6 +548,7 @@ function buildTriggerSignatureEvent(
       skill: normalizeInlineTextEvent(trigger.skill),
       blind: Boolean(trigger.blind),
       sourceId: normalizeInlineTextEvent(trigger.sourceId),
+      sourceFloorKey: normalizeInlineTextEvent(trigger.sourceFloorKey),
       sourceMessageId: normalizeInlineTextEvent(trigger.sourceMessageId),
       occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
       resolvedState: findResolvedTriggerStateEvent(trigger, meta),
@@ -485,6 +713,31 @@ function buildResolvedTriggerMenuItemsEvent(
 ) {
   const statusLabel = normalizeInlineTextEvent(triggerNode.dataset.resolvedLabel || "已检定完成");
   const visibility = normalizeInlineTextEvent(triggerNode.dataset.resolvedVisibility || (trigger.blind ? "blind" : "public"));
+  if (visibility === "blind") {
+    return [
+      {
+        id: `${trigger.triggerId}:resolved-blind`,
+        label: "已暗骰处理",
+        iconClassName: "fa-solid fa-eye-slash",
+        disabled: true,
+        onSelect: () => undefined,
+      },
+      {
+        id: `${trigger.triggerId}:resolved-grade`,
+        label: `结果等级：${statusLabel}`,
+        iconClassName: "fa-solid fa-chart-line",
+        disabled: true,
+        onSelect: () => undefined,
+      },
+      {
+        id: `${trigger.triggerId}:resolved-detail`,
+        label: "真实点数、阈值与修正不会公开显示。",
+        iconClassName: "fa-solid fa-circle-info",
+        disabled: true,
+        onSelect: () => undefined,
+      },
+    ];
+  }
   const detailLabel = visibility === "blind"
     ? "这条线索已按暗骰处理，点数不会公开。"
     : "这条线索已经结算，可以直接参考这个结果。";
@@ -506,18 +759,25 @@ function buildResolvedTriggerMenuItemsEvent(
   ];
 }
 
-function buildSelectionFallbackTriggersEvent(
-  text: string,
-  deps: ExecuteInteractiveTriggerDepsEvent
-): InteractiveTriggerEvent[] {
+function buildSelectionFallbackTriggersEvent(args: {
+  text: string;
+  sourceMessageId: string;
+  sourceFloorKey: string;
+  selectionKey: string;
+  deps: ExecuteInteractiveTriggerDepsEvent;
+}): InteractiveTriggerEvent[] {
+  const { text, sourceMessageId, sourceFloorKey, selectionKey, deps } = args;
   const settings = deps.getSettingsEvent();
   const defaultBlindSkills = parseDefaultBlindSkillsEvent(settings);
   const label = normalizeInlineTextEvent(text).slice(0, 48);
+  const action = normalizeInlineTextEvent(settings.selectionFallbackSingleAction || "调查") || "调查";
+  const skill = normalizeInlineTextEvent(settings.selectionFallbackSingleSkill || "调查") || "调查";
   const base = {
-    triggerId: `selection:${Date.now()}`,
+    triggerId: `${selectionKey}:${Date.now()}`,
     label,
-    sourceMessageId: "",
-    sourceId: `selection:${label}`,
+    sourceMessageId,
+    sourceFloorKey,
+    sourceId: selectionKey,
     textRange: null,
     dcHint: null,
     difficulty: "normal" as const,
@@ -525,14 +785,12 @@ function buildSelectionFallbackTriggersEvent(
     note: "来自玩家划词触发",
     diceExpr: "1d20",
   };
-  const skills = ["调查", "历史", "洞察"];
-  return skills.map((skill, index) => ({
+  return [{
     ...base,
-    triggerId: `${base.triggerId}:${index}`,
-    action: skill === "历史" ? "回忆" : skill,
+    action,
     skill,
     blind: defaultBlindSkills.has(skill.toLowerCase()),
-  }));
+  }];
 }
 
 function showTriggerMenuAtEvent(
@@ -569,24 +827,88 @@ function showResolvedTriggerMenuAtEvent(
   });
 }
 
-function showSelectionMenuEvent(
-  selectionText: string,
-  x: number,
-  y: number,
-  deps: ExecuteInteractiveTriggerDepsEvent
-): void {
-  const triggers = buildSelectionFallbackTriggersEvent(selectionText, deps);
+function showSelectionMenuEvent(args: {
+  selectionText: string;
+  x: number;
+  y: number;
+  deps: ExecuteInteractiveTriggerDepsEvent;
+  sourceMessageId: string;
+  sourceFloorKey: string;
+  selectionKey: string;
+  meta: DiceMetaEvent;
+  canUseResult: { ok: boolean; reason?: string; remainingRound: number; remainingFloor: number };
+  readonlyReasons?: string[];
+}): void {
+  const {
+    selectionText,
+    x,
+    y,
+    deps,
+    sourceMessageId,
+    sourceFloorKey,
+    selectionKey,
+    meta,
+    canUseResult,
+    readonlyReasons = [],
+  } = args;
+  const settings = deps.getSettingsEvent();
+  const roundId = resolveSelectionFallbackRoundIdEvent(meta);
+  const triggers = buildSelectionFallbackTriggersEvent({
+    text: selectionText,
+    sourceMessageId,
+    sourceFloorKey,
+    selectionKey,
+    deps,
+  });
+  const headerItems = buildSelectionFallbackStatusTextEvent({
+    settings,
+    roundRemaining: canUseResult.remainingRound,
+    floorRemaining: canUseResult.remainingFloor,
+  }).map((label, index) => ({
+    id: `selection-status:${index}`,
+    label,
+    iconClassName: index === 0 ? "fa-solid fa-pen-ruler" : "fa-solid fa-chart-simple",
+    disabled: true,
+    onSelect: () => undefined,
+  }));
+  const reasonItems = readonlyReasons.map((reason, index) => ({
+    id: `selection-reason:${index}`,
+    label: reason,
+    iconClassName: "fa-solid fa-circle-info",
+    disabled: true,
+    onSelect: () => undefined,
+  }));
+  const actionItems = canUseResult.ok
+    ? triggers.map((trigger) => ({
+        id: trigger.triggerId,
+        label: trigger.blind
+          ? `进行${formatTriggerCheckNameEvent(trigger)}暗骰`
+          : `进行${formatTriggerCheckNameEvent(trigger)}检定`,
+        iconClassName: trigger.blind ? "fa-solid fa-eye-slash" : "fa-solid fa-dice-d20",
+        onSelect: async () => {
+          consumeSelectionFallbackUsageEvent({
+            meta,
+            roundId,
+            floorKey: sourceFloorKey,
+            selectionKey,
+          });
+          deps.persistChatSafeEvent?.();
+          await executeInteractiveTriggerEvent(trigger, deps);
+        },
+      }))
+    : [
+        {
+          id: "selection-no-action",
+          label: "当前不可执行自由划词检定",
+          iconClassName: "fa-solid fa-ban",
+          disabled: true,
+          onSelect: () => undefined,
+        },
+      ];
   showSharedContextMenu({
     x,
     y,
-    items: triggers.map((trigger) => ({
-      id: trigger.triggerId,
-      label: trigger.blind
-        ? `进行${formatTriggerCheckNameEvent(trigger)}暗骰`
-        : `进行${formatTriggerCheckNameEvent(trigger)}检定`,
-      iconClassName: trigger.blind ? "fa-solid fa-eye-slash" : "fa-solid fa-dice-d20",
-      onSelect: () => executeInteractiveTriggerEvent(trigger, deps),
-    })),
+    items: [...headerItems, ...reasonItems, ...actionItems],
   });
 }
 
@@ -621,6 +943,7 @@ function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTrigger
     skill: normalizeInlineTextEvent(triggerNode.dataset.skill),
     blind: triggerNode.dataset.blind === "1",
     sourceMessageId: normalizeInlineTextEvent(triggerNode.dataset.sourceMessageId),
+    sourceFloorKey: normalizeInlineTextEvent(triggerNode.dataset.sourceFloorKey),
     sourceId: normalizeInlineTextEvent(triggerNode.dataset.sourceId),
     occurrenceIndex: Number.isFinite(Number(triggerNode.dataset.occurrenceIndex))
       ? Math.max(0, Math.floor(Number(triggerNode.dataset.occurrenceIndex)))
@@ -637,6 +960,30 @@ function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTrigger
     loreType: normalizeInlineTextEvent(triggerNode.dataset.loreType),
     note: normalizeInlineTextEvent(triggerNode.dataset.note),
     diceExpr: normalizeInlineTextEvent(triggerNode.dataset.diceExpr) || "1d20",
+  };
+}
+
+export function getSelectionFallbackRemainingSummaryEvent(
+  settings: DicePluginSettingsEvent,
+  meta: DiceMetaEvent | null | undefined
+): {
+  roundRemaining: number;
+  floorRemaining: number | null;
+  limitMode: SelectionFallbackLimitModeEvent;
+  minTextLength: number;
+  maxTextLength: number;
+  maxSentences: number;
+} {
+  const safeMeta = meta ?? {};
+  const roundId = resolveSelectionFallbackRoundIdEvent(safeMeta as DiceMetaEvent);
+  const state = syncSelectionFallbackStateWithRoundEvent(safeMeta as DiceMetaEvent, roundId);
+  return {
+    roundRemaining: Math.max(0, settings.selectionFallbackMaxPerRound - state.roundUsedCount),
+    floorRemaining: null,
+    limitMode: resolveSelectionFallbackLimitModeEvent(settings),
+    minTextLength: Number(settings.selectionFallbackMinTextLength ?? 1),
+    maxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
+    maxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
   };
 }
 
@@ -726,14 +1073,64 @@ export function bindInteractiveTriggerDomEventsEvent(
         showTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, deps);
         return;
       }
-      const text = normalizeInlineTextEvent(selection?.toString() || "");
-      if (!text || text.length < 2 || text.length > 24) return;
-      const anchorNode = selection?.anchorNode;
-      if (!anchorNode || !(anchorNode.parentElement?.closest(".mes_text"))) return;
+      if (!settings.enableSelectionFallbackTriggers) return;
+      const rangeCheck = isSelectionFallbackRangeAllowedEvent(selection);
+      if (!rangeCheck.scopeNode) return;
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
       const rect = range?.getBoundingClientRect();
       if (!rect || (!rect.width && !rect.height)) return;
-      showSelectionMenuEvent(text, rect.left + rect.width / 2, rect.bottom + 8, deps);
+      const message = resolveMessageRecordEvent(rangeCheck.scopeNode, deps.getLiveContextEvent);
+      const sourceMessageId = buildSelectionFallbackSourceMessageIdEvent(rangeCheck.scopeNode, message);
+      const sourceFloorKey = buildSelectionFallbackFloorKeyEvent(rangeCheck.scopeNode, message);
+      const rawText = String(selection?.toString() ?? "");
+      const text = normalizeInlineTextEvent(rawText);
+      const meta = deps.getDiceMetaEvent?.() ?? {
+        pendingRound: undefined,
+      } as DiceMetaEvent;
+      const roundId = resolveSelectionFallbackRoundIdEvent(meta);
+      const selectionKey = buildSelectionFallbackKeyEvent(sourceFloorKey, text);
+      const textCheck = isSelectionFallbackTextAllowedEvent(rawText, settings);
+      const canUseResult = canUseSelectionFallbackEvent({
+        meta,
+        settings,
+        roundId,
+        floorKey: sourceFloorKey,
+        selectionKey,
+      });
+      const readonlyReasons = [
+        rangeCheck.ok ? "" : rangeCheck.reason || "",
+        textCheck.ok ? "" : textCheck.reason || "",
+        canUseResult.ok ? "" : canUseResult.reason || "",
+      ].filter(Boolean);
+      if (settings.enableSelectionFallbackDebugInfo) {
+        logger.info("[交互触发] 自由划词状态", {
+          text,
+          selectionKey,
+          sourceFloorKey,
+          sourceMessageId,
+          roundId,
+          rangeAllowed: rangeCheck.ok,
+          textAllowed: textCheck.ok,
+          canUse: canUseResult.ok,
+          readonlyReasons,
+        });
+      }
+      if (!text && readonlyReasons.length <= 0) return;
+      showSelectionMenuEvent({
+        selectionText: text,
+        x: rect.left + rect.width / 2,
+        y: rect.bottom + 8,
+        deps,
+        sourceMessageId,
+        sourceFloorKey,
+        selectionKey,
+        meta,
+        canUseResult: {
+          ...canUseResult,
+          ok: rangeCheck.ok && textCheck.ok && canUseResult.ok,
+        },
+        readonlyReasons,
+      });
     },
     true
   );

@@ -37,6 +37,16 @@ export const SETTINGS_STATUS_COLS_ID_Event = "st-roll-settings-Event-status-cols
 export const SETTINGS_STATUS_MEMORY_STATE_ID_Event = "st-roll-settings-Event-status-memory-state";
 export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allowed-dice-sides";
 export const SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event = "st-roll-settings-Event-interactive-triggers-enabled";
+export const SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event = "st-roll-settings-Event-selection-fallback-enabled";
+export const SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event = "st-roll-settings-Event-selection-fallback-limit-mode";
+export const SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event = "st-roll-settings-Event-selection-fallback-max-per-round";
+export const SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event = "st-roll-settings-Event-selection-fallback-max-per-floor";
+export const SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event = "st-roll-settings-Event-selection-fallback-min-text-length";
+export const SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event = "st-roll-settings-Event-selection-fallback-max-text-length";
+export const SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event = "st-roll-settings-Event-selection-fallback-max-sentences";
+export const SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event = "st-roll-settings-Event-selection-fallback-single-action";
+export const SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event = "st-roll-settings-Event-selection-fallback-single-skill";
+export const SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event = "st-roll-settings-Event-selection-fallback-debug-info";
 export const SETTINGS_BLIND_ROLL_ENABLED_ID_Event = "st-roll-settings-Event-blind-roll-enabled";
 export const SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event = "st-roll-settings-Event-default-blind-skills";
 export const SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event = "st-roll-settings-Event-max-blind-rolls-per-round";
@@ -47,6 +57,11 @@ export const SETTINGS_BLIND_DEDUP_SCOPE_ID_Event = "st-roll-settings-Event-blind
 export const SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event = "st-roll-settings-Event-blind-event-card-visibility-mode";
 export const SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event = "st-roll-settings-Event-max-blind-guidance-injected-per-prompt";
 export const SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event = "st-roll-settings-Event-enable-blind-debug-info";
+export const SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event = "st-roll-settings-Event-blind-history-display-consumed-as-narrative-applied";
+export const SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event = "st-roll-settings-Event-blind-history-auto-archive-enabled";
+export const SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event = "st-roll-settings-Event-blind-history-auto-archive-after-hours";
+export const SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event = "st-roll-settings-Event-blind-history-show-floor-key";
+export const SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event = "st-roll-settings-Event-blind-history-show-origin";
 export const SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event = "st-roll-settings-Event-passive-check-enabled";
 export const SETTINGS_PASSIVE_FORMULA_BASE_ID_Event = "st-roll-settings-Event-passive-formula-base";
 export const SETTINGS_PASSIVE_ALIASES_ID_Event = "st-roll-settings-Event-passive-aliases";
@@ -188,6 +203,16 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_MEMORY_STATE_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
@@ -198,6 +223,11 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -290,6 +320,16 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
@@ -300,6 +340,11 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -363,6 +408,16 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
@@ -373,6 +428,11 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event,
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event,
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
@@ -469,6 +529,16 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   minTimeLimitSeconds: 10,
   enableSkillSystem: true,
   enableInteractiveTriggers: true,
+  enableSelectionFallbackTriggers: true,
+  selectionFallbackLimitMode: "sentence_count",
+  selectionFallbackMaxPerRound: 3,
+  selectionFallbackMaxPerFloor: 2,
+  selectionFallbackMinTextLength: 2,
+  selectionFallbackMaxTextLength: 10,
+  selectionFallbackMaxSentences: 2,
+  selectionFallbackSingleAction: "调查",
+  selectionFallbackSingleSkill: "调查",
+  enableSelectionFallbackDebugInfo: false,
   interactiveTriggerMode: "ai_markup",
   enableBlindRoll: true,
   defaultBlindSkillsText: "洞察\n潜行\n搜查\n历史\n调查",
@@ -480,6 +550,11 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   blindEventCardVisibilityMode: "remove",
   maxBlindGuidanceInjectedPerPrompt: 2,
   enableBlindDebugInfo: false,
+  blindHistoryDisplayConsumedAsNarrativeApplied: true,
+  blindHistoryAutoArchiveEnabled: true,
+  blindHistoryAutoArchiveAfterHours: 24,
+  blindHistoryShowFloorKey: true,
+  blindHistoryShowOrigin: true,
   enablePassiveCheck: true,
   passiveFormulaBase: 10,
   passiveSkillAliasesText: JSON.stringify(

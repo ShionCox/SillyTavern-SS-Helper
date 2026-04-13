@@ -592,6 +592,16 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
@@ -602,6 +612,11 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -639,6 +654,16 @@ export interface BindBasicSettingsInputsDepsEvent {
     enableStatusSystem?: boolean;
     aiAllowedDiceSidesText?: string;
     enableInteractiveTriggers?: boolean;
+    enableSelectionFallbackTriggers?: boolean;
+    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackMaxPerRound?: number;
+    selectionFallbackMaxPerFloor?: number;
+    selectionFallbackMinTextLength?: number;
+    selectionFallbackMaxTextLength?: number;
+    selectionFallbackMaxSentences?: number;
+    selectionFallbackSingleAction?: string;
+    selectionFallbackSingleSkill?: string;
+    enableSelectionFallbackDebugInfo?: boolean;
     enableBlindRoll?: boolean;
     defaultBlindSkillsText?: string;
     maxBlindRollsPerRound?: number;
@@ -649,6 +674,11 @@ export interface BindBasicSettingsInputsDepsEvent {
     blindEventCardVisibilityMode?: "remove" | "placeholder";
     maxBlindGuidanceInjectedPerPrompt?: number;
     enableBlindDebugInfo?: boolean;
+    blindHistoryDisplayConsumedAsNarrativeApplied?: boolean;
+    blindHistoryAutoArchiveEnabled?: boolean;
+    blindHistoryAutoArchiveAfterHours?: number;
+    blindHistoryShowFloorKey?: boolean;
+    blindHistoryShowOrigin?: boolean;
     enablePassiveCheck?: boolean;
     passiveFormulaBase?: number;
     passiveSkillAliasesText?: string;
@@ -703,6 +733,36 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const interactiveTriggersEnabledInput = document.getElementById(
     deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const selectionFallbackEnabledInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLimitModeInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event
+  ) as HTMLSelectElement | null;
+  const selectionFallbackMaxPerRoundInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxPerFloorInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMinTextLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxTextLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxSentencesInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackSingleActionInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackSingleSkillInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackDebugInfoInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
   const blindRollEnabledInput = document.getElementById(
     deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -732,6 +792,21 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   ) as HTMLInputElement | null;
   const enableBlindDebugInfoInput = document.getElementById(
     deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryDisplayConsumedAsNarrativeAppliedInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryAutoArchiveEnabledInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryAutoArchiveAfterHoursInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryShowFloorKeyInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryShowOriginInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event
   ) as HTMLInputElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
@@ -872,6 +947,44 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   interactiveTriggersEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enableInteractiveTriggers: Boolean((event.target as HTMLInputElement).checked) });
   });
+  selectionFallbackEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableSelectionFallbackTriggers: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  selectionFallbackLimitModeInput?.addEventListener("change", (event) => {
+    const value = String((event.target as HTMLSelectElement).value ?? "").trim() === "char_count"
+      ? "char_count"
+      : "sentence_count";
+    deps.updateSettingsEvent({ selectionFallbackLimitMode: value });
+  });
+  selectionFallbackMaxPerRoundInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ selectionFallbackMaxPerRound: value });
+  });
+  selectionFallbackMaxPerFloorInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ selectionFallbackMaxPerFloor: value });
+  });
+  selectionFallbackMinTextLengthInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ selectionFallbackMinTextLength: value });
+  });
+  selectionFallbackMaxTextLengthInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ selectionFallbackMaxTextLength: value });
+  });
+  selectionFallbackMaxSentencesInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ selectionFallbackMaxSentences: value });
+  });
+  selectionFallbackSingleActionInput?.addEventListener("change", (event) => {
+    deps.updateSettingsEvent({ selectionFallbackSingleAction: String((event.target as HTMLInputElement).value ?? "") });
+  });
+  selectionFallbackSingleSkillInput?.addEventListener("change", (event) => {
+    deps.updateSettingsEvent({ selectionFallbackSingleSkill: String((event.target as HTMLInputElement).value ?? "") });
+  });
+  selectionFallbackDebugInfoInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableSelectionFallbackDebugInfo: Boolean((event.target as HTMLInputElement).checked) });
+  });
   blindRollEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enableBlindRoll: Boolean((event.target as HTMLInputElement).checked) });
   });
@@ -909,6 +1022,22 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   });
   enableBlindDebugInfoInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enableBlindDebugInfo: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  blindHistoryDisplayConsumedAsNarrativeAppliedInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ blindHistoryDisplayConsumedAsNarrativeApplied: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  blindHistoryAutoArchiveEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ blindHistoryAutoArchiveEnabled: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  blindHistoryAutoArchiveAfterHoursInput?.addEventListener("change", (event) => {
+    const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
+    deps.updateSettingsEvent({ blindHistoryAutoArchiveAfterHours: value });
+  });
+  blindHistoryShowFloorKeyInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ blindHistoryShowFloorKey: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  blindHistoryShowOriginInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ blindHistoryShowOrigin: Boolean((event.target as HTMLInputElement).checked) });
   });
   passiveCheckEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enablePassiveCheck: Boolean((event.target as HTMLInputElement).checked) });
@@ -1104,6 +1233,16 @@ export interface SyncSettingsUiDepsEvent {
     enableStatusSystem: boolean;
     aiAllowedDiceSidesText: string;
     enableInteractiveTriggers: boolean;
+    enableSelectionFallbackTriggers: boolean;
+    selectionFallbackLimitMode: "char_count" | "sentence_count";
+    selectionFallbackMaxPerRound: number;
+    selectionFallbackMaxPerFloor: number;
+    selectionFallbackMinTextLength: number;
+    selectionFallbackMaxTextLength: number;
+    selectionFallbackMaxSentences: number;
+    selectionFallbackSingleAction: string;
+    selectionFallbackSingleSkill: string;
+    enableSelectionFallbackDebugInfo: boolean;
     enableBlindRoll: boolean;
     defaultBlindSkillsText: string;
     maxBlindRollsPerRound: number;
@@ -1114,6 +1253,11 @@ export interface SyncSettingsUiDepsEvent {
     blindEventCardVisibilityMode: "remove" | "placeholder";
     maxBlindGuidanceInjectedPerPrompt: number;
     enableBlindDebugInfo: boolean;
+    blindHistoryDisplayConsumedAsNarrativeApplied: boolean;
+    blindHistoryAutoArchiveEnabled: boolean;
+    blindHistoryAutoArchiveAfterHours: number;
+    blindHistoryShowFloorKey: boolean;
+    blindHistoryShowOrigin: boolean;
     enablePassiveCheck: boolean;
     passiveFormulaBase: number;
     passiveSkillAliasesText: string;
@@ -1147,6 +1291,16 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
@@ -1157,6 +1311,11 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -1232,6 +1391,36 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const interactiveTriggersEnabledInput = document.getElementById(
     deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const selectionFallbackEnabledInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLimitModeInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event
+  ) as HTMLSelectElement | null;
+  const selectionFallbackMaxPerRoundInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxPerFloorInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMinTextLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxTextLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxSentencesInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackSingleActionInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackSingleSkillInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackDebugInfoInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
   const blindRollEnabledInput = document.getElementById(
     deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -1261,6 +1450,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   ) as HTMLInputElement | null;
   const enableBlindDebugInfoInput = document.getElementById(
     deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryDisplayConsumedAsNarrativeAppliedInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryAutoArchiveEnabledInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryAutoArchiveAfterHoursInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryShowFloorKeyInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event
+  ) as HTMLInputElement | null;
+  const blindHistoryShowOriginInput = document.getElementById(
+    deps.SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event
   ) as HTMLInputElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
@@ -1351,6 +1555,38 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (interactiveTriggersEnabledInput) {
     interactiveTriggersEnabledInput.checked = Boolean(settings.enableInteractiveTriggers);
   }
+  if (selectionFallbackEnabledInput) {
+    selectionFallbackEnabledInput.checked = Boolean(settings.enableSelectionFallbackTriggers);
+  }
+  if (selectionFallbackLimitModeInput) {
+    selectionFallbackLimitModeInput.value = settings.selectionFallbackLimitMode === "char_count"
+      ? "char_count"
+      : "sentence_count";
+  }
+  if (selectionFallbackMaxPerRoundInput) {
+    selectionFallbackMaxPerRoundInput.value = String(settings.selectionFallbackMaxPerRound);
+  }
+  if (selectionFallbackMaxPerFloorInput) {
+    selectionFallbackMaxPerFloorInput.value = String(settings.selectionFallbackMaxPerFloor);
+  }
+  if (selectionFallbackMinTextLengthInput) {
+    selectionFallbackMinTextLengthInput.value = String(settings.selectionFallbackMinTextLength);
+  }
+  if (selectionFallbackMaxTextLengthInput) {
+    selectionFallbackMaxTextLengthInput.value = String(settings.selectionFallbackMaxTextLength);
+  }
+  if (selectionFallbackMaxSentencesInput) {
+    selectionFallbackMaxSentencesInput.value = String(settings.selectionFallbackMaxSentences);
+  }
+  if (selectionFallbackSingleActionInput) {
+    selectionFallbackSingleActionInput.value = String(settings.selectionFallbackSingleAction ?? "");
+  }
+  if (selectionFallbackSingleSkillInput) {
+    selectionFallbackSingleSkillInput.value = String(settings.selectionFallbackSingleSkill ?? "");
+  }
+  if (selectionFallbackDebugInfoInput) {
+    selectionFallbackDebugInfoInput.checked = Boolean(settings.enableSelectionFallbackDebugInfo);
+  }
   if (blindRollEnabledInput) {
     blindRollEnabledInput.checked = Boolean(settings.enableBlindRoll);
   }
@@ -1381,6 +1617,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (enableBlindDebugInfoInput) {
     enableBlindDebugInfoInput.checked = Boolean(settings.enableBlindDebugInfo);
+  }
+  if (blindHistoryDisplayConsumedAsNarrativeAppliedInput) {
+    blindHistoryDisplayConsumedAsNarrativeAppliedInput.checked = Boolean(settings.blindHistoryDisplayConsumedAsNarrativeApplied);
+  }
+  if (blindHistoryAutoArchiveEnabledInput) {
+    blindHistoryAutoArchiveEnabledInput.checked = Boolean(settings.blindHistoryAutoArchiveEnabled);
+  }
+  if (blindHistoryAutoArchiveAfterHoursInput) {
+    blindHistoryAutoArchiveAfterHoursInput.value = String(settings.blindHistoryAutoArchiveAfterHours);
+  }
+  if (blindHistoryShowFloorKeyInput) {
+    blindHistoryShowFloorKeyInput.checked = Boolean(settings.blindHistoryShowFloorKey);
+  }
+  if (blindHistoryShowOriginInput) {
+    blindHistoryShowOriginInput.checked = Boolean(settings.blindHistoryShowOrigin);
   }
   if (passiveCheckEnabledInput) {
     passiveCheckEnabledInput.checked = Boolean(settings.enablePassiveCheck);

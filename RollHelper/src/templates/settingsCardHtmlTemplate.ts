@@ -693,6 +693,152 @@ export function buildSettingsCardHtmlTemplateEvent(
             )}
 
           ${buildCheckboxItemEvent(
+            ids.selectionFallbackEnabledId,
+            "启用自由划词兜底检定",
+            "允许玩家对未被 AI 标记为 rh-trigger 的正文片段发起有限次数的兜底调查。默认开启，且默认按句数限制。",
+            "selection fallback trigger short phrase sentence limit",
+            "开启后，自由划词仅作为有限次数的兜底调查入口。"
+            )}
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback limit mode sentence char count">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">自由划词限制模式</div>
+              <div class="st-roll-item-desc">二选一生效。按字数限制时使用整段长度；按句数限制时按标点分句，默认最多两句。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedSelectField({
+                id: ids.selectionFallbackLimitModeId,
+                value: "sentence_count",
+                containerClassName: "stx-shared-select-flex-220",
+                options: [
+                  { value: "sentence_count", label: "按句数限制" },
+                  { value: "char_count", label: "按字数限制" },
+                ],
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max per round limit">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">每轮自由划词上限</div>
+              <div class="st-roll-item-desc">限制同一未结束轮次中，玩家最多能发起多少次自由划词兜底检定。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMaxPerRoundId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置每轮自由划词兜底检定上限。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max per floor limit">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">每楼层自由划词上限</div>
+              <div class="st-roll-item-desc">限制同一条助手回复中，玩家最多能发起多少次自由划词兜底检定。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMaxPerFloorId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置每楼层自由划词兜底检定上限。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback min max text length char count">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">自由划词字数限制</div>
+              <div class="st-roll-item-desc">仅在“按字数限制”模式下生效，按整段归一化后的总长度判断。</div>
+            </div>
+            <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMinTextLengthId,
+                type: "number",
+                className: "stx-shared-input-flex-120",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置自由划词最小长度。",
+                  placeholder: "最小长度",
+                },
+              })}
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMaxTextLengthId,
+                type: "number",
+                className: "stx-shared-input-flex-120",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置自由划词最大长度。",
+                  placeholder: "最大长度",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max sentences sentence count punctuation">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">自由划词最多句数</div>
+              <div class="st-roll-item-desc">仅在“按句数限制”模式下生效，按标点分句统计有效句段数量。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMaxSentencesId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置按句数限制时允许的最大句数。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback action skill">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">自由划词默认动作与技能</div>
+              <div class="st-roll-item-desc">自由划词只提供一个兜底入口，默认建议统一使用“调查”。</div>
+            </div>
+            <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackSingleActionId,
+                type: "text",
+                className: "stx-shared-input-flex-160",
+                attributes: {
+                  "data-tip": "设置自由划词兜底入口显示的动作名称。",
+                  placeholder: "动作",
+                },
+              })}
+              ${buildSharedInputField({
+                id: ids.selectionFallbackSingleSkillId,
+                type: "text",
+                className: "stx-shared-input-flex-160",
+                attributes: {
+                  "data-tip": "设置自由划词兜底入口使用的技能名称。",
+                  placeholder: "技能",
+                },
+              })}
+            </div>
+          </div>
+
+          ${buildCheckboxItemEvent(
+            ids.selectionFallbackDebugInfoId,
+            "显示自由划词调试信息",
+            "开启后可查看当前划词键、楼层键、剩余次数与去重命中情况，便于排查问题。",
+            "selection fallback debug info floor key round remain",
+            "开启自由划词兜底检定的调试信息展示。"
+            )}
+
+          ${buildCheckboxItemEvent(
             ids.blindRollEnabledId,
             "启用暗骰",
             "主动暗骰与事件卡暗骰都会隐藏结果，只把真实结算喂给 AI。",
@@ -815,6 +961,56 @@ export function buildSettingsCardHtmlTemplateEvent(
               })}
             </div>
           </div>
+
+          ${buildCheckboxItemEvent(
+            ids.blindHistoryDisplayConsumedAsNarrativeAppliedId,
+            "暗骰已消费显示为已体现",
+            "开启后，玩家侧把 consumed 解释为“已体现”，更符合叙事理解；关闭时保留“已消费”字样。",
+            "blind history consumed narrative applied display",
+            "控制暗骰列表对 consumed 状态的玩家显示文案。"
+            )}
+
+          ${buildCheckboxItemEvent(
+            ids.blindHistoryAutoArchiveEnabledId,
+            "启用暗骰历史自动归档",
+            "自动把较早的已体现、已过期、已失效条目转为已归档，减少当前列表混乱。",
+            "blind history auto archive",
+            "开启后，旧的暗骰历史会按时间自动归档。"
+            )}
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="blind history auto archive hours">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">暗骰自动归档时长（小时）</div>
+              <div class="st-roll-item-desc">达到该时长后，旧的已体现、已过期、已失效条目会自动归档。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.blindHistoryAutoArchiveAfterHoursId,
+                type: "number",
+                attributes: {
+                  min: 1,
+                  step: 1,
+                  "data-tip": "设置暗骰历史自动归档的小时数。",
+                },
+              })}
+            </div>
+          </div>
+
+          ${buildCheckboxItemEvent(
+            ids.blindHistoryShowFloorKeyId,
+            "暗骰列表显示楼层归属",
+            "开启后，暗骰列表会显示所属楼层简写，方便判断它对应哪一条回复。",
+            "blind history floor key",
+            "控制暗骰列表是否显示楼层归属。"
+            )}
+
+          ${buildCheckboxItemEvent(
+            ids.blindHistoryShowOriginId,
+            "暗骰列表显示来源类型",
+            "开启后，暗骰列表会区分事件暗骰、交互暗骰和命令暗骰。",
+            "blind history origin source",
+            "控制暗骰列表是否显示来源类型。"
+            )}
 
           ${buildCheckboxItemEvent(
             ids.enableBlindDebugInfoId,

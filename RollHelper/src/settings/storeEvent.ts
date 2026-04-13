@@ -192,6 +192,7 @@ const RUNTIME_DICE_META_Event: DiceMetaEvent = {
   outboundPassiveDiscovery: undefined,
   passiveDiscoveriesCache: {},
   lastPassiveContextHash: undefined,
+  selectionFallbackState: undefined,
   summaryHistory: [],
   lastPromptUserMsgId: undefined,
   lastProcessedAssistantMsgId: undefined,
@@ -513,6 +514,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.outboundPassiveDiscovery = undefined;
     meta.passiveDiscoveriesCache = {};
     meta.lastPassiveContextHash = undefined;
+    meta.selectionFallbackState = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
     meta.lastBaseRoll = state.lastBaseRoll ?? undefined;
@@ -553,6 +555,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.outboundPassiveDiscovery = undefined;
     meta.passiveDiscoveriesCache = {};
     meta.lastPassiveContextHash = undefined;
+    meta.selectionFallbackState = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = undefined;
     meta.lastBaseRoll = undefined;
@@ -799,6 +802,42 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.minTimeLimitSeconds = Math.max(1, minSeconds);
   bucket.enableSkillSystem = bucket.enableSkillSystem !== false;
   bucket.enableInteractiveTriggers = bucket.enableInteractiveTriggers !== false;
+  bucket.enableSelectionFallbackTriggers = (source as any)?.enableSelectionFallbackTriggers === true;
+  const selectionFallbackMaxPerRoundRaw = Number((source as any)?.selectionFallbackMaxPerRound);
+  bucket.selectionFallbackMaxPerRound = Number.isFinite(selectionFallbackMaxPerRoundRaw)
+    ? Math.max(1, Math.floor(selectionFallbackMaxPerRoundRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxPerRound;
+  const selectionFallbackMaxPerFloorRaw = Number((source as any)?.selectionFallbackMaxPerFloor);
+  bucket.selectionFallbackMaxPerFloor = Number.isFinite(selectionFallbackMaxPerFloorRaw)
+    ? Math.max(1, Math.floor(selectionFallbackMaxPerFloorRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxPerFloor;
+  const selectionFallbackMinTextLengthRaw = Number((source as any)?.selectionFallbackMinTextLength);
+  bucket.selectionFallbackMinTextLength = Number.isFinite(selectionFallbackMinTextLengthRaw)
+    ? Math.max(1, Math.floor(selectionFallbackMinTextLengthRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMinTextLength;
+  const selectionFallbackMaxTextLengthRaw = Number((source as any)?.selectionFallbackMaxTextLength);
+  bucket.selectionFallbackMaxTextLength = Number.isFinite(selectionFallbackMaxTextLengthRaw)
+    ? Math.max(bucket.selectionFallbackMinTextLength, Math.floor(selectionFallbackMaxTextLengthRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxTextLength;
+  bucket.selectionFallbackLimitMode =
+    (source as any)?.selectionFallbackLimitMode === "char_count"
+      ? "char_count"
+      : "sentence_count";
+  const selectionFallbackMaxSentencesRaw = Number((source as any)?.selectionFallbackMaxSentences);
+  bucket.selectionFallbackMaxSentences = Number.isFinite(selectionFallbackMaxSentencesRaw)
+    ? Math.max(1, Math.floor(selectionFallbackMaxSentencesRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxSentences;
+  bucket.selectionFallbackSingleAction =
+    typeof (source as any)?.selectionFallbackSingleAction === "string"
+      && String((source as any).selectionFallbackSingleAction).trim().length > 0
+      ? String((source as any).selectionFallbackSingleAction).trim()
+      : DEFAULT_SETTINGS_Event.selectionFallbackSingleAction;
+  bucket.selectionFallbackSingleSkill =
+    typeof (source as any)?.selectionFallbackSingleSkill === "string"
+      && String((source as any).selectionFallbackSingleSkill).trim().length > 0
+      ? String((source as any).selectionFallbackSingleSkill).trim()
+      : DEFAULT_SETTINGS_Event.selectionFallbackSingleSkill;
+  bucket.enableSelectionFallbackDebugInfo = (source as any)?.enableSelectionFallbackDebugInfo === true;
   bucket.interactiveTriggerMode = "ai_markup";
   bucket.enableBlindRoll = bucket.enableBlindRoll !== false;
   bucket.defaultBlindSkillsText =
@@ -827,6 +866,16 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
     ? Math.max(1, Math.floor(maxBlindGuidanceInjectedPerPromptRaw))
     : DEFAULT_SETTINGS_Event.maxBlindGuidanceInjectedPerPrompt;
   bucket.enableBlindDebugInfo = (source as any)?.enableBlindDebugInfo === true;
+  bucket.blindHistoryDisplayConsumedAsNarrativeApplied =
+    (source as any)?.blindHistoryDisplayConsumedAsNarrativeApplied !== false;
+  bucket.blindHistoryAutoArchiveEnabled =
+    (source as any)?.blindHistoryAutoArchiveEnabled !== false;
+  const blindHistoryAutoArchiveAfterHoursRaw = Number((source as any)?.blindHistoryAutoArchiveAfterHours);
+  bucket.blindHistoryAutoArchiveAfterHours = Number.isFinite(blindHistoryAutoArchiveAfterHoursRaw)
+    ? Math.max(1, Math.floor(blindHistoryAutoArchiveAfterHoursRaw))
+    : DEFAULT_SETTINGS_Event.blindHistoryAutoArchiveAfterHours;
+  bucket.blindHistoryShowFloorKey = (source as any)?.blindHistoryShowFloorKey !== false;
+  bucket.blindHistoryShowOrigin = (source as any)?.blindHistoryShowOrigin !== false;
   bucket.enablePassiveCheck = bucket.enablePassiveCheck !== false;
   const passiveFormulaBaseRaw = Number((source as any)?.passiveFormulaBase);
   bucket.passiveFormulaBase = Number.isFinite(passiveFormulaBaseRaw)

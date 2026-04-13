@@ -54,6 +54,16 @@ export interface SettingsCardTemplateIdsEvent {
   statusMemoryStateId: string;
   allowedDiceSidesId: string;
   interactiveTriggersEnabledId: string;
+  selectionFallbackEnabledId: string;
+  selectionFallbackLimitModeId: string;
+  selectionFallbackMaxPerRoundId: string;
+  selectionFallbackMaxPerFloorId: string;
+  selectionFallbackMinTextLengthId: string;
+  selectionFallbackMaxTextLengthId: string;
+  selectionFallbackMaxSentencesId: string;
+  selectionFallbackSingleActionId: string;
+  selectionFallbackSingleSkillId: string;
+  selectionFallbackDebugInfoId: string;
   blindRollEnabledId: string;
   defaultBlindSkillsId: string;
   maxBlindRollsPerRoundId: string;
@@ -64,6 +74,11 @@ export interface SettingsCardTemplateIdsEvent {
   blindEventCardVisibilityModeId: string;
   maxBlindGuidanceInjectedPerPromptId: string;
   enableBlindDebugInfoId: string;
+  blindHistoryDisplayConsumedAsNarrativeAppliedId: string;
+  blindHistoryAutoArchiveEnabledId: string;
+  blindHistoryAutoArchiveAfterHoursId: string;
+  blindHistoryShowFloorKeyId: string;
+  blindHistoryShowOriginId: string;
   passiveCheckEnabledId: string;
   passiveFormulaBaseId: string;
   passiveAliasesId: string;

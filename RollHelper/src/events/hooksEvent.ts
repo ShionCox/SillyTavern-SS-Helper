@@ -19,8 +19,9 @@ import {
   resetAssistantSwipeRuntimeStateEvent,
   sanitizeAssistantMessageArtifactsEvent,
 } from "./messageSanitizerEvent";
-import { formatBlindGuidanceStateLabelEvent, resolveBlindGuidanceStateEvent } from "./roundEvent";
+import { archiveBlindHistoryItemsEvent, formatBlindHistoryDisplayStateEvent, formatResultGradeLabelEvent, resolveBlindGuidanceStateEvent } from "./roundEvent";
 import { copyTextToClipboardEvent } from "../settings/skillEditorUiEvent";
+import { getSelectionFallbackRemainingSummaryEvent } from "./interactiveTriggersEvent";
 
 const RH_COPY_SOURCE_BUTTON_ATTR_Event = "data-rh-copy-source";
 const RH_COPY_SOURCE_BUTTON_STYLE_ID_Event = "st-rh-copy-source-style";
@@ -840,6 +841,7 @@ export function clearDiceMetaEventState(
   delete meta.outboundPassiveDiscovery;
   delete meta.passiveDiscoveriesCache;
   delete meta.lastPassiveContextHash;
+  delete meta.selectionFallbackState;
   delete meta.summaryHistory;
   delete meta.lastPromptUserMsgId;
   delete meta.lastProcessedAssistantMsgId;
@@ -870,8 +872,23 @@ export interface BindEventButtonsDepsEvent {
     enableRerollFeature?: boolean;
     enableSkillSystem?: boolean;
     skillTableText?: string;
+    enableBlindDebugInfo?: boolean;
+    blindHistoryDisplayConsumedAsNarrativeApplied?: boolean;
+    blindHistoryAutoArchiveEnabled?: boolean;
+    blindHistoryAutoArchiveAfterHours?: number;
+    blindHistoryShowFloorKey?: boolean;
+    blindHistoryShowOrigin?: boolean;
+    enableSelectionFallbackTriggers?: boolean;
+    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackMaxPerRound?: number;
+    selectionFallbackMaxPerFloor?: number;
+    selectionFallbackMinTextLength?: number;
+    selectionFallbackMaxTextLength?: number;
+    selectionFallbackMaxSentences?: number;
+    enableSelectionFallbackDebugInfo?: boolean;
   };
   getDiceMetaEvent: () => DiceMetaEvent;
+  saveMetadataSafeEvent: () => void;
 }
 
 function escapePreviewHtmlEvent(input: string): string {
@@ -901,15 +918,40 @@ const SSHELPER_TOOLBAR_TIP_COLLAPSE_Event = "收起工具栏";
 const SSHELPER_TOOLBAR_TIP_SKILLS_Event = "技能预览";
 const SSHELPER_TOOLBAR_TIP_STATUSES_Event = "状态预览";
 const SSHELPER_TOOLBAR_TIP_BLIND_HISTORY_Event = "暗骰列表";
+const SSHELPER_TOOLBAR_TIP_SELECTION_FALLBACK_Event = "自由划词剩余";
 const SSHELPER_TOOLBAR_ARIA_EXPAND_Event = "展开 SSHELPER 工具栏";
 const SSHELPER_TOOLBAR_ARIA_COLLAPSE_Event = "收起 SSHELPER 工具栏";
 const SSHELPER_TOOLBAR_ARIA_SKILLS_Event = "打开技能预览";
 const SSHELPER_TOOLBAR_ARIA_STATUSES_Event = "打开状态预览";
 const SSHELPER_TOOLBAR_ARIA_BLIND_HISTORY_Event = "打开暗骰列表";
+const SSHELPER_TOOLBAR_ARIA_SELECTION_FALLBACK_Event = "查看自由划词剩余";
+const SSHELPER_TOOLBAR_SELECTION_FALLBACK_STYLE_ID_Event = "st-rh-selection-fallback-toolbar-style";
 
 const SSHELPER_TOOLBAR_GROUP_ID_Event = "rollhelper";
 
+function ensureSelectionFallbackToolbarStyleEvent(): void {
+  if (document.getElementById(SSHELPER_TOOLBAR_SELECTION_FALLBACK_STYLE_ID_Event)) return;
+  const style = document.createElement("style");
+  style.id = SSHELPER_TOOLBAR_SELECTION_FALLBACK_STYLE_ID_Event;
+  style.textContent = `
+    .stx-sdk-toolbar-action-rollhelper-selection-fallback {
+      width: auto !important;
+      min-width: 64px;
+      padding: 0 8px !important;
+      gap: 6px !important;
+    }
+    .stx-sdk-toolbar-action-rollhelper-selection-fallback .stx-shared-button-label {
+      display: inline !important;
+      font-size: 11px;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function ensureSSToolbarEvent(): HTMLElement | null {
+  ensureSelectionFallbackToolbarStyleEvent();
   return ensureSdkFloatingToolbar({
     toolbarId: SDK_FLOATING_TOOLBAR_ID,
     groupId: SSHELPER_TOOLBAR_GROUP_ID_Event,
@@ -951,6 +993,18 @@ function ensureSSToolbarEvent(): HTMLElement | null {
           "data-event-preview-open": "blind-history",
         },
         order: 30,
+      },
+      {
+        key: "selection-fallback",
+        label: "--/--",
+        iconClassName: "fa-solid fa-highlighter",
+        tooltip: SSHELPER_TOOLBAR_TIP_SELECTION_FALLBACK_Event,
+        ariaLabel: SSHELPER_TOOLBAR_ARIA_SELECTION_FALLBACK_Event,
+        buttonClassName: "stx-sdk-toolbar-action-rollhelper-selection-fallback",
+        attributes: {
+          "data-event-preview-open": "selection-fallback",
+        },
+        order: 40,
       },
     ],
   });
@@ -1098,6 +1152,19 @@ function formatBlindHistoryOriginLabelEvent(origin?: "slash_broll" | "event_blin
 }
 
 /**
+ * 功能：把楼层键压缩成更短的显示文本，便于在列表中阅读。
+ * 参数：
+ *   floorKey：原始楼层键。
+ * 返回：
+ *   string：用于 UI 展示的楼层简写。
+ */
+function formatBlindHistoryFloorKeyEvent(floorKey?: string): string {
+  const normalized = String(floorKey ?? "").trim();
+  if (!normalized) return "未知楼层";
+  return normalized.length > 28 ? `${normalized.slice(0, 28)}...` : normalized;
+}
+
+/**
  * 功能：把时间戳转换为本地可读时间文本。
  * 参数：
  *   value：时间戳。
@@ -1129,37 +1196,135 @@ function formatBlindHistoryTimeEvent(value: number): string {
  */
 function buildBlindHistoryPreviewHtmlEvent(
   meta: DiceMetaEvent,
-  settings: { enableBlindDebugInfo?: boolean }
+  settings: {
+    enableBlindDebugInfo?: boolean;
+    blindHistoryDisplayConsumedAsNarrativeApplied?: boolean;
+    blindHistoryAutoArchiveEnabled?: boolean;
+    blindHistoryAutoArchiveAfterHours?: number;
+    blindHistoryShowFloorKey?: boolean;
+    blindHistoryShowOrigin?: boolean;
+  },
+  persistArchivedStateEvent?: () => void
 ): string {
+  if (settings.blindHistoryAutoArchiveEnabled !== false) {
+    const archiveBeforeTime = Date.now() - Math.max(1, Math.floor(Number(settings.blindHistoryAutoArchiveAfterHours ?? 24))) * 60 * 60 * 1000;
+    if (archiveBlindHistoryItemsEvent(meta, archiveBeforeTime)) {
+      persistArchivedStateEvent?.();
+    }
+  }
   const history = Array.isArray(meta.blindHistory) ? [...meta.blindHistory] : [];
   if (history.length <= 0) {
     return `<div class="st-rh-preview-empty">当前还没有暗骰记录。</div>`;
   }
   history.sort((left, right) => Number(right?.rolledAt || 0) - Number(left?.rolledAt || 0));
-  return `<ul class="st-rh-preview-list">${history
+  const buildHistoryItemsHtml = (items: typeof history): string => items
     .map((item) => {
       const title = escapePreviewHtmlEvent(item.eventTitle || "暗骰检定");
       const skill = escapePreviewHtmlEvent(item.skill || "未指定");
       const target = escapePreviewHtmlEvent(item.targetLabel || "未指定");
-      const expr = escapePreviewHtmlEvent(item.diceExpr || "1d20");
-      const origin = escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin));
       const rolledAt = escapePreviewHtmlEvent(formatBlindHistoryTimeEvent(item.rolledAt));
       const stateText = escapePreviewHtmlEvent(
-        formatBlindGuidanceStateLabelEvent(resolveBlindGuidanceStateEvent(item))
+        formatBlindHistoryDisplayStateEvent(
+          resolveBlindGuidanceStateEvent(item),
+          settings.blindHistoryDisplayConsumedAsNarrativeApplied !== false
+        )
       );
+      const gradeHtml = item.resultGrade
+        ? `<div>结果等级：${escapePreviewHtmlEvent(formatResultGradeLabelEvent(item.resultGrade, "blind"))}</div>`
+        : "";
+      const originHtml = settings.blindHistoryShowOrigin !== false
+        ? `<div>来源：${escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin))}</div>`
+        : "";
+      const floorHtml = settings.blindHistoryShowFloorKey !== false
+        ? `<div>楼层：${escapePreviewHtmlEvent(formatBlindHistoryFloorKeyEvent(item.sourceFloorKey))}</div>`
+        : "";
       const debugHtml = settings.enableBlindDebugInfo
         ? [
             item.roundId ? `<div>轮次：${escapePreviewHtmlEvent(String(item.roundId).slice(0, 24))}</div>` : "",
-            item.sourceFloorKey ? `<div>楼层：${escapePreviewHtmlEvent(item.sourceFloorKey)}</div>` : "",
             item.dedupeKey ? `<div>去重键：${escapePreviewHtmlEvent(item.dedupeKey)}</div>` : "",
           ].filter(Boolean).join("")
         : "";
-      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>目标：${target}</div><div>骰式：${expr}</div><div>状态：${stateText}</div><div>来源：${origin}</div><div>时间：${rolledAt}</div>${debugHtml}</li>`;
+      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>对象：${target}</div><div>状态：${stateText}</div>${gradeHtml}${originHtml}${floorHtml}<div>时间：${rolledAt}</div>${debugHtml}</li>`;
     })
-    .join("")}</ul>`;
+    .join("");
+  const activeItems = history.filter((item) => resolveBlindGuidanceStateEvent(item) !== "archived");
+  const archivedItems = history.filter((item) => resolveBlindGuidanceStateEvent(item) === "archived");
+  const activeHtml = activeItems.length > 0
+    ? `<ul class="st-rh-preview-list">${buildHistoryItemsHtml(activeItems)}</ul>`
+    : `<div class="st-rh-preview-empty">当前没有未归档的暗骰记录。</div>`;
+  const archivedHtml = archivedItems.length > 0
+    ? `<details class="st-rh-preview-archived"><summary>已归档（${archivedItems.length}）</summary><ul class="st-rh-preview-list">${buildHistoryItemsHtml(archivedItems)}</ul></details>`
+    : "";
+  return `${activeHtml}${archivedHtml}`;
 }
 
-function openPreviewDialogEvent(kind: "skills" | "statuses" | "blind-history", deps: BindEventButtonsDepsEvent): void {
+function buildSelectionFallbackPreviewHtmlEvent(
+  meta: DiceMetaEvent,
+  settings: {
+    enableSelectionFallbackTriggers?: boolean;
+    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackMaxPerRound?: number;
+    selectionFallbackMaxPerFloor?: number;
+    selectionFallbackMinTextLength?: number;
+    selectionFallbackMaxTextLength?: number;
+    selectionFallbackMaxSentences?: number;
+  }
+): string {
+  if (!settings.enableSelectionFallbackTriggers) {
+    return `<div class="st-rh-preview-empty">自由划词兜底检定当前处于关闭状态。</div>`;
+  }
+  const summary = getSelectionFallbackRemainingSummaryEvent({
+    ...settings,
+    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count",
+    selectionFallbackMaxPerRound: Number(settings.selectionFallbackMaxPerRound ?? 3),
+    selectionFallbackMaxPerFloor: Number(settings.selectionFallbackMaxPerFloor ?? 2),
+    selectionFallbackMinTextLength: Number(settings.selectionFallbackMinTextLength ?? 2),
+    selectionFallbackMaxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
+    selectionFallbackMaxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
+  } as any, meta);
+  const limitLabel = summary.limitMode === "char_count"
+    ? `按字数限制（${summary.minTextLength}-${summary.maxTextLength} 字）`
+    : `按句数限制（最多 ${summary.maxSentences} 句）`;
+  return `
+    <ul class="st-rh-preview-list">
+      <li class="st-rh-preview-item"><strong>当前模式</strong><div>${limitLabel}</div></li>
+      <li class="st-rh-preview-item"><strong>本轮剩余</strong><div>${summary.roundRemaining} / ${Number(settings.selectionFallbackMaxPerRound ?? 3)}</div></li>
+      <li class="st-rh-preview-item"><strong>每楼层上限</strong><div>${Number(settings.selectionFallbackMaxPerFloor ?? 2)} 次</div></li>
+      <li class="st-rh-preview-item"><strong>说明</strong><div>自由划词仅作为 AI 漏标时的兜底入口，同一楼层同一文本只允许尝试一次。</div></li>
+    </ul>
+  `;
+}
+
+function syncSelectionFallbackToolbarEvent(deps: BindEventButtonsDepsEvent): void {
+  const toolbar = ensureSSToolbarEvent();
+  const button = toolbar?.querySelector<HTMLButtonElement>(".stx-sdk-toolbar-action-rollhelper-selection-fallback");
+  if (!button) return;
+  const settings = deps.getSettingsEvent();
+  const enabled = Boolean(settings.enableSelectionFallbackTriggers);
+  const summary = getSelectionFallbackRemainingSummaryEvent({
+    ...settings,
+    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count",
+    selectionFallbackMaxPerRound: Number(settings.selectionFallbackMaxPerRound ?? 3),
+    selectionFallbackMaxPerFloor: Number(settings.selectionFallbackMaxPerFloor ?? 2),
+    selectionFallbackMinTextLength: Number(settings.selectionFallbackMinTextLength ?? 2),
+    selectionFallbackMaxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
+    selectionFallbackMaxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
+  } as any, deps.getDiceMetaEvent());
+  const label = enabled
+    ? `自由划词 ${summary.roundRemaining}/${Number(settings.selectionFallbackMaxPerRound ?? 3)}`
+    : "自由划词 关";
+  const labelNode = button.querySelector<HTMLElement>(".stx-shared-button-label");
+  if (labelNode) {
+    labelNode.textContent = label;
+  }
+  const tip = enabled
+    ? `自由划词剩余：${summary.roundRemaining}/${Number(settings.selectionFallbackMaxPerRound ?? 3)}`
+    : "自由划词兜底检定已关闭";
+  button.setAttribute("data-tip", tip);
+  button.setAttribute("aria-label", tip);
+}
+
+function openPreviewDialogEvent(kind: "skills" | "statuses" | "blind-history" | "selection-fallback", deps: BindEventButtonsDepsEvent): void {
   const dialog = ensurePreviewDialogEvent();
   const titleNode = dialog.querySelector<HTMLElement>("[data-preview-title=\"1\"]");
   const bodyNode = dialog.querySelector<HTMLElement>("[data-preview-body=\"1\"]");
@@ -1173,7 +1338,10 @@ function openPreviewDialogEvent(kind: "skills" | "statuses" | "blind-history", d
       : buildSkillPreviewHtmlEvent(String(settings.skillTableText ?? "{}"));
   } else if (kind === "blind-history") {
     titleNode.textContent = "暗骰列表（当前聊天）";
-    bodyNode.innerHTML = buildBlindHistoryPreviewHtmlEvent(deps.getDiceMetaEvent(), settings);
+    bodyNode.innerHTML = buildBlindHistoryPreviewHtmlEvent(deps.getDiceMetaEvent(), settings, deps.saveMetadataSafeEvent);
+  } else if (kind === "selection-fallback") {
+    titleNode.textContent = "自由划词兜底检定";
+    bodyNode.innerHTML = buildSelectionFallbackPreviewHtmlEvent(deps.getDiceMetaEvent(), settings);
   } else {
     titleNode.textContent = "状态预览（当前生效）";
     bodyNode.innerHTML = buildStatusPreviewHtmlEvent(deps.getDiceMetaEvent());
@@ -1192,11 +1360,13 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
   const globalRef = globalThis as any;
   ensureSharedTooltip();
   ensureSSToolbarEvent();
+  syncSelectionFallbackToolbarEvent(deps);
   if (globalRef.__stRollEventButtonsBoundEvent) return;
 
   document.addEventListener(
     "click",
     (event: Event) => {
+      syncSelectionFallbackToolbarEvent(deps);
       const target = event.target as HTMLElement | null;
       if (!target) return;
 
@@ -1206,8 +1376,9 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
       if (previewOpenButton) {
         event.preventDefault();
         event.stopPropagation();
+        syncSelectionFallbackToolbarEvent(deps);
         const kind = String(previewOpenButton.dataset.eventPreviewOpen ?? "").toLowerCase();
-        if (kind === "skills" || kind === "statuses" || kind === "blind-history") {
+        if (kind === "skills" || kind === "statuses" || kind === "blind-history" || kind === "selection-fallback") {
           openPreviewDialogEvent(kind, deps);
         }
         return;

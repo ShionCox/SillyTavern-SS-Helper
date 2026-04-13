@@ -19,6 +19,7 @@ export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
 export type RollVisibilityEvent = "public" | "blind" | "passive";
+export type SelectionFallbackLimitModeEvent = "char_count" | "sentence_count";
 export type BlindGuidanceStateEvent =
   | "queued"
   | "consumed"
@@ -69,6 +70,16 @@ export interface DicePluginSettingsEvent {
   minTimeLimitSeconds: number;
   enableSkillSystem: boolean;
   enableInteractiveTriggers: boolean;
+  enableSelectionFallbackTriggers: boolean;
+  selectionFallbackLimitMode: SelectionFallbackLimitModeEvent;
+  selectionFallbackMaxPerRound: number;
+  selectionFallbackMaxPerFloor: number;
+  selectionFallbackMinTextLength: number;
+  selectionFallbackMaxTextLength: number;
+  selectionFallbackMaxSentences: number;
+  selectionFallbackSingleAction: string;
+  selectionFallbackSingleSkill: string;
+  enableSelectionFallbackDebugInfo: boolean;
   interactiveTriggerMode: "ai_markup";
   enableBlindRoll: boolean;
   defaultBlindSkillsText: string;
@@ -80,6 +91,11 @@ export interface DicePluginSettingsEvent {
   blindEventCardVisibilityMode: "remove" | "placeholder";
   maxBlindGuidanceInjectedPerPrompt: number;
   enableBlindDebugInfo: boolean;
+  blindHistoryDisplayConsumedAsNarrativeApplied: boolean;
+  blindHistoryAutoArchiveEnabled: boolean;
+  blindHistoryAutoArchiveAfterHours: number;
+  blindHistoryShowFloorKey: boolean;
+  blindHistoryShowOrigin: boolean;
   enablePassiveCheck: boolean;
   passiveFormulaBase: number;
   passiveSkillAliasesText: string;
@@ -276,6 +292,7 @@ export interface BlindHistoryItemEvent {
   skill: string;
   diceExpr: string;
   targetLabel: string;
+  resultGrade?: EventResultGradeEvent;
   rolledAt: number;
   source: EventRollSourceEvent;
   origin?: "slash_broll" | "event_blind" | "interactive_blind";
@@ -298,6 +315,7 @@ export interface InteractiveTriggerEvent {
   skill: string;
   blind: boolean;
   sourceMessageId: string;
+  sourceFloorKey?: string;
   sourceId: string;
   occurrenceIndex?: number;
   textRange?: { start: number; end: number } | null;
@@ -306,6 +324,7 @@ export interface InteractiveTriggerEvent {
   loreType?: string;
   note?: string;
   diceExpr?: string;
+  resolvedResultGrade?: EventResultGradeEvent;
 }
 
 export interface PassiveDiscoveryEvent {
@@ -411,10 +430,18 @@ export interface DiceMetaEvent {
   outboundPassiveDiscovery?: OutboundPassiveDiscoveryCacheEvent;
   passiveDiscoveriesCache?: Record<string, PassiveDiscoveryEvent>;
   lastPassiveContextHash?: string;
+  selectionFallbackState?: SelectionFallbackStateEvent;
   summaryHistory?: RoundSummarySnapshotEvent[];
   lastPromptUserMsgId?: string;
   // 记录最近一次 generation 后处理过的助手消息版本，避免重复清洗同一版本。
   lastProcessedAssistantMsgId?: string;
+}
+
+export interface SelectionFallbackStateEvent {
+  roundId?: string;
+  roundUsedCount: number;
+  floorUsedCountMap: Record<string, number>;
+  triedKeys: string[];
 }
 
 export interface TavernMessageEvent {

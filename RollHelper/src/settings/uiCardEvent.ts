@@ -113,6 +113,16 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_MEMORY_STATE_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
   SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
   SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event: string;
@@ -123,6 +133,11 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event: string;
   SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event: string;
   SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event: string;
+  SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
@@ -264,6 +279,16 @@ export function buildSettingsCardTemplateIdsEvent(
     statusMemoryStateId: deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event,
     allowedDiceSidesId: deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
     interactiveTriggersEnabledId: deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
+    selectionFallbackEnabledId: deps.SETTINGS_SELECTION_FALLBACK_ENABLED_ID_Event,
+    selectionFallbackLimitModeId: deps.SETTINGS_SELECTION_FALLBACK_LIMIT_MODE_ID_Event,
+    selectionFallbackMaxPerRoundId: deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event,
+    selectionFallbackMaxPerFloorId: deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
+    selectionFallbackMinTextLengthId: deps.SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
+    selectionFallbackMaxTextLengthId: deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
+    selectionFallbackMaxSentencesId: deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+    selectionFallbackSingleActionId: deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
+    selectionFallbackSingleSkillId: deps.SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
+    selectionFallbackDebugInfoId: deps.SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
     blindRollEnabledId: deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
     defaultBlindSkillsId: deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
     maxBlindRollsPerRoundId: deps.SETTINGS_MAX_BLIND_ROLLS_PER_ROUND_ID_Event,
@@ -274,6 +299,11 @@ export function buildSettingsCardTemplateIdsEvent(
     blindEventCardVisibilityModeId: deps.SETTINGS_BLIND_EVENT_CARD_VISIBILITY_MODE_ID_Event,
     maxBlindGuidanceInjectedPerPromptId: deps.SETTINGS_MAX_BLIND_GUIDANCE_INJECTED_PER_PROMPT_ID_Event,
     enableBlindDebugInfoId: deps.SETTINGS_ENABLE_BLIND_DEBUG_INFO_ID_Event,
+    blindHistoryDisplayConsumedAsNarrativeAppliedId: deps.SETTINGS_BLIND_HISTORY_DISPLAY_CONSUMED_AS_NARRATIVE_APPLIED_ID_Event,
+    blindHistoryAutoArchiveEnabledId: deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_ENABLED_ID_Event,
+    blindHistoryAutoArchiveAfterHoursId: deps.SETTINGS_BLIND_HISTORY_AUTO_ARCHIVE_AFTER_HOURS_ID_Event,
+    blindHistoryShowFloorKeyId: deps.SETTINGS_BLIND_HISTORY_SHOW_FLOOR_KEY_ID_Event,
+    blindHistoryShowOriginId: deps.SETTINGS_BLIND_HISTORY_SHOW_ORIGIN_ID_Event,
     passiveCheckEnabledId: deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
     passiveFormulaBaseId: deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
     passiveAliasesId: deps.SETTINGS_PASSIVE_ALIASES_ID_Event,

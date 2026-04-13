@@ -16,6 +16,7 @@ import type {
   InteractiveTriggerEvent,
   PendingResultGuidanceEvent,
   PendingRoundEvent,
+  RollVisibilityEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
 import {
@@ -33,6 +34,7 @@ import { resolveEventThresholdEvent } from "./parserEvent";
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
+const loggedBlindOutcomeFallbackKeysEvent = new Set<string>();
 type ParseDiceExpressionFnEvent = (exprRaw: string) => {
   count: number;
   sides: number;
@@ -177,6 +179,32 @@ function resolveRecordVisibilityEvent(
     : "public";
 }
 
+/**
+ * 功能：在暗骰缺少结构化 outcomes 分支时输出一次去重日志，提示当前已回退到默认后果。
+ * @param event 当前事件定义。
+ * @param record 当前结算记录。
+ * @param branch 缺失的分支名称。
+ * @returns 无返回值。
+ */
+function logBlindOutcomeFallbackOnceEvent(
+  event: DiceEventSpecEvent,
+  record: EventRollRecordEvent | null | undefined,
+  branch: "success" | "failure" | "explode"
+): void {
+  if (!record || resolveRecordVisibilityEvent(record) !== "blind") return;
+  const key = [
+    String(record.roundId ?? "").trim() || "_",
+    String(event.sourceAssistantMsgId ?? "").trim() || "_",
+    String(event.id ?? "").trim() || "_",
+    branch,
+  ].join(":");
+  if (loggedBlindOutcomeFallbackKeysEvent.has(key)) return;
+  loggedBlindOutcomeFallbackKeysEvent.add(key);
+  logger.info(
+    `[暗骰结果分支缺失] event=${String(event.id ?? "").trim() || "_"} branch=${branch} 已回退到默认后果文本`
+  );
+}
+
 type RollVisualStatusEvent = "critical_success" | "critical_failure" | "partial_success" | "success" | "failure";
 
 /**
@@ -283,7 +311,9 @@ export function buildBlindGuidanceDedupKeyEvent(input: {
 
 export function pruneExpiredBlindGuidanceQueueEvent(
   meta: DiceMetaEvent,
-  now = Date.now()
+  now = Date.now(),
+  autoArchiveEnabled = false,
+  autoArchiveAfterHours = 24
 ): boolean {
   const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
   const openRoundId = meta.pendingRound?.status === "open" ? meta.pendingRound.roundId : "";
@@ -313,7 +343,12 @@ export function pruneExpiredBlindGuidanceQueueEvent(
     return item;
   });
   meta.pendingBlindGuidanceQueue = nextQueue;
-  return JSON.stringify(nextQueue) !== JSON.stringify(queue);
+  let changed = JSON.stringify(nextQueue) !== JSON.stringify(queue);
+  if (autoArchiveEnabled) {
+    const archiveBeforeTime = now - Math.max(1, Math.floor(autoArchiveAfterHours)) * 60 * 60 * 1000;
+    changed = archiveBlindHistoryItemsEvent(meta, archiveBeforeTime) || changed;
+  }
+  return changed;
 }
 
 export function canEnqueueBlindGuidanceEvent(args: {
@@ -532,6 +567,14 @@ export function normalizeBlindHistoryItemEvent(input: BlindHistoryItemEvent): Bl
     skill: String(input.skill ?? "").trim() || "未指定",
     diceExpr: String(input.diceExpr ?? "").trim() || "1d20",
     targetLabel: String(input.targetLabel ?? "").trim() || "未指定",
+    resultGrade:
+      input.resultGrade === "critical_success"
+      || input.resultGrade === "partial_success"
+      || input.resultGrade === "success"
+      || input.resultGrade === "failure"
+      || input.resultGrade === "critical_failure"
+        ? input.resultGrade
+        : undefined,
     rolledAt: Number.isFinite(Number(input.rolledAt)) ? Number(input.rolledAt) : Date.now(),
     source,
     origin:
@@ -596,11 +639,50 @@ export function resolveBlindGuidanceStateEvent(
  *   string：用于界面展示的中文状态标签。
  */
 export function formatBlindGuidanceStateLabelEvent(state: BlindGuidanceStateEvent): string {
-  if (state === "consumed") return "已消费";
+  if (state === "consumed") return "已体现";
   if (state === "expired") return "已过期";
   if (state === "invalidated") return "已失效";
   if (state === "archived") return "已归档";
-  return "待注入";
+  return "待体现";
+}
+
+/**
+ * 功能：根据产品设置把暗骰状态转换为玩家可读文案。
+ * 参数：
+ *   state：暗骰生命周期状态。
+ *   displayConsumedAsNarrativeApplied：是否把 consumed 显示为“已体现”。
+ * 返回：
+ *   string：玩家侧显示文本。
+ */
+export function formatBlindHistoryDisplayStateEvent(
+  state: BlindGuidanceStateEvent,
+  displayConsumedAsNarrativeApplied = true
+): string {
+  if (state === "consumed") {
+    return displayConsumedAsNarrativeApplied ? "已体现" : "已消费";
+  }
+  return formatBlindGuidanceStateLabelEvent(state);
+}
+
+/**
+ * 功能：把结果等级转换为适合玩家阅读的中文标签。
+ * 参数：
+ *   grade：内部结果等级。
+ *   visibility：检定可见性。
+ * 返回：
+ *   string：不泄露点数的结果等级文案。
+ */
+export function formatResultGradeLabelEvent(
+  grade: EventResultGradeEvent | null | undefined,
+  visibility: RollVisibilityEvent | "public" = "public"
+): string {
+  const prefix = visibility === "blind" ? "暗骰" : "检定";
+  if (grade === "critical_success") return `${prefix}大成功`;
+  if (grade === "partial_success") return `${prefix}勉强成功`;
+  if (grade === "success") return `${prefix}成功`;
+  if (grade === "critical_failure") return `${prefix}大失败`;
+  if (grade === "failure") return `${prefix}失败`;
+  return visibility === "blind" ? "暗骰已处理" : "检定已完成";
 }
 
 /**
@@ -626,6 +708,36 @@ export function updateBlindHistoryStateByRollIdEvent(
     ...list[index],
     ...patch,
   });
+}
+
+/**
+ * 功能：按时间阈值把旧的暗骰历史自动归档。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   beforeTime：归档阈值时间戳。
+ * 返回：
+ *   boolean：若有条目被归档则返回 true。
+ */
+export function archiveBlindHistoryItemsEvent(
+  meta: DiceMetaEvent,
+  beforeTime: number
+): boolean {
+  const list = ensureBlindHistoryEvent(meta);
+  let changed = false;
+  for (let index = 0; index < list.length; index += 1) {
+    const item = list[index];
+    const state = resolveBlindGuidanceStateEvent(item, beforeTime);
+    if (state === "queued" || state === "archived") continue;
+    const anchorTime = Number(item.consumedAt ?? item.invalidatedAt ?? item.expiresAt ?? item.rolledAt ?? 0);
+    if (!Number.isFinite(anchorTime) || anchorTime <= 0 || anchorTime > beforeTime) continue;
+    list[index] = normalizeBlindHistoryItemEvent({
+      ...item,
+      state: "archived",
+      archivedAt: Number(item.archivedAt) || beforeTime,
+    });
+    changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -696,6 +808,7 @@ export function appendBlindHistoryFromRecordEvent(
     skill: event.skill,
     diceExpr: record.diceExpr,
     targetLabel: record.targetLabelUsed || event.targetLabel,
+    resultGrade: record.resultGrade,
     rolledAt: record.rolledAt,
     source: record.source,
     origin,
@@ -726,6 +839,7 @@ export function appendBlindHistoryFromGuidanceEvent(
     skill: item.skill,
     diceExpr: item.diceExpr,
     targetLabel: item.targetLabel,
+    resultGrade: item.resultGrade,
     rolledAt: item.rolledAt,
     source: item.source,
     origin: item.origin,
@@ -885,10 +999,19 @@ function resolveRawOutcomeTextEvent(
   ) {
     return outcomes.explode.trim();
   }
+  if (settings.enableExplodeOutcomeBranch && explosionTriggered && !(outcomes?.explode && outcomes.explode.trim())) {
+    logBlindOutcomeFallbackOnceEvent(event, record, "explode");
+  }
   if (record?.success === true) {
+    if (!(outcomes?.success && outcomes.success.trim())) {
+      logBlindOutcomeFallbackOnceEvent(event, record, "success");
+    }
     return outcomes?.success?.trim() || "判定成功，剧情向有利方向推进。";
   }
   if (record?.success === false || record?.source === "timeout_auto_fail") {
+    if (!(outcomes?.failure && outcomes.failure.trim())) {
+      logBlindOutcomeFallbackOnceEvent(event, record, "failure");
+    }
     return outcomes?.failure?.trim() || "判定失败，剧情向不利方向推进。";
   }
   return "尚未结算。";
@@ -1014,7 +1137,7 @@ export function invalidatePendingRoundFloorEvent(
     });
     return {
       ...item,
-      state: "invalidated",
+      state: "invalidated" as const,
       invalidatedAt: Date.now(),
     };
   });
@@ -1312,10 +1435,19 @@ export function resolveTriggeredOutcomeEvent(
   ) {
     return { kind: "explode", text: outcomes.explode.trim(), explosionTriggered: true };
   }
+  if (settings.enableExplodeOutcomeBranch && explosionTriggered && !(outcomes?.explode && outcomes.explode.trim())) {
+    logBlindOutcomeFallbackOnceEvent(event, record, "explode");
+  }
   if (record?.success === true) {
+    if (!(outcomes?.success && outcomes.success.trim())) {
+      logBlindOutcomeFallbackOnceEvent(event, record, "success");
+    }
     return { kind: "success", text: outcomes?.success?.trim() || "判定成功，剧情向有利方向推进。", explosionTriggered };
   }
   if (record?.success === false || record?.source === "timeout_auto_fail") {
+    if (!(outcomes?.failure && outcomes.failure.trim())) {
+      logBlindOutcomeFallbackOnceEvent(event, record, "failure");
+    }
     return { kind: "failure", text: outcomes?.failure?.trim() || "判定失败，剧情向不利方向推进。", explosionTriggered };
   }
   return { kind: "none", text: "尚未结算。", explosionTriggered };
