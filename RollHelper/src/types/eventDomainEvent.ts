@@ -244,6 +244,7 @@ export interface InteractiveTriggerEvent {
   blind: boolean;
   sourceMessageId: string;
   sourceId: string;
+  occurrenceIndex?: number;
   textRange?: { start: number; end: number } | null;
   dcHint?: number | null;
   loreType?: string;

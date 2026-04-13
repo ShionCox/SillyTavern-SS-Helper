@@ -9,6 +9,7 @@ import { logger } from "../../index";
 import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
 import { ensureSdkFloatingToolbar, SDK_FLOATING_TOOLBAR_ID } from "../../../SDK/toolbar";
+import { sanitizeMessageInteractiveTriggersEvent } from "./interactiveTriggerMetadataEvent";
 
 export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
@@ -16,7 +17,7 @@ export interface EventHooksDepsEvent {
   event_types: Record<string, string> | undefined;
   extractPromptChatFromPayloadEvent: (payload: any) => any[] | null;
   handlePromptReadyEvent: (payload: any, sourceEvent?: string) => void;
-  handleGenerationEndedEvent: (retry?: number) => void;
+  handleGenerationEndedEvent: () => void;
   clearDiceMetaEventState: (reason?: string) => void;
   sanitizeCurrentChatEventBlocksEvent: () => void;
   sweepTimeoutFailuresEvent: () => boolean;
@@ -32,6 +33,7 @@ export interface HandleGenerationEndedDepsEvent {
     enabled: boolean;
     eventApplyScope: "protagonist_only" | "all";
     enableAiRoundControl: boolean;
+    defaultBlindSkillsText?: string;
   };
   getLiveContextEvent: () => STContext | null;
   findLatestAssistantEvent: (
@@ -300,7 +302,6 @@ export function reconcilePendingRoundWithCurrentChatEvent(
 }
 
 export function handleGenerationEndedEvent(
-  retry = 0,
   deps: HandleGenerationEndedDepsEvent
 ): void {
   const settings = deps.getSettingsEvent();
@@ -330,25 +331,27 @@ export function handleGenerationEndedEvent(
   const chosenShouldEndRound = resolvedEnvelope.chosenShouldEndRound;
 
   if (!chosenText.trim()) {
-    if (retry < 4) {
-      setTimeout(() => handleGenerationEndedEvent(retry + 1, deps), 100 + retry * 120);
-      return;
-    }
-    meta.lastProcessedAssistantMsgId = assistantMsgId;
     return;
   }
 
   const events = chosenEvents;
   const ranges = chosenRanges;
+  const triggerSanitizedEarly = sanitizeMessageInteractiveTriggersEvent(latestAssistant.msg, {
+    settings: deps.getSettingsEvent(),
+    sourceMessageId: assistantMsgId,
+  });
   if (events.length === 0 && ranges.length === 0) {
-    if (retry < 4) {
-      setTimeout(() => handleGenerationEndedEvent(retry + 1, deps), 140 + retry * 160);
+    if (!triggerSanitizedEarly) {
       return;
     }
     const floorInvalidated = deps.invalidatePendingRoundFloorEvent(assistantMsgId);
     const historyInvalidated = deps.invalidateSummaryHistoryFloorEvent(assistantMsgId);
     meta.lastProcessedAssistantMsgId = assistantMsgId;
-    if (floorInvalidated || historyInvalidated) {
+    if (triggerSanitizedEarly) {
+      deps.persistChatSafeEvent();
+      deps.hideEventCodeBlocksInDomEvent();
+    }
+    if (floorInvalidated || historyInvalidated || triggerSanitizedEarly) {
       deps.refreshAllWidgetsFromStateEvent();
       deps.refreshCountdownDomEvent();
     }
@@ -358,18 +361,20 @@ export function handleGenerationEndedEvent(
   meta.lastProcessedAssistantMsgId = assistantMsgId;
   const cleaned = deps.removeRangesEvent(chosenText, ranges);
   deps.setMessageTextEvent(latestAssistant.msg, cleaned);
+  const triggerSanitized = triggerSanitizedEarly || sanitizeMessageInteractiveTriggersEvent(latestAssistant.msg, {
+    settings: deps.getSettingsEvent(),
+    sourceMessageId: assistantMsgId,
+  });
 
   deps.hideEventCodeBlocksInDomEvent();
-  if (ranges.length > 0) {
+  if (ranges.length > 0 || triggerSanitized) {
     deps.persistChatSafeEvent();
   }
 
-  let closedByAiDirective = false;
   const pendingRound = meta.pendingRound;
   if (pendingRound?.status === "open") {
     if (settings.enableAiRoundControl && chosenShouldEndRound) {
       pendingRound.status = "closed";
-      closedByAiDirective = true;
     }
   }
 
@@ -383,9 +388,6 @@ export function handleGenerationEndedEvent(
       deps.refreshAllWidgetsFromStateEvent();
       deps.refreshCountdownDomEvent();
     });
-  } else {
-    void chosenEvents;
-    void closedByAiDirective;
   }
   setTimeout(() => {
     deps.hideEventCodeBlocksInDomEvent();
@@ -490,6 +492,9 @@ export function buildAssistantMessageIdEvent(
 }
 
 export interface SanitizeAssistantMessageDepsEvent {
+  getSettingsEvent: () => {
+    defaultBlindSkillsText?: string;
+  };
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -498,12 +503,15 @@ export interface SanitizeAssistantMessageDepsEvent {
   };
   removeRangesEvent: (text: string, ranges: Array<{ start: number; end: number }>) => string;
   setMessageTextEvent: (message: TavernMessageEvent, text: string) => void;
+  resolveSourceMessageIdEvent?: (message: TavernMessageEvent, index?: number) => string;
 }
 
 export function sanitizeAssistantMessageEventBlocksEvent(
   message: TavernMessageEvent,
+  index: number | undefined,
   deps: SanitizeAssistantMessageDepsEvent
 ): boolean {
+  let changed = false;
   const sourceCandidates = [
     deps.getPreferredAssistantSourceTextEvent(message),
     deps.getMessageTextEvent(message),
@@ -514,17 +522,22 @@ export function sanitizeAssistantMessageEventBlocksEvent(
     if (ranges.length === 0) continue;
     const cleaned = deps.removeRangesEvent(sourceText, ranges);
     deps.setMessageTextEvent(message, cleaned);
-
-    return true;
+    changed = true;
+    break;
   }
 
-  return false;
+  const triggerChanged = sanitizeMessageInteractiveTriggersEvent(message, {
+    settings: deps.getSettingsEvent(),
+    sourceMessageId: deps.resolveSourceMessageIdEvent?.(message, index),
+  });
+
+  return changed || triggerChanged;
 }
 
 export interface SanitizeCurrentChatDepsEvent {
   getLiveContextEvent: () => STContext | null;
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
-  sanitizeAssistantMessageEventBlocksEvent: (message: TavernMessageEvent) => boolean;
+  sanitizeAssistantMessageEventBlocksEvent: (message: TavernMessageEvent, index?: number) => boolean;
   persistChatSafeEvent: () => void;
   hideEventCodeBlocksInDomEvent: () => void;
 }
@@ -534,12 +547,12 @@ export function sanitizeCurrentChatEventBlocksEvent(deps: SanitizeCurrentChatDep
   if (!liveCtx?.chat || !Array.isArray(liveCtx.chat)) return;
 
   let changed = false;
-  for (const item of liveCtx.chat as TavernMessageEvent[]) {
-    if (!deps.isAssistantMessageEvent(item)) continue;
-    if (deps.sanitizeAssistantMessageEventBlocksEvent(item)) {
+  (liveCtx.chat as TavernMessageEvent[]).forEach((item, index) => {
+    if (!deps.isAssistantMessageEvent(item)) return;
+    if (deps.sanitizeAssistantMessageEventBlocksEvent(item, index)) {
       changed = true;
     }
-  }
+  });
 
   if (changed) {
     deps.persistChatSafeEvent();
@@ -969,6 +982,21 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     )
   );
 
+  const runGenerationPostProcessPassEvent = (reason: string, delayMs: number): void => {
+    setTimeout(() => {
+      try {
+        deps.handleGenerationEndedEvent();
+        deps.sanitizeCurrentChatEventBlocksEvent();
+        deps.sweepTimeoutFailuresEvent();
+        deps.refreshCountdownDomEvent();
+        deps.refreshAllWidgetsFromStateEvent();
+        deps.enhanceInteractiveTriggersInDomEvent();
+      } catch (error) {
+        logger.warn(`Generation 后处理异常 (${reason}, ${delayMs}ms)`, error);
+      }
+    }, delayMs);
+  };
+
   const resetEvents = Array.from(
     new Set(
       [
@@ -999,7 +1027,9 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   for (const eventName of generationEvents) {
     src.on(eventName, () => {
       try {
-        deps.handleGenerationEndedEvent();
+        runGenerationPostProcessPassEvent(eventName, 0);
+        runGenerationPostProcessPassEvent(eventName, 300);
+        runGenerationPostProcessPassEvent(eventName, 900);
       } catch (error) {
         logger.error("Generation hook 错误", error);
       }

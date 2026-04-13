@@ -106,13 +106,22 @@ function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number
   });
 }
 
-function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent): boolean {
-  return sanitizeAssistantMessageEventBlocksModuleEvent(message, {
+function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent, index?: number): boolean {
+  return sanitizeAssistantMessageEventBlocksModuleEvent(message, index, {
+    getSettingsEvent: getSettingsStoreEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
     removeRangesEvent,
     setMessageTextEvent: setMessageTextModuleEvent,
+    resolveSourceMessageIdEvent: (targetMessage, targetIndex) => {
+      if (Number.isFinite(targetIndex)) {
+        return buildAssistantMessageIdEvent(targetMessage, Number(targetIndex));
+      }
+      const explicitId = String(targetMessage.id ?? targetMessage.cid ?? targetMessage.uid ?? "").trim();
+      if (explicitId) return `assistant:${explicitId}`;
+      return "";
+    },
   });
 }
 
@@ -257,8 +266,8 @@ function autoRollEventsByAiModeEvent(round: PendingRoundEvent): Promise<string[]
   });
 }
 
-function handleGenerationEndedEvent(retry = 0): void {
-  handleGenerationEndedModuleEvent(retry, {
+function handleGenerationEndedEvent(): void {
+  handleGenerationEndedModuleEvent({
     getSettingsEvent: getSettingsStoreEvent,
     getLiveContextEvent: getLiveContextCoreEvent,
     findLatestAssistantEvent,
@@ -321,7 +330,7 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
 }
 
 function enhanceInteractiveTriggersInDomEvent(): void {
-  enhanceInteractiveTriggersInDomModuleEvent(getSettingsStoreEvent());
+  enhanceInteractiveTriggersInDomModuleEvent(getSettingsStoreEvent(), getLiveContextCoreEvent);
 }
 
 export function bindEventButtonsEvent(): void {
@@ -335,6 +344,9 @@ export function bindEventButtonsEvent(): void {
   });
   bindInteractiveTriggerDomEventsModuleEvent({
     getSettingsEvent: getSettingsStoreEvent,
+    getLiveContextEvent: getLiveContextCoreEvent,
+    persistChatSafeEvent: persistChatSafeStoreEvent,
+    refreshInteractiveTriggersInDomEvent: enhanceInteractiveTriggersInDomEvent,
     buildResultMessage: buildResultMessageTemplateEvent,
     buildBlindResultMessage: buildBlindResultMessageTemplateEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,

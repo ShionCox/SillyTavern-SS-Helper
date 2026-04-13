@@ -1,5 +1,6 @@
 import { stripRollHelperArtifactsEvent } from '../../../SDK/tavern';
 import { logger } from "../../index";
+import { stripInteractiveTriggerMarkupFromTextEvent } from "./interactiveTriggerMetadataEvent";
 
 export function getMessageTextSafe(message: any): string {
     if (!message) return '';
@@ -71,7 +72,7 @@ export function isDiceLikeJson(body: string): boolean {
 }
 
 export function stripRollJsonBlocks(text: string): string {
-    return stripRollHelperArtifactsEvent(text)
+    return stripInteractiveTriggerMarkupFromTextEvent(stripRollHelperArtifactsEvent(text))
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 }
@@ -99,4 +100,3 @@ export function sanitizeAssistantMessageForSummary(message: any, options?: { blo
 
     return message;
 }
-

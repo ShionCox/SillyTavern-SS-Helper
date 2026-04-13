@@ -1,13 +1,20 @@
 import { showSharedContextMenu } from "../../../_Components/sharedContextMenu";
+import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { logger } from "../../index";
 import { pushToChat } from "../core/chatEvent";
 import type {
   DicePluginSettingsEvent,
   InteractiveTriggerEvent,
+  TavernMessageEvent,
 } from "../types/eventDomainEvent";
+import {
+  buildInteractiveTriggerTooltipHtmlEvent,
+  getMessageInteractiveTriggersEvent,
+  stripInteractiveTriggerMarkupFromTextEvent,
+} from "./interactiveTriggerMetadataEvent";
 
 const TRIGGER_STYLE_ID_Event = "st-rh-inline-trigger-style";
-const RH_TRIGGER_REGEX_Event = /\[\[rh-trigger([^\]]*)\]\]([\s\S]*?)\[\[\/rh-trigger\]\]/gi;
+const TRIGGER_SIGNATURE_ATTR_Event = "data-rh-trigger-signature";
 
 function normalizeTextEvent(value: unknown): string {
   return String(value ?? "");
@@ -26,9 +33,8 @@ function escapeHtmlEvent(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function parseBooleanTextEvent(value: string): boolean {
-  const normalized = normalizeInlineTextEvent(value).toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "blind";
+function escapeHtmlAttributeEvent(value: unknown): string {
+  return escapeHtmlEvent(value).replace(/`/g, "&#96;");
 }
 
 function parseDefaultBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<string> {
@@ -40,17 +46,11 @@ function parseDefaultBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<st
   );
 }
 
-function parseTriggerAttributesEvent(attrText: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  const regex = /([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"/g;
-  let match: RegExpExecArray | null = null;
-  while ((match = regex.exec(String(attrText ?? "")))) {
-    result[String(match[1] ?? "").trim().toLowerCase()] = String(match[2] ?? "");
-  }
-  return result;
-}
-
 function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent): string {
+  const tooltip = buildInteractiveTriggerTooltipHtmlEvent(payload);
+  const hoverEnabled = typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    : false;
   return `<span class="st-rh-inline-trigger" data-rh-trigger="1" data-trigger-id="${escapeHtmlEvent(
     payload.triggerId
   )}" data-label="${escapeHtmlEvent(payload.label)}" data-action="${escapeHtmlEvent(
@@ -63,55 +63,11 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent): string {
     Number(payload.dcHint)
   )
     ? String(Math.floor(Number(payload.dcHint)))
-    : ""}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}">${escapeHtmlEvent(payload.label)}</span>`;
-}
-
-export function parseInteractiveTriggersFromTextEvent(
-  text: string,
-  settings: DicePluginSettingsEvent,
-  sourceMessageId = ""
-): { html: string; triggers: InteractiveTriggerEvent[] } {
-  const blindSkills = parseDefaultBlindSkillsEvent(settings);
-  const triggers: InteractiveTriggerEvent[] = [];
-  const html = normalizeTextEvent(text).replace(RH_TRIGGER_REGEX_Event, (full, attrText, bodyText, offset) => {
-    const attrs = parseTriggerAttributesEvent(String(attrText ?? ""));
-    const label = normalizeInlineTextEvent(bodyText || attrs.label || "");
-    if (!label) return label;
-    const skill = normalizeInlineTextEvent(attrs.skill || attrs.action || "调查");
-    const action = normalizeInlineTextEvent(attrs.action || skill || "调查");
-    const trigger: InteractiveTriggerEvent = {
-      triggerId: normalizeInlineTextEvent(attrs.triggerid) || `${sourceMessageId || "msg"}:${offset}`,
-      label,
-      action,
-      skill,
-      blind: attrs.blind ? parseBooleanTextEvent(attrs.blind) : blindSkills.has(skill.toLowerCase()),
-      sourceMessageId,
-      sourceId: normalizeInlineTextEvent(attrs.sourceid) || `${sourceMessageId || "msg"}:${offset}`,
-      textRange: { start: Number(offset) || 0, end: Number(offset) + String(full ?? "").length },
-      dcHint: Number.isFinite(Number(attrs.dchint)) ? Math.floor(Number(attrs.dchint)) : null,
-      loreType: normalizeInlineTextEvent(attrs.loretype),
-      note: normalizeInlineTextEvent(attrs.note),
-      diceExpr: normalizeInlineTextEvent(attrs.diceexpr) || "1d20",
-    };
-    triggers.push(trigger);
-    return buildTriggerMarkupEvent(trigger);
-  });
-  return { html, triggers };
-}
-
-function replaceTextNodeWithTriggersEvent(
-  textNode: Text,
-  settings: DicePluginSettingsEvent,
-  sourceMessageId: string
-): boolean {
-  const raw = textNode.nodeValue ?? "";
-  if (!raw.includes("[[rh-trigger")) return false;
-  const parsed = parseInteractiveTriggersFromTextEvent(raw, settings, sourceMessageId);
-  if (parsed.triggers.length <= 0) return false;
-  const template = document.createElement("template");
-  template.innerHTML = parsed.html;
-  textNode.replaceWith(template.content);
-  return true;
+    : ""}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}" data-occurrence-index="${Number.isFinite(
+    Number(payload.occurrenceIndex)
+  )
+    ? String(Math.max(0, Math.floor(Number(payload.occurrenceIndex))))
+    : "0"}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
 }
 
 function resolveMessageContainerIdEvent(node: HTMLElement): string {
@@ -127,9 +83,45 @@ function resolveMessageContainerIdEvent(node: HTMLElement): string {
   return normalizeInlineTextEvent(raw);
 }
 
-function enhanceMessageNodeEvent(node: HTMLElement, settings: DicePluginSettingsEvent): boolean {
-  let changed = false;
-  const sourceMessageId = resolveMessageContainerIdEvent(node);
+function resolveMessageRecordEvent(
+  node: HTMLElement,
+  getLiveContextEvent: (() => { chat?: TavernMessageEvent[] | unknown } | null) | undefined
+): TavernMessageEvent | null {
+  const liveCtx = getLiveContextEvent?.();
+  const chat = liveCtx?.chat;
+  if (!Array.isArray(chat)) return null;
+  const messageIndex = Number(resolveMessageContainerIdEvent(node));
+  if (!Number.isFinite(messageIndex) || messageIndex < 0 || messageIndex >= chat.length) return null;
+  return (chat[messageIndex] as TavernMessageEvent) ?? null;
+}
+
+function collectRenderableTextNodesEvent(node: HTMLElement): Array<{ node: Text; start: number; end: number }> {
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+  let offset = 0;
+  let current: Node | null = walker.nextNode();
+  while (current) {
+    if (current instanceof Text && current.parentElement && !current.parentElement.closest(".st-rh-inline-trigger")) {
+      const text = current.nodeValue ?? "";
+      textNodes.push({ node: current, start: offset, end: offset + text.length });
+      offset += text.length;
+    }
+    current = walker.nextNode();
+  }
+  return textNodes;
+}
+
+function unwrapExistingTriggerMarkupEvent(node: HTMLElement): void {
+  node.querySelectorAll<HTMLElement>(".st-rh-inline-trigger").forEach((triggerNode) => {
+    triggerNode.replaceWith(document.createTextNode(triggerNode.textContent ?? ""));
+  });
+}
+
+function sanitizeLegacyTriggerTextNodesEvent(node: HTMLElement): boolean {
+  const stripLooseTriggerTokensEvent = (input: string): string => String(input ?? "")
+    .replace(/\[{1,2}rh-trigger[^\]]*\]{1,2}/gi, "")
+    .replace(/\[{1,2}\/rh-trigger\]{1,2}/gi, "");
+
   const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
   let current: Node | null = walker.nextNode();
@@ -139,9 +131,151 @@ function enhanceMessageNodeEvent(node: HTMLElement, settings: DicePluginSettings
     }
     current = walker.nextNode();
   }
+
+  let changed = false;
   for (const textNode of textNodes) {
-    changed = replaceTextNodeWithTriggersEvent(textNode, settings, sourceMessageId) || changed;
+    const raw = textNode.nodeValue ?? "";
+    if (!raw.includes("rh-trigger")) continue;
+    const cleaned = stripLooseTriggerTokensEvent(stripInteractiveTriggerMarkupFromTextEvent(raw));
+    if (cleaned === raw) continue;
+    textNode.nodeValue = cleaned;
+    changed = true;
   }
+  return changed;
+}
+
+function collectTextMatchesEvent(text: string, needle: string): number[] {
+  const result: number[] = [];
+  if (!needle) return result;
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const next = text.indexOf(needle, searchFrom);
+    if (next < 0) break;
+    result.push(next);
+    searchFrom = next + needle.length;
+  }
+  return result;
+}
+
+function buildRenderableTriggerRangesEvent(
+  text: string,
+  triggers: InteractiveTriggerEvent[]
+): Array<{ start: number; end: number; trigger: InteractiveTriggerEvent }> {
+  const positionsCache = new Map<string, number[]>();
+  type AssignedTriggerRangeEvent = {
+    originalIndex: number;
+    start: number;
+    end: number;
+    trigger: InteractiveTriggerEvent;
+  };
+  const assigned = triggers
+    .map<AssignedTriggerRangeEvent | null>((trigger, index) => {
+      const label = normalizeInlineTextEvent(trigger.label);
+      if (!label) return null;
+      const key = label;
+      let positions = positionsCache.get(key);
+      if (!positions) {
+        positions = collectTextMatchesEvent(text, label);
+        positionsCache.set(key, positions);
+      }
+      const occurrenceIndex = Number.isFinite(Number(trigger.occurrenceIndex))
+        ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex)))
+        : 0;
+      const start = positions[occurrenceIndex];
+      if (!Number.isFinite(start)) return null;
+      return {
+        originalIndex: index,
+        start,
+        end: start + label.length,
+        trigger: {
+          ...trigger,
+          occurrenceIndex,
+        },
+      };
+    })
+    .filter((item): item is AssignedTriggerRangeEvent => Boolean(item))
+    .sort((a, b) => a.start - b.start || a.originalIndex - b.originalIndex);
+
+  const ranges: Array<{ start: number; end: number; trigger: InteractiveTriggerEvent }> = [];
+  let lastEnd = -1;
+  for (const item of assigned) {
+    if (item.start < lastEnd) continue;
+    ranges.push({ start: item.start, end: item.end, trigger: item.trigger });
+    lastEnd = item.end;
+  }
+  return ranges;
+}
+
+function createTriggerNodeEvent(trigger: InteractiveTriggerEvent): HTMLElement {
+  const template = document.createElement("template");
+  template.innerHTML = buildTriggerMarkupEvent(trigger);
+  return template.content.firstElementChild as HTMLElement;
+}
+
+function buildTriggerSignatureEvent(text: string, triggers: InteractiveTriggerEvent[]): string {
+  return JSON.stringify({
+    text,
+    triggers: triggers.map((trigger) => ({
+      triggerId: normalizeInlineTextEvent(trigger.triggerId),
+      label: normalizeInlineTextEvent(trigger.label),
+      action: normalizeInlineTextEvent(trigger.action),
+      skill: normalizeInlineTextEvent(trigger.skill),
+      blind: Boolean(trigger.blind),
+      sourceId: normalizeInlineTextEvent(trigger.sourceId),
+      sourceMessageId: normalizeInlineTextEvent(trigger.sourceMessageId),
+      occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
+    })),
+  });
+}
+
+function enhanceMessageNodeEvent(
+  node: HTMLElement,
+  message: TavernMessageEvent | null
+): boolean {
+  const triggers = getMessageInteractiveTriggersEvent(message).filter((trigger) => normalizeInlineTextEvent(trigger.label));
+  let changed = false;
+  if (normalizeTextEvent(node.textContent).includes("rh-trigger")) {
+    changed = sanitizeLegacyTriggerTextNodesEvent(node) || changed;
+  }
+  const currentText = normalizeTextEvent(node.textContent);
+  const nextSignature = buildTriggerSignatureEvent(currentText, triggers);
+  const currentSignature = node.getAttribute(TRIGGER_SIGNATURE_ATTR_Event) || "";
+  if (currentSignature === nextSignature && node.querySelectorAll(".st-rh-inline-trigger").length === triggers.length) {
+    return changed;
+  }
+
+  unwrapExistingTriggerMarkupEvent(node);
+  if (triggers.length <= 0) {
+    node.removeAttribute(TRIGGER_SIGNATURE_ATTR_Event);
+    return changed;
+  }
+  const textNodes = collectRenderableTextNodesEvent(node);
+  const fullText = textNodes.map((item) => item.node.nodeValue ?? "").join("");
+  const ranges = buildRenderableTriggerRangesEvent(fullText, triggers);
+  for (const entry of textNodes) {
+    const localRanges = ranges.filter((range) => range.start >= entry.start && range.end <= entry.end);
+    if (localRanges.length === 0) continue;
+
+    const raw = entry.node.nodeValue ?? "";
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const range of localRanges) {
+      const localStart = range.start - entry.start;
+      const localEnd = range.end - entry.start;
+      if (localStart > cursor) {
+        fragment.appendChild(document.createTextNode(raw.slice(cursor, localStart)));
+      }
+      fragment.appendChild(createTriggerNodeEvent(range.trigger));
+      cursor = localEnd;
+    }
+    if (cursor < raw.length) {
+      fragment.appendChild(document.createTextNode(raw.slice(cursor)));
+    }
+    entry.node.replaceWith(fragment);
+    changed = true;
+  }
+
+  node.setAttribute(TRIGGER_SIGNATURE_ATTR_Event, buildTriggerSignatureEvent(normalizeTextEvent(node.textContent), triggers));
   return changed;
 }
 
@@ -151,12 +285,20 @@ function ensureTriggerStylesEvent(): void {
   style.id = TRIGGER_STYLE_ID_Event;
   style.textContent = `
     .st-rh-inline-trigger {
-      display: inline;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28em;
       border-bottom: 1px dashed rgba(197, 160, 89, 0.68);
       box-shadow: inset 0 -0.08em 0 rgba(197, 160, 89, 0.14);
       color: inherit;
       cursor: pointer;
       transition: border-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+    }
+    .st-rh-inline-trigger-icon {
+      font-size: 0.82em;
+      opacity: 0.82;
+      transform: translateY(-0.02em);
+      pointer-events: none;
     }
     .st-rh-inline-trigger:hover,
     .st-rh-inline-trigger.is-active {
@@ -170,6 +312,9 @@ function ensureTriggerStylesEvent(): void {
 
 export interface ExecuteInteractiveTriggerDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
+  getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null;
+  persistChatSafeEvent?: () => void;
+  refreshInteractiveTriggersInDomEvent?: () => void;
   buildBlindResultMessage: (title: string) => string;
   buildResultMessage: (result: any) => string;
   appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error" | "card") => void;
@@ -178,7 +323,7 @@ export interface ExecuteInteractiveTriggerDepsEvent {
       result: any;
       diceExpr: string;
       skillModifierApplied: number;
-      source: "manual_roll" | "blind_manual_roll";
+      source: string;
     };
     event: {
       title: string;
@@ -209,6 +354,10 @@ export async function executeInteractiveTriggerEvent(
     deps.appendToConsoleEvent(deps.buildResultMessage(resolved.record.result), "info");
     pushToChat(`🎲 ${normalizeInlineTextEvent(trigger.action || trigger.skill || "检定")}：${expr}${skillModifier ? ` ${skillModifier > 0 ? "+" : ""}${skillModifier}` : ""} = ${total}`);
   }
+
+  deps.persistChatSafeEvent?.();
+  setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
+  setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
 }
 
 function buildTriggerMenuItemsEvent(
@@ -310,11 +459,36 @@ function resolveSelectionTriggerNodeEvent(selection: Selection | null): HTMLElem
   return null;
 }
 
-export function enhanceInteractiveTriggersInDomEvent(settings: DicePluginSettingsEvent): void {
+function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTriggerEvent {
+  return {
+    triggerId: normalizeInlineTextEvent(triggerNode.dataset.triggerId),
+    label: normalizeInlineTextEvent(triggerNode.dataset.label),
+    action: normalizeInlineTextEvent(triggerNode.dataset.action),
+    skill: normalizeInlineTextEvent(triggerNode.dataset.skill),
+    blind: triggerNode.dataset.blind === "1",
+    sourceMessageId: normalizeInlineTextEvent(triggerNode.dataset.sourceMessageId),
+    sourceId: normalizeInlineTextEvent(triggerNode.dataset.sourceId),
+    occurrenceIndex: Number.isFinite(Number(triggerNode.dataset.occurrenceIndex))
+      ? Math.max(0, Math.floor(Number(triggerNode.dataset.occurrenceIndex)))
+      : 0,
+    textRange: null,
+    dcHint: Number.isFinite(Number(triggerNode.dataset.dcHint)) ? Math.floor(Number(triggerNode.dataset.dcHint)) : null,
+    loreType: normalizeInlineTextEvent(triggerNode.dataset.loreType),
+    note: normalizeInlineTextEvent(triggerNode.dataset.note),
+    diceExpr: normalizeInlineTextEvent(triggerNode.dataset.diceExpr) || "1d20",
+  };
+}
+
+export function enhanceInteractiveTriggersInDomEvent(
+  settings: DicePluginSettingsEvent,
+  getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null
+): void {
   ensureTriggerStylesEvent();
+  ensureSharedTooltip();
   document.querySelectorAll<HTMLElement>(".mes_text").forEach((node) => {
     try {
-      enhanceMessageNodeEvent(node, settings);
+      const message = resolveMessageRecordEvent(node, getLiveContextEvent);
+      enhanceMessageNodeEvent(node, message);
     } catch (error) {
       logger.warn("交互高亮增强失败", error);
     }
@@ -327,13 +501,20 @@ export function bindInteractiveTriggerDomEventsEvent(
   const globalRef = globalThis as typeof globalThis & {
     __stRollInteractiveTriggerBoundEvent?: boolean;
     __stRollInteractiveTriggerObserverEvent?: MutationObserver | null;
+    __stRollInteractiveTriggerRefreshQueuedEvent?: boolean;
   };
   ensureTriggerStylesEvent();
+  ensureSharedTooltip();
   if (!globalRef.__stRollInteractiveTriggerObserverEvent) {
     globalRef.__stRollInteractiveTriggerObserverEvent = new MutationObserver(() => {
       const settings = deps.getSettingsEvent();
       if (!settings.enableInteractiveTriggers) return;
-      enhanceInteractiveTriggersInDomEvent(settings);
+      if (globalRef.__stRollInteractiveTriggerRefreshQueuedEvent) return;
+      globalRef.__stRollInteractiveTriggerRefreshQueuedEvent = true;
+      requestAnimationFrame(() => {
+        globalRef.__stRollInteractiveTriggerRefreshQueuedEvent = false;
+        enhanceInteractiveTriggersInDomEvent(settings, deps.getLiveContextEvent);
+      });
     });
     globalRef.__stRollInteractiveTriggerObserverEvent.observe(document.body, {
       childList: true,
@@ -353,20 +534,7 @@ export function bindInteractiveTriggerDomEventsEvent(
       if (!triggerNode) return;
       event.preventDefault();
       event.stopPropagation();
-      const trigger: InteractiveTriggerEvent = {
-        triggerId: normalizeInlineTextEvent(triggerNode.dataset.triggerId),
-        label: normalizeInlineTextEvent(triggerNode.dataset.label),
-        action: normalizeInlineTextEvent(triggerNode.dataset.action),
-        skill: normalizeInlineTextEvent(triggerNode.dataset.skill),
-        blind: triggerNode.dataset.blind === "1",
-        sourceMessageId: normalizeInlineTextEvent(triggerNode.dataset.sourceMessageId),
-        sourceId: normalizeInlineTextEvent(triggerNode.dataset.sourceId),
-        textRange: null,
-        dcHint: Number.isFinite(Number(triggerNode.dataset.dcHint)) ? Math.floor(Number(triggerNode.dataset.dcHint)) : null,
-        loreType: normalizeInlineTextEvent(triggerNode.dataset.loreType),
-        note: normalizeInlineTextEvent(triggerNode.dataset.note),
-        diceExpr: normalizeInlineTextEvent(triggerNode.dataset.diceExpr) || "1d20",
-      };
+      const trigger = buildTriggerFromNodeEvent(triggerNode);
       document.querySelectorAll(".st-rh-inline-trigger.is-active").forEach((node) => node.classList.remove("is-active"));
       triggerNode.classList.add("is-active");
       const rect = triggerNode.getBoundingClientRect();
@@ -383,22 +551,7 @@ export function bindInteractiveTriggerDomEventsEvent(
       const selection = window.getSelection();
       const selectedTriggerNode = resolveSelectionTriggerNodeEvent(selection);
       if (selectedTriggerNode) {
-        const trigger: InteractiveTriggerEvent = {
-          triggerId: normalizeInlineTextEvent(selectedTriggerNode.dataset.triggerId),
-          label: normalizeInlineTextEvent(selectedTriggerNode.dataset.label),
-          action: normalizeInlineTextEvent(selectedTriggerNode.dataset.action),
-          skill: normalizeInlineTextEvent(selectedTriggerNode.dataset.skill),
-          blind: selectedTriggerNode.dataset.blind === "1",
-          sourceMessageId: normalizeInlineTextEvent(selectedTriggerNode.dataset.sourceMessageId),
-          sourceId: normalizeInlineTextEvent(selectedTriggerNode.dataset.sourceId),
-          textRange: null,
-          dcHint: Number.isFinite(Number(selectedTriggerNode.dataset.dcHint))
-            ? Math.floor(Number(selectedTriggerNode.dataset.dcHint))
-            : null,
-          loreType: normalizeInlineTextEvent(selectedTriggerNode.dataset.loreType),
-          note: normalizeInlineTextEvent(selectedTriggerNode.dataset.note),
-          diceExpr: normalizeInlineTextEvent(selectedTriggerNode.dataset.diceExpr) || "1d20",
-        };
+        const trigger = buildTriggerFromNodeEvent(selectedTriggerNode);
         const rect = selectedTriggerNode.getBoundingClientRect();
         showTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, deps);
         return;

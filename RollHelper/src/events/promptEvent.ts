@@ -30,6 +30,7 @@ import {
   buildPassiveDiscoveryBlockEvent,
   resolvePassiveDiscoveriesEvent,
 } from "./passiveBlindEvent";
+import { stripInteractiveTriggerMarkupFromTextEvent } from "./interactiveTriggerMetadataEvent";
 
 const DEFAULT_RULE_BLOCK_START_Event = "<dice_rules>";
 const DEFAULT_RULE_BLOCK_END_Event = "</dice_rules>";
@@ -208,12 +209,12 @@ export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent
   const swipes = (message as any).swipes;
   if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
     const swipeText = String(swipes[swipeId] ?? "");
-    if (swipeText.trim()) return swipeText;
+    if (swipeText.trim()) return stripInteractiveTriggerMarkupFromTextEvent(swipeText);
   }
   if (typeof (message as any).mes === "string" && (message as any).mes.trim()) {
-    return (message as any).mes;
+    return stripInteractiveTriggerMarkupFromTextEvent((message as any).mes);
   }
-  return getMessageTextEvent(message);
+  return stripInteractiveTriggerMarkupFromTextEvent(getMessageTextEvent(message));
 }
 
 export function setMessageTextEvent(message: TavernMessageEvent, text: string): void {
