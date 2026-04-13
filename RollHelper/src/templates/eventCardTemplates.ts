@@ -415,6 +415,7 @@ export interface EventRollButtonTemplateParamsEvent {
   diceExprAttr: string;
   buttonDisabledAttr: string;
   buttonStateStyle: string;
+  blind?: boolean;
 }
 
 export interface EventRerollButtonTemplateParamsEvent {
@@ -439,9 +440,9 @@ function buildSummaryToggleStateTemplateEvent(): string {
 
 export function buildEventRollButtonTemplateEvent(params: EventRollButtonTemplateParamsEvent): string {
   const stateStyleAttr = params.buttonStateStyle ? ` style="${params.buttonStateStyle}"` : "";
-  return `<button type="button" class="st-rh-roll-btn" data-dice-event-roll="1" data-round-id="${params.roundIdAttr}"
+  return `<button type="button" class="st-rh-roll-btn${params.blind ? " is-blind" : ""}" data-dice-event-roll="1" data-roll-visibility="${params.blind ? "blind" : "public"}" data-round-id="${params.roundIdAttr}"
   data-dice-event-id="${params.eventIdAttr}" data-dice-expr="${params.diceExprAttr}" ${params.buttonDisabledAttr}${stateStyleAttr}>
-  <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.9;"></i>执行检定
+  <i class="fa-solid fa-dice-d20 fa-fw st-rh-fa-icon" aria-hidden="true" style="margin-right:6px; opacity:0.9;"></i>${params.blind ? "暗骰检定" : "执行检定"}
 </button>`;
 }
 

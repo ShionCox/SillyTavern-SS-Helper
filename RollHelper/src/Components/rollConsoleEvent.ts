@@ -1,4 +1,5 @@
 import { logger } from "../../index";
+import { bindSharedFloatingPanelDragEvent } from "../../../_Components/sharedFloatingPanel";
 
 const CONSOLE_PANEL_ID_Event = "st-rh-roll-console";
 const CONSOLE_BODY_ID_Event = "st-rh-roll-console-body";
@@ -45,7 +46,10 @@ function ensureConsoleStylesEvent(): void {
       background: rgba(30,25,20,0.6);
       user-select: none;
       flex-shrink: 0;
+      cursor: grab;
+      touch-action: none;
     }
+    #${CONSOLE_PANEL_ID_Event}.st-rh-console-dragging .st-rh-console-header { cursor: grabbing; }
     .st-rh-console-title {
       font-weight: 600;
       font-size: 12px;
@@ -143,6 +147,17 @@ function ensureConsolePanelEvent(): HTMLElement {
     </div>
   `;
   document.body.appendChild(panel);
+  const header = panel.querySelector(".st-rh-console-header") as HTMLElement | null;
+  if (header) {
+    header.dataset.stxFloatingBindKey = "roll-console";
+    bindSharedFloatingPanelDragEvent({
+      panel,
+      handle: header,
+      draggingClassName: "st-rh-console-dragging",
+      minMargin: 8,
+      allowPointerTargetEvent: (target) => !target.closest("[data-rh-console-close]"),
+    });
+  }
 
   // 关闭按钮
   panel.querySelector("[data-rh-console-close]")?.addEventListener("click", () => {

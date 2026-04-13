@@ -36,6 +36,12 @@ export const SETTINGS_STATUS_CHAT_META_ID_Event = "st-roll-settings-Event-status
 export const SETTINGS_STATUS_COLS_ID_Event = "st-roll-settings-Event-status-cols";
 export const SETTINGS_STATUS_MEMORY_STATE_ID_Event = "st-roll-settings-Event-status-memory-state";
 export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allowed-dice-sides";
+export const SETTINGS_BLIND_ROLL_ENABLED_ID_Event = "st-roll-settings-Event-blind-roll-enabled";
+export const SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event = "st-roll-settings-Event-passive-check-enabled";
+export const SETTINGS_PASSIVE_FORMULA_BASE_ID_Event = "st-roll-settings-Event-passive-formula-base";
+export const SETTINGS_PASSIVE_ALIASES_ID_Event = "st-roll-settings-Event-passive-aliases";
+export const SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event = "st-roll-settings-Event-worldbook-passive-template";
+export const SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event = "st-roll-settings-Event-worldbook-passive-create";
 export const SETTINGS_THEME_ID_Event = "st-roll-settings-Event-theme";
 export const SETTINGS_SUMMARY_DETAIL_ID_Event = "st-roll-settings-Event-summary-detail";
 export const SETTINGS_SUMMARY_ROUNDS_ID_Event = "st-roll-settings-Event-summary-rounds";
@@ -170,6 +176,12 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_COLS_ID_Event,
   SETTINGS_STATUS_MEMORY_STATE_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
+  SETTINGS_PASSIVE_ALIASES_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
   SETTINGS_THEME_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
@@ -255,6 +267,12 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event,
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
+  SETTINGS_PASSIVE_ALIASES_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
   SETTINGS_SCOPE_ID_Event,
@@ -311,6 +329,12 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event,
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
+  SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
+  SETTINGS_PASSIVE_ALIASES_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
+  SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
   SETTINGS_SCOPE_ID_Event,
@@ -337,10 +361,14 @@ export const DICE_SUMMARY_BLOCK_START_Event = "<dice_round_summary>";
 export const DICE_SUMMARY_BLOCK_END_Event = "</dice_round_summary>";
 export const DICE_RESULT_GUIDANCE_BLOCK_START_Event = "<dice_result_guidance>";
 export const DICE_RESULT_GUIDANCE_BLOCK_END_Event = "</dice_result_guidance>";
+export const DICE_BLIND_GUIDANCE_BLOCK_START_Event = "<dice_blind_guidance>";
+export const DICE_BLIND_GUIDANCE_BLOCK_END_Event = "</dice_blind_guidance>";
 export const DICE_RUNTIME_POLICY_BLOCK_START_Event = "<dice_runtime_policy>";
 export const DICE_RUNTIME_POLICY_BLOCK_END_Event = "</dice_runtime_policy>";
 export const DICE_ACTIVE_STATUSES_BLOCK_START_Event = "<dice_active_statuses>";
 export const DICE_ACTIVE_STATUSES_BLOCK_END_Event = "</dice_active_statuses>";
+export const DICE_PASSIVE_DISCOVERY_BLOCK_START_Event = "<dice_passive_discovery>";
+export const DICE_PASSIVE_DISCOVERY_BLOCK_END_Event = "</dice_passive_discovery>";
 export const SUMMARY_MAX_EVENTS_Event = 20;
 export const SUMMARY_MAX_TOTAL_EVENT_LINES_Event = 60;
 export const SUMMARY_HISTORY_ROUNDS_MIN_Event = 1;
@@ -394,9 +422,23 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enableTimeLimit: true,
   minTimeLimitSeconds: 10,
   enableSkillSystem: true,
+  enableBlindRoll: true,
+  enablePassiveCheck: true,
+  passiveFormulaBase: 10,
+  passiveSkillAliasesText: JSON.stringify(
+    {
+      perception: ["察觉", "感知", "观察"],
+      investigation: ["调查", "侦查", "搜索"],
+      insight: ["洞察", "意志", "观察人心"],
+    },
+    null,
+    2
+  ),
+  worldbookPassiveMode: "read_write",
+  blindUiWarnInConsole: true,
+  blindRevealInSummary: false,
   skillTableText: "{}",
   skillPresetStoreText: "",
   ruleTextModeVersion: RULE_TEXT_MODE_VERSION_Event,
   ruleText: DEFAULT_RULE_TEXT_Event,
 };
-

@@ -567,6 +567,12 @@ export function clearDiceMetaEventState(
   delete meta.outboundSummary;
   delete meta.pendingResultGuidanceQueue;
   delete meta.outboundResultGuidance;
+  delete meta.pendingBlindGuidanceQueue;
+  delete meta.outboundBlindGuidance;
+  delete meta.pendingPassiveDiscoveries;
+  delete meta.outboundPassiveDiscovery;
+  delete meta.passiveDiscoveriesCache;
+  delete meta.lastPassiveContextHash;
   delete meta.summaryHistory;
   delete meta.lastPromptUserMsgId;
   delete meta.lastProcessedAssistantMsgId;
@@ -575,6 +581,11 @@ export function clearDiceMetaEventState(
 
 export interface BindEventButtonsDepsEvent {
   performEventRollByIdEvent: (
+    eventIdRaw: string,
+    overrideExpr?: string,
+    expectedRoundId?: string
+  ) => Promise<string>;
+  performBlindEventRollByIdEvent: (
     eventIdRaw: string,
     overrideExpr?: string,
     expectedRoundId?: string
@@ -883,7 +894,9 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
         const eventId = button.getAttribute("data-dice-event-id") || "";
         const expr = button.getAttribute("data-dice-expr") || "";
         const roundId = button.getAttribute("data-round-id") || "";
-        deps.performEventRollByIdEvent(eventId, expr || undefined, roundId || undefined).then(result => {
+        const visibility = button.getAttribute("data-roll-visibility") || "public";
+        const perform = visibility === "blind" ? deps.performBlindEventRollByIdEvent : deps.performEventRollByIdEvent;
+        perform(eventId, expr || undefined, roundId || undefined).then(result => {
           if (result) logger.warn(result);
         });
         return;

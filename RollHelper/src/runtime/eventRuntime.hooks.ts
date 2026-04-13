@@ -59,7 +59,7 @@ import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } 
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
 import { registerAnimationDebugCommandEvent as registerAnimationDebugCommandModuleEvent } from "../commands/animationDebugCommandEvent";
-import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
+import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performBlindEventRollByIdEvent as performBlindEventRollByIdModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
 import { playRollAnimation as playRollAnimationCoreEvent, roll3DDice as roll3DDiceCoreEvent } from "../core/diceBox";
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
 import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
@@ -205,6 +205,17 @@ function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, ex
   });
 }
 
+function performBlindEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, expectedRoundId?: string): Promise<string> {
+  return performBlindEventRollByIdModuleEvent(eventIdRaw, overrideExpr, expectedRoundId, {
+    ...rollDepsEvent,
+    sweepTimeoutFailuresEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    recordTimeoutFailureIfNeededEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
+    refreshCountdownDomEvent,
+  });
+}
+
 /**
  * 功能：在运行时环境中对已结算事件执行重新投掷。
  * @param eventIdRaw 事件 ID
@@ -295,6 +306,7 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
 export function bindEventButtonsEvent(): void {
   bindEventButtonsModuleEvent({
     performEventRollByIdEvent,
+    performBlindEventRollByIdEvent,
     rerollEventByIdEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     getSettingsEvent: getSettingsStoreEvent,

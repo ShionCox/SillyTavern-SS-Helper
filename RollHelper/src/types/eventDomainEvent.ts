@@ -7,12 +7,18 @@ export type EventTargetTypeEvent = "self" | "scene" | "supporting" | "object" | 
 export type EventRollModeEvent = "auto" | "manual";
 export type AdvantageStateEvent = "normal" | "advantage" | "disadvantage";
 export type EventDifficultyLevelEvent = "easy" | "normal" | "hard" | "extreme";
-export type EventRollSourceEvent = "manual_roll" | "ai_auto_roll" | "timeout_auto_fail";
+export type EventRollSourceEvent =
+  | "manual_roll"
+  | "blind_manual_roll"
+  | "ai_auto_roll"
+  | "passive_check"
+  | "timeout_auto_fail";
 export type SummaryDetailModeEvent = "minimal" | "balanced" | "detailed";
 export type RollHelperSettingsThemeEvent = "default" | "dark" | "light" | "tavern";
 export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
+export type RollVisibilityEvent = "public" | "blind" | "passive";
 export type EventResultGradeEvent =
   | "critical_success"
   | "partial_success"
@@ -56,6 +62,13 @@ export interface DicePluginSettingsEvent {
   enableTimeLimit: boolean;
   minTimeLimitSeconds: number;
   enableSkillSystem: boolean;
+  enableBlindRoll: boolean;
+  enablePassiveCheck: boolean;
+  passiveFormulaBase: number;
+  passiveSkillAliasesText: string;
+  worldbookPassiveMode: "disabled" | "read_only" | "read_write";
+  blindUiWarnInConsole: boolean;
+  blindRevealInSummary: boolean;
   skillTableText: string;
   skillPresetStoreText: string;
   ruleTextModeVersion: number;
@@ -151,6 +164,9 @@ export interface EventRollRecordEvent {
   targetLabelUsed: string;
   rolledAt: number;
   source: EventRollSourceEvent;
+  visibility?: RollVisibilityEvent;
+  concealResult?: boolean;
+  natState?: "nat1" | "nat20" | "none";
   timeoutAt?: number | null;
   explodePolicyApplied?:
   | "not_requested"
@@ -199,6 +215,49 @@ export interface OutboundResultGuidanceCacheEvent {
   guidanceText: string;
 }
 
+export interface BlindGuidanceEvent {
+  rollId: string;
+  eventId: string;
+  eventTitle: string;
+  skill: string;
+  diceExpr: string;
+  total: number;
+  success: boolean | null;
+  resultGrade: EventResultGradeEvent;
+  natState: "nat1" | "nat20" | "none";
+  targetLabel: string;
+  rolledAt: number;
+  source: EventRollSourceEvent;
+}
+
+export interface PassiveDiscoveryEvent {
+  discoveryId: string;
+  bookName: string;
+  entryId: string;
+  title: string;
+  type: string;
+  skillName: string;
+  passiveScore: number;
+  dc: number;
+  priority: number;
+  scope: "once" | "persistent";
+  content: string;
+  matchedAt: number;
+  source: "worldbook_passive";
+}
+
+export interface OutboundBlindGuidanceCacheEvent {
+  userMsgId: string;
+  rollId: string;
+  guidanceText: string;
+}
+
+export interface OutboundPassiveDiscoveryCacheEvent {
+  userMsgId: string;
+  discoveryIds: string[];
+  discoveryText: string;
+}
+
 export interface RoundSummaryEventItemEvent {
   id: string;
   title: string;
@@ -216,6 +275,7 @@ export interface RoundSummaryEventItemEvent {
   timeLimit: string;
   status: SummaryEventStatusEvent;
   resultSource: EventRollSourceEvent | null;
+  visibility?: RollVisibilityEvent;
   total: number | null;
   skillModifierApplied: number;
   statusModifierApplied: number;
@@ -261,6 +321,12 @@ export interface DiceMetaEvent {
   outboundSummary?: OutboundSummaryCacheEvent;
   pendingResultGuidanceQueue?: PendingResultGuidanceEvent[];
   outboundResultGuidance?: OutboundResultGuidanceCacheEvent;
+  pendingBlindGuidanceQueue?: BlindGuidanceEvent[];
+  outboundBlindGuidance?: OutboundBlindGuidanceCacheEvent;
+  pendingPassiveDiscoveries?: PassiveDiscoveryEvent[];
+  outboundPassiveDiscovery?: OutboundPassiveDiscoveryCacheEvent;
+  passiveDiscoveriesCache?: Record<string, PassiveDiscoveryEvent>;
+  lastPassiveContextHash?: string;
   summaryHistory?: RoundSummarySnapshotEvent[];
   lastPromptUserMsgId?: string;
   lastProcessedAssistantMsgId?: string;
@@ -280,4 +346,3 @@ export interface TavernMessageEvent {
   timestamp?: string | number;
   [key: string]: any;
 }
-

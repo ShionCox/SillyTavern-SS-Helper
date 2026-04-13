@@ -183,6 +183,12 @@ const RUNTIME_DICE_META_Event: DiceMetaEvent = {
   outboundSummary: undefined,
   pendingResultGuidanceQueue: [],
   outboundResultGuidance: undefined,
+  pendingBlindGuidanceQueue: [],
+  outboundBlindGuidance: undefined,
+  pendingPassiveDiscoveries: [],
+  outboundPassiveDiscovery: undefined,
+  passiveDiscoveriesCache: {},
+  lastPassiveContextHash: undefined,
   summaryHistory: [],
   lastPromptUserMsgId: undefined,
   lastProcessedAssistantMsgId: undefined,
@@ -489,6 +495,12 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.outboundSummary = undefined;
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
+    meta.pendingBlindGuidanceQueue = [];
+    meta.outboundBlindGuidance = undefined;
+    meta.pendingPassiveDiscoveries = [];
+    meta.outboundPassiveDiscovery = undefined;
+    meta.passiveDiscoveriesCache = {};
+    meta.lastPassiveContextHash = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
     const diceMetaLegacy = getDiceMeta();
@@ -524,6 +536,12 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.outboundSummary = undefined;
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
+    meta.pendingBlindGuidanceQueue = [];
+    meta.outboundBlindGuidance = undefined;
+    meta.pendingPassiveDiscoveries = [];
+    meta.outboundPassiveDiscovery = undefined;
+    meta.passiveDiscoveriesCache = {};
+    meta.lastPassiveContextHash = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = undefined;
     const diceMetaLegacy = getDiceMeta();
@@ -722,6 +740,23 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   const minSeconds = Number.isFinite(minSecondsRaw) ? Math.floor(minSecondsRaw) : 10;
   bucket.minTimeLimitSeconds = Math.max(1, minSeconds);
   bucket.enableSkillSystem = bucket.enableSkillSystem !== false;
+  bucket.enableBlindRoll = bucket.enableBlindRoll !== false;
+  bucket.enablePassiveCheck = bucket.enablePassiveCheck !== false;
+  const passiveFormulaBaseRaw = Number((source as any)?.passiveFormulaBase);
+  bucket.passiveFormulaBase = Number.isFinite(passiveFormulaBaseRaw)
+    ? Math.max(0, Math.floor(passiveFormulaBaseRaw))
+    : DEFAULT_SETTINGS_Event.passiveFormulaBase;
+  bucket.passiveSkillAliasesText =
+    typeof bucket.passiveSkillAliasesText === "string" && bucket.passiveSkillAliasesText.trim().length > 0
+      ? bucket.passiveSkillAliasesText
+      : DEFAULT_SETTINGS_Event.passiveSkillAliasesText;
+  const worldbookPassiveModeRaw = String((source as any)?.worldbookPassiveMode ?? "").trim().toLowerCase();
+  bucket.worldbookPassiveMode =
+    worldbookPassiveModeRaw === "disabled" || worldbookPassiveModeRaw === "read_only"
+      ? (worldbookPassiveModeRaw as DicePluginSettingsEvent["worldbookPassiveMode"])
+      : "read_write";
+  bucket.blindUiWarnInConsole = bucket.blindUiWarnInConsole !== false;
+  bucket.blindRevealInSummary = bucket.blindRevealInSummary === true;
   bucket.skillTableText =
     typeof bucket.skillTableText === "string" && bucket.skillTableText.trim().length > 0
       ? bucket.skillTableText
@@ -1237,7 +1272,4 @@ export function serializeSkillRowsToSkillTableTextEvent(rows: SkillEditorRowDraf
   if (validation.errors.length > 0) return null;
   return JSON.stringify(validation.table, null, 2);
 }
-
-
-
 

@@ -36,7 +36,16 @@ import {
   getSharedDialogInstance,
   openSharedDialog,
 } from "../../../_Components/sharedDialog";
+import {
+  bindSharedFloatingPanelDragEvent,
+  ensureSharedFloatingPanelPositionEvent,
+} from "../../../_Components/sharedFloatingPanel";
 import { request } from "../../../SDK/bus/rpc";
+import { listTavernActiveWorldbooksEvent } from "../../../SDK/tavern";
+import {
+  buildPassiveWorldbookTemplateEvent,
+  createPassiveTemplateWorldbookEntryEvent,
+} from "../events/passiveBlindEvent";
 
 const ROLLHELPER_NAMESPACE_Event = "stx_rollhelper";
 const LLMHUB_NAMESPACE_Event = "stx_llmhub";
@@ -232,6 +241,8 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     dialogId: string;
     owner: HTMLElement | null;
     panelSelector: string;
+    panelVariant: "skill" | "status";
+    dragHandleSelector: string;
     rootClassName: string;
     backdropClassName: string;
     afterOpen?: () => void;
@@ -274,6 +285,37 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
         instance.content.style.gap = "0";
         instance.content.style.overflow = "visible";
         instance.content.appendChild(panel);
+        const dragHandle = panel.querySelector<HTMLElement>(params.dragHandleSelector);
+        if (dragHandle) {
+          dragHandle.dataset.stxFloatingBindKey = params.dialogId;
+          bindSharedFloatingPanelDragEvent({
+            panel,
+            handle: dragHandle,
+            draggingClassName: "is-floating-dragging",
+            mobileBreakpoint: 680,
+            initialPosition: () => {
+              const rect = panel.getBoundingClientRect();
+              return {
+                left: Math.round((window.innerWidth - rect.width) / 2 + (params.panelVariant === "status" ? 32 : -12)),
+                top: params.panelVariant === "status" ? 78 : 64,
+              };
+            },
+          });
+        }
+        requestAnimationFrame(() => {
+          ensureSharedFloatingPanelPositionEvent({
+            panel,
+            handle: dragHandle ?? panel,
+            mobileBreakpoint: 680,
+            initialPosition: () => {
+              const rect = panel.getBoundingClientRect();
+              return {
+                left: Math.round((window.innerWidth - rect.width) / 2 + (params.panelVariant === "status" ? 32 : -12)),
+                top: params.panelVariant === "status" ? 78 : 64,
+              };
+            },
+          });
+        });
         syncSharedSelects(instance.root);
       },
       onAfterOpen: () => {
@@ -295,6 +337,8 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       dialogId: skillDialogId,
       owner: skillModal,
       panelSelector: ".st-roll-skill-modal-panel",
+      panelVariant: "skill",
+      dragHandleSelector: ".st-roll-skill-modal-head",
       rootClassName: "st-roll-skill-modal",
       backdropClassName: "st-roll-skill-modal-backdrop",
     });
@@ -310,6 +354,8 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       dialogId: statusDialogId,
       owner: statusModal,
       panelSelector: ".st-roll-status-modal-panel",
+      panelVariant: "status",
+      dragHandleSelector: ".st-roll-status-modal-head",
       rootClassName: "st-roll-status-modal",
       backdropClassName: "st-roll-status-modal-backdrop",
       afterOpen: () => {
@@ -545,6 +591,12 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event: string;
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
+  SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
+  SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
+  SETTINGS_PASSIVE_ALIASES_ID_Event: string;
+  SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event: string;
+  SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
@@ -575,6 +627,10 @@ export interface BindBasicSettingsInputsDepsEvent {
     enableDynamicDcReason?: boolean;
     enableStatusSystem?: boolean;
     aiAllowedDiceSidesText?: string;
+    enableBlindRoll?: boolean;
+    enablePassiveCheck?: boolean;
+    passiveFormulaBase?: number;
+    passiveSkillAliasesText?: string;
     summaryDetailMode?: "minimal" | "balanced" | "detailed";
     summaryHistoryRounds?: number;
     eventApplyScope?: "protagonist_only" | "all";
@@ -622,6 +678,24 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
   ) as HTMLElement | null;
+  const blindRollEnabledInput = document.getElementById(
+    deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveCheckEnabledInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveFormulaBaseInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveAliasesInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_ALIASES_ID_Event
+  ) as HTMLTextAreaElement | null;
+  const worldbookPassiveTemplateInput = document.getElementById(
+    deps.SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event
+  ) as HTMLTextAreaElement | null;
+  const worldbookPassiveCreateButton = document.getElementById(
+    deps.SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event
+  ) as HTMLButtonElement | null;
   const summaryDetailInput = document.getElementById(
     deps.SETTINGS_SUMMARY_DETAIL_ID_Event
   ) as HTMLSelectElement | null;
@@ -739,6 +813,35 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   statusSystemEnabledInput?.addEventListener("input", (event) => {
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ enableStatusSystem: value });
+  });
+  blindRollEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableBlindRoll: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  passiveCheckEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enablePassiveCheck: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  passiveFormulaBaseInput?.addEventListener("change", (event) => {
+    const value = Math.max(0, Math.floor(Number((event.target as HTMLInputElement).value) || 0));
+    deps.updateSettingsEvent({ passiveFormulaBase: value });
+  });
+  passiveAliasesInput?.addEventListener("change", (event) => {
+    deps.updateSettingsEvent({ passiveSkillAliasesText: String((event.target as HTMLTextAreaElement).value ?? "") });
+  });
+  if (worldbookPassiveTemplateInput && !worldbookPassiveTemplateInput.value.trim()) {
+    worldbookPassiveTemplateInput.value = buildPassiveWorldbookTemplateEvent();
+  }
+  worldbookPassiveCreateButton?.addEventListener("click", () => {
+    const activeBook = listTavernActiveWorldbooksEvent(8)[0] ?? "";
+    if (!activeBook) {
+      logger.warn("当前没有激活的世界书，无法写入 RH_PASSIVE 模板。");
+      if (worldbookPassiveTemplateInput) {
+        worldbookPassiveTemplateInput.value = buildPassiveWorldbookTemplateEvent();
+      }
+      return;
+    }
+    void createPassiveTemplateWorldbookEntryEvent(activeBook).catch((error) => {
+      logger.warn(`写入世界书模板失败 book=${activeBook}`, error);
+    });
   });
 
   allowedDiceSidesInput
@@ -904,6 +1007,10 @@ export interface SyncSettingsUiDepsEvent {
     enableDynamicDcReason: boolean;
     enableStatusSystem: boolean;
     aiAllowedDiceSidesText: string;
+    enableBlindRoll: boolean;
+    enablePassiveCheck: boolean;
+    passiveFormulaBase: number;
+    passiveSkillAliasesText: string;
     summaryDetailMode: string;
     summaryHistoryRounds: number;
     eventApplyScope: string;
@@ -932,6 +1039,12 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event: string;
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
+  SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
+  SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
+  SETTINGS_PASSIVE_ALIASES_ID_Event: string;
+  SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event: string;
+  SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
@@ -998,6 +1111,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
   ) as HTMLElement | null;
+  const blindRollEnabledInput = document.getElementById(
+    deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveCheckEnabledInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveFormulaBaseInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event
+  ) as HTMLInputElement | null;
+  const passiveAliasesInput = document.getElementById(
+    deps.SETTINGS_PASSIVE_ALIASES_ID_Event
+  ) as HTMLTextAreaElement | null;
+  const worldbookPassiveTemplateInput = document.getElementById(
+    deps.SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event
+  ) as HTMLTextAreaElement | null;
   const summaryDetailInput = document.getElementById(
     deps.SETTINGS_SUMMARY_DETAIL_ID_Event
   ) as HTMLSelectElement | null;
@@ -1068,6 +1196,21 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (statusSystemEnabledInput) {
     statusSystemEnabledInput.checked = Boolean(settings.enableStatusSystem);
+  }
+  if (blindRollEnabledInput) {
+    blindRollEnabledInput.checked = Boolean(settings.enableBlindRoll);
+  }
+  if (passiveCheckEnabledInput) {
+    passiveCheckEnabledInput.checked = Boolean(settings.enablePassiveCheck);
+  }
+  if (passiveFormulaBaseInput) {
+    passiveFormulaBaseInput.value = String(settings.passiveFormulaBase);
+  }
+  if (passiveAliasesInput) {
+    passiveAliasesInput.value = String(settings.passiveSkillAliasesText ?? "");
+  }
+  if (worldbookPassiveTemplateInput && !worldbookPassiveTemplateInput.value.trim()) {
+    worldbookPassiveTemplateInput.value = buildPassiveWorldbookTemplateEvent();
   }
   if (allowedDiceSidesInput) {
     const enabledSides = new Set(

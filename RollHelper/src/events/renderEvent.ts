@@ -580,6 +580,7 @@ export interface BuildEventListCardDepsEvent {
     diceExprAttr: string;
     buttonDisabledAttr: string;
     buttonStateStyle: string;
+    blind?: boolean;
   }) => string;
     buildEventListItemTemplateEvent: (params: {
     detailsIdAttr: string;
@@ -753,13 +754,23 @@ export function buildEventListCardEvent(
         if (event.rollMode === "auto") {
           return `<span class="st-rh-summary-lock st-rh-mono" style="color: #d1b67f; border: 1px dashed rgba(209,182,127,0.3);"><i class="fa-solid fa-hourglass-half fa-fw st-rh-fa-icon" style="margin-right:6px;"></i>等待自动触发</span>`;
         }
-        return deps.buildEventRollButtonTemplateEvent({
+        const publicButtonHtml = deps.buildEventRollButtonTemplateEvent({
           roundIdAttr: deps.escapeAttrEvent(round.roundId),
           eventIdAttr: deps.escapeAttrEvent(event.id),
           diceExprAttr: deps.escapeAttrEvent(event.checkDice),
           buttonDisabledAttr: buttonDisabled,
           buttonStateStyle,
         });
+        if (!settings.enableBlindRoll) return publicButtonHtml;
+        const blindButtonHtml = deps.buildEventRollButtonTemplateEvent({
+          roundIdAttr: deps.escapeAttrEvent(round.roundId),
+          eventIdAttr: deps.escapeAttrEvent(event.id),
+          diceExprAttr: deps.escapeAttrEvent(event.checkDice),
+          buttonDisabledAttr: buttonDisabled,
+          buttonStateStyle,
+          blind: true,
+        });
+        return `<div class="st-rh-roll-btn-stack">${publicButtonHtml}${blindButtonHtml}</div>`;
       })();
 
       const rollModeBadgeHtml =
@@ -1289,12 +1300,21 @@ export function buildEventRollResultCardEvent(
   const currentStatusesSummaryText = settings.enableStatusSystem
     ? buildCurrentStatusesSummaryTextEvent(ensureActiveStatusesEvent(deps.getDiceMetaEvent()))
     : "";
-  const status = record.success === null ? "待定" : record.success ? "判定成功" : "判定失败";
-  const statusColor = record.success === null ? "#ffdb78" : record.success ? "#52c41a" : "#ff4d4f";
+  const isBlindRecord = record.visibility === "blind" || record.source === "blind_manual_roll";
+  const status = isBlindRecord
+    ? "结果已隐藏，仅命运知晓"
+    : record.success === null
+      ? "待定"
+      : record.success
+        ? "判定成功"
+        : "判定失败";
+  const statusColor = isBlindRecord ? "#7f6dff" : record.success === null ? "#ffdb78" : record.success ? "#52c41a" : "#ff4d4f";
 
   const sourceText =
     record.source === "timeout_auto_fail"
       ? "超时检定"
+      : record.source === "blind_manual_roll"
+        ? "暗骰检定"
       : record.source === "ai_auto_roll"
         ? "自动检定"
         : "手动检定";
@@ -1317,7 +1337,7 @@ export function buildEventRollResultCardEvent(
     finalModifierUsed
   );
   const diceVisualBlock =
-    record.source === "timeout_auto_fail"
+    record.source === "timeout_auto_fail" || isBlindRecord
       ? ""
       : buildAnimatedDiceVisualBlockEvent(
         record.result,
@@ -1385,7 +1405,7 @@ export function buildEventRollResultCardEvent(
   );
   const collapsedCondition = `${record.compareUsed} ${String(record.dcUsed ?? "未设置")}`;
   const collapsedDiceVisualHtml =
-    record.source === "timeout_auto_fail"
+    record.source === "timeout_auto_fail" || isBlindRecord
       ? ""
       : buildFinalTotalDiceVisualEvent(
         Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : 0,
@@ -1412,9 +1432,9 @@ export function buildEventRollResultCardEvent(
   return deps.buildEventRollResultCardTemplateEvent({
     detailsIdAttr,
     collapsedStatusHtml: deps.escapeHtmlEvent(status),
-    collapsedConditionHtml: deps.escapeHtmlEvent(collapsedCondition),
+    collapsedConditionHtml: deps.escapeHtmlEvent(isBlindRecord ? "结果已隐藏" : collapsedCondition),
     collapsedSourceHtml: deps.escapeHtmlEvent(sourceText),
-    collapsedTotalHtml: deps.escapeHtmlEvent(String(record.result.total)),
+    collapsedTotalHtml: deps.escapeHtmlEvent(isBlindRecord ? "已隐藏" : String(record.result.total)),
     collapsedOutcomeHtml: deps.escapeHtmlEvent(collapsedOutcomePreview.text),
     collapsedOutcomeTitleAttr: deps.escapeAttrEvent(collapsedOutcomePreview.title),
     collapsedOutcomeChipClassName: collapsedOutcomePreview.chipClassName,
@@ -1436,20 +1456,26 @@ export function buildEventRollResultCardEvent(
     difficultyHtml: deps.escapeHtmlEvent(difficultyText),
     difficultyTitleAttr: deps.escapeAttrEvent(difficultyTitleAttr),
     diceExprHtml: deps.escapeHtmlEvent(record.diceExpr),
-    diceModifierHintHtml: deps.escapeHtmlEvent(diceModifierHint),
-    rollsSummaryHtml: deps.buildRollsSummaryTemplateEvent(
-      deps.escapeHtmlEvent(buildRollsSummaryTextEvent(record.result)),
-      deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier)),
-      selectionSummaryText ? deps.escapeHtmlEvent(selectionSummaryText) : ""
-    ),
+    diceModifierHintHtml: deps.escapeHtmlEvent(isBlindRecord ? "结果已隐藏，仅命运知晓" : diceModifierHint),
+    rollsSummaryHtml: isBlindRecord
+      ? deps.buildRollsSummaryTemplateEvent(
+          deps.escapeHtmlEvent("结果已隐藏，仅命运知晓"),
+          deps.escapeHtmlEvent("隐藏"),
+          ""
+        )
+      : deps.buildRollsSummaryTemplateEvent(
+          deps.escapeHtmlEvent(buildRollsSummaryTextEvent(record.result)),
+          deps.escapeHtmlEvent(deps.formatModifier(record.result.modifier)),
+          selectionSummaryText ? deps.escapeHtmlEvent(selectionSummaryText) : ""
+        ),
     explodeInfoHtml: deps.escapeHtmlEvent(explodeInfoText),
     modifierBreakdownHtml,
-    compareHtml: deps.escapeHtmlEvent(record.compareUsed),
-    dcText: String(record.dcUsed ?? "未设置"),
+    compareHtml: deps.escapeHtmlEvent(isBlindRecord ? "?" : record.compareUsed),
+    dcText: isBlindRecord ? "已隐藏" : String(record.dcUsed ?? "未设置"),
     dcReasonHtml: dcDescriptionHtml,
     statusText: status,
     statusColor,
-    totalText: String(record.result.total),
+    totalText: isBlindRecord ? "已隐藏" : String(record.result.total),
     timeLimitHtml: deps.escapeHtmlEvent(timeLimitLabel),
     diceVisualBlockHtml: diceVisualBlock,
     outcomeLabelHtml: deps.escapeHtmlEvent(outcomeLabel),
@@ -1460,5 +1486,3 @@ export function buildEventRollResultCardEvent(
     currentStatusesHtml: deps.escapeHtmlEvent(currentStatusesSummaryText),
   });
 }
-
-

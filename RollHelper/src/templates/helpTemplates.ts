@@ -8,6 +8,8 @@ export function buildRollCommandHelpTemplateEvent(): string {
         <li><code>/roll 1d20</code></li>
         <li><code>/roll 3d6+2</code></li>
         <li><code>/roll 2d10-1</code></li>
+        <li><code>/broll 察觉</code>（按技能名发起暗骰，默认使用 <code>1d20</code>）</li>
+        <li><code>/broll 1d20</code>（直接发起暗骰）</li>
         <li><code>/roll 1d6!+2</code>（<code>!</code> 表示爆骰）</li>
         <li><code>/roll 2d20kh1</code>（保留最高 1 个）</li>
         <li><code>/roll 2d20kl1</code>（保留最低 1 个）</li>

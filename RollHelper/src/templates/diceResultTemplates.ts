@@ -353,6 +353,26 @@ export function buildResultMessageTemplateEvent(
   `;
 }
 
+export function buildBlindResultMessageTemplateEvent(title: string): string {
+  const label = String(title ?? "").trim() || "暗骰检定";
+  return `
+  <div style="
+    border: 1px solid rgba(125, 102, 255, 0.38);
+    background: linear-gradient(135deg, rgba(16,12,30,0.98) 0%, rgba(9,8,18,0.98) 100%);
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
+    color: #dcd6ff;
+  ">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;letter-spacing:0.06em;color:#b9abff;">BLIND ROLL</div>
+      <div style="font-size:12px;color:#8f85cf;">仅命运知晓</div>
+    </div>
+    <div style="font-size:16px;font-weight:700;color:#f1eeff;margin-bottom:8px;">${label}</div>
+    <div style="font-size:13px;line-height:1.6;color:#cbc4f5;">🎲 检定已执行，真实结果不会显示给玩家，只有地下城主与命运知道答案。</div>
+  </div>`;
+}
+
 export interface AlreadyRolledDiceVisualTemplateParamsEvent {
   uniqueId: string;
   rollingVisualHtml: string;

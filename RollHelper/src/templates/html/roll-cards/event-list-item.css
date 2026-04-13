@@ -255,6 +255,37 @@
   justify-content: center;
 }
 
+.st-rh-roll-btn-stack {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.st-rh-roll-btn.is-blind {
+  border-color: rgba(129, 114, 255, 0.5);
+  background:
+    radial-gradient(circle at top, rgba(126, 109, 255, 0.16), transparent 44%),
+    linear-gradient(180deg, rgba(38, 28, 74, 0.96), rgba(16, 12, 32, 0.99));
+  color: #e5deff;
+  box-shadow:
+    inset 0 0 0 1px rgba(201, 194, 255, 0.05),
+    0 8px 18px rgba(19, 12, 44, 0.35),
+    0 0 12px rgba(122, 105, 255, 0.18);
+}
+
+.st-rh-roll-btn.is-blind:hover {
+  border-color: rgba(165, 153, 255, 0.82);
+  background:
+    radial-gradient(circle at top, rgba(152, 136, 255, 0.24), transparent 44%),
+    linear-gradient(180deg, rgba(50, 38, 92, 0.98), rgba(20, 15, 38, 0.99));
+  color: #faf8ff;
+  box-shadow:
+    inset 0 0 0 1px rgba(226, 220, 255, 0.08),
+    0 10px 24px rgba(21, 14, 46, 0.42),
+    0 0 18px rgba(134, 118, 255, 0.26);
+}
+
 .st-rh-badge-role {
   display: inline-flex;
   align-items: center;

@@ -25,6 +25,11 @@ import { logger } from "../../index";
 import { appendSdkPluginChatRecord } from "../../../SDK/db";
 import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
 import { AI_SUPPORTED_DICE_SIDES_Event } from "../settings/constantsEvent";
+import {
+  buildBlindGuidanceBlockEvent,
+  buildPassiveDiscoveryBlockEvent,
+  resolvePassiveDiscoveriesEvent,
+} from "./passiveBlindEvent";
 
 const DEFAULT_RULE_BLOCK_START_Event = "<dice_rules>";
 const DEFAULT_RULE_BLOCK_END_Event = "</dice_rules>";
@@ -32,10 +37,14 @@ const DEFAULT_SUMMARY_BLOCK_START_Event = "<dice_round_summary>";
 const DEFAULT_SUMMARY_BLOCK_END_Event = "</dice_round_summary>";
 const DEFAULT_RESULT_GUIDANCE_BLOCK_START_Event = "<dice_result_guidance>";
 const DEFAULT_RESULT_GUIDANCE_BLOCK_END_Event = "</dice_result_guidance>";
+const DEFAULT_BLIND_GUIDANCE_BLOCK_START_Event = "<dice_blind_guidance>";
+const DEFAULT_BLIND_GUIDANCE_BLOCK_END_Event = "</dice_blind_guidance>";
 const DEFAULT_RUNTIME_POLICY_BLOCK_START_Event = "<dice_runtime_policy>";
 const DEFAULT_RUNTIME_POLICY_BLOCK_END_Event = "</dice_runtime_policy>";
 const DEFAULT_ACTIVE_STATUSES_BLOCK_START_Event = "<dice_active_statuses>";
 const DEFAULT_ACTIVE_STATUSES_BLOCK_END_Event = "</dice_active_statuses>";
+const DEFAULT_PASSIVE_DISCOVERY_BLOCK_START_Event = "<dice_passive_discovery>";
+const DEFAULT_PASSIVE_DISCOVERY_BLOCK_END_Event = "</dice_passive_discovery>";
 
 function normalizeTextEvent(raw: any): string {
   return String(raw ?? "");
@@ -63,8 +72,12 @@ function getBlockTagsEvent(
     summaryEnd: string;
     guidanceStart: string;
     guidanceEnd: string;
+    blindStart: string;
+    blindEnd: string;
     statusesStart: string;
     statusesEnd: string;
+    passiveStart: string;
+    passiveEnd: string;
   }>
 ): { start: string; end: string }[] {
   const ruleStart = tags?.ruleStart || DEFAULT_RULE_BLOCK_START_Event;
@@ -75,14 +88,20 @@ function getBlockTagsEvent(
   const summaryEnd = tags?.summaryEnd || DEFAULT_SUMMARY_BLOCK_END_Event;
   const guidanceStart = tags?.guidanceStart || DEFAULT_RESULT_GUIDANCE_BLOCK_START_Event;
   const guidanceEnd = tags?.guidanceEnd || DEFAULT_RESULT_GUIDANCE_BLOCK_END_Event;
+  const blindStart = tags?.blindStart || DEFAULT_BLIND_GUIDANCE_BLOCK_START_Event;
+  const blindEnd = tags?.blindEnd || DEFAULT_BLIND_GUIDANCE_BLOCK_END_Event;
   const statusesStart = tags?.statusesStart || DEFAULT_ACTIVE_STATUSES_BLOCK_START_Event;
   const statusesEnd = tags?.statusesEnd || DEFAULT_ACTIVE_STATUSES_BLOCK_END_Event;
+  const passiveStart = tags?.passiveStart || DEFAULT_PASSIVE_DISCOVERY_BLOCK_START_Event;
+  const passiveEnd = tags?.passiveEnd || DEFAULT_PASSIVE_DISCOVERY_BLOCK_END_Event;
   return [
     { start: ruleStart, end: ruleEnd },
     { start: runtimePolicyStart, end: runtimePolicyEnd },
     { start: summaryStart, end: summaryEnd },
     { start: guidanceStart, end: guidanceEnd },
+    { start: blindStart, end: blindEnd },
     { start: statusesStart, end: statusesEnd },
+    { start: passiveStart, end: passiveEnd },
   ];
 }
 
@@ -589,6 +608,85 @@ function resolvePromptGuidanceInjectionEvent(
   return { text: guidanceText, changedMeta: true };
 }
 
+function resolvePromptBlindGuidanceInjectionEvent(
+  meta: DiceMetaEvent,
+  userMsgId: string,
+  isSameUserPrompt: boolean,
+  blindStartTag: string,
+  blindEndTag: string
+): { text: string; changedMeta: boolean } {
+  if (
+    isSameUserPrompt &&
+    meta.outboundBlindGuidance &&
+    meta.outboundBlindGuidance.userMsgId === userMsgId
+  ) {
+    return {
+      text: normalizeBlockTextEvent(meta.outboundBlindGuidance.guidanceText),
+      changedMeta: false,
+    };
+  }
+  const queue = Array.isArray(meta.pendingBlindGuidanceQueue) ? meta.pendingBlindGuidanceQueue : [];
+  if (queue.length <= 0) {
+    if (meta.outboundBlindGuidance) {
+      delete meta.outboundBlindGuidance;
+      return { text: "", changedMeta: true };
+    }
+    return { text: "", changedMeta: false };
+  }
+  const consumed = queue.splice(0, queue.length);
+  const guidanceText = buildBlindGuidanceBlockEvent(consumed, blindStartTag, blindEndTag);
+  meta.outboundBlindGuidance = {
+    userMsgId,
+    rollId: consumed[consumed.length - 1]?.rollId || "",
+    guidanceText,
+  };
+  return { text: guidanceText, changedMeta: true };
+}
+
+function resolvePromptPassiveDiscoveryInjectionEvent(
+  meta: DiceMetaEvent,
+  settings: DicePluginSettingsEvent,
+  userMsgText: string,
+  passiveStartTag: string,
+  passiveEndTag: string,
+  resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number
+): { text: string; changedMeta: boolean } {
+  if (!settings.enablePassiveCheck || settings.worldbookPassiveMode === "disabled") {
+    if (meta.outboundPassiveDiscovery) {
+      delete meta.outboundPassiveDiscovery;
+      return { text: "", changedMeta: true };
+    }
+    return { text: "", changedMeta: false };
+  }
+  if (!meta.passiveDiscoveriesCache || typeof meta.passiveDiscoveriesCache !== "object") {
+    meta.passiveDiscoveriesCache = {};
+  }
+  const resolved = resolvePassiveDiscoveriesEvent(
+    settings,
+    userMsgText,
+    meta.passiveDiscoveriesCache,
+    resolveSkillModifierBySkillNameEvent
+  );
+  meta.lastPassiveContextHash = resolved.contextHash;
+  if (resolved.discoveries.length <= 0) {
+    if (meta.outboundPassiveDiscovery) {
+      delete meta.outboundPassiveDiscovery;
+      return { text: "", changedMeta: true };
+    }
+    return { text: "", changedMeta: true };
+  }
+  for (const item of resolved.discoveries) {
+    meta.passiveDiscoveriesCache[item.discoveryId] = item;
+  }
+  const discoveryText = buildPassiveDiscoveryBlockEvent(resolved.discoveries, passiveStartTag, passiveEndTag);
+  meta.outboundPassiveDiscovery = {
+    userMsgId: meta.lastPromptUserMsgId || "",
+    discoveryIds: resolved.discoveries.map((item) => item.discoveryId),
+    discoveryText,
+  };
+  return { text: discoveryText, changedMeta: true };
+}
+
 function upsertRoundSnapshotToHistoryEvent(
   history: RoundSummarySnapshotEvent[],
   snapshot: RoundSummarySnapshotEvent
@@ -627,10 +725,15 @@ export interface HandlePromptReadyDepsEvent {
   DICE_SUMMARY_BLOCK_END_Event: string;
   DICE_RESULT_GUIDANCE_BLOCK_START_Event?: string;
   DICE_RESULT_GUIDANCE_BLOCK_END_Event?: string;
+  DICE_BLIND_GUIDANCE_BLOCK_START_Event?: string;
+  DICE_BLIND_GUIDANCE_BLOCK_END_Event?: string;
   DICE_ACTIVE_STATUSES_BLOCK_START_Event?: string;
   DICE_ACTIVE_STATUSES_BLOCK_END_Event?: string;
+  DICE_PASSIVE_DISCOVERY_BLOCK_START_Event?: string;
+  DICE_PASSIVE_DISCOVERY_BLOCK_END_Event?: string;
   sweepTimeoutFailuresEvent: () => boolean;
   getDiceMetaEvent: () => DiceMetaEvent;
+  resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number;
   ensureSummaryHistoryEvent: (meta: DiceMetaEvent) => RoundSummarySnapshotEvent[];
   createRoundSummarySnapshotEvent: (round: any, now?: number) => RoundSummarySnapshotEvent;
   trimSummaryHistoryEvent: (history: RoundSummarySnapshotEvent[]) => void;
@@ -675,10 +778,18 @@ export function handlePromptReadyEvent(
     deps.DICE_RESULT_GUIDANCE_BLOCK_START_Event || DEFAULT_RESULT_GUIDANCE_BLOCK_START_Event;
   const guidanceEndTag =
     deps.DICE_RESULT_GUIDANCE_BLOCK_END_Event || DEFAULT_RESULT_GUIDANCE_BLOCK_END_Event;
+  const blindStartTag =
+    deps.DICE_BLIND_GUIDANCE_BLOCK_START_Event || DEFAULT_BLIND_GUIDANCE_BLOCK_START_Event;
+  const blindEndTag =
+    deps.DICE_BLIND_GUIDANCE_BLOCK_END_Event || DEFAULT_BLIND_GUIDANCE_BLOCK_END_Event;
   const statusesStartTag =
     deps.DICE_ACTIVE_STATUSES_BLOCK_START_Event || DEFAULT_ACTIVE_STATUSES_BLOCK_START_Event;
   const statusesEndTag =
     deps.DICE_ACTIVE_STATUSES_BLOCK_END_Event || DEFAULT_ACTIVE_STATUSES_BLOCK_END_Event;
+  const passiveStartTag =
+    deps.DICE_PASSIVE_DISCOVERY_BLOCK_START_Event || DEFAULT_PASSIVE_DISCOVERY_BLOCK_START_Event;
+  const passiveEndTag =
+    deps.DICE_PASSIVE_DISCOVERY_BLOCK_END_Event || DEFAULT_PASSIVE_DISCOVERY_BLOCK_END_Event;
   const managedTags = {
     ruleStart: ruleStartTag,
     ruleEnd: ruleEndTag,
@@ -688,8 +799,12 @@ export function handlePromptReadyEvent(
     summaryEnd: summaryEndTag,
     guidanceStart: guidanceStartTag,
     guidanceEnd: guidanceEndTag,
+    blindStart: blindStartTag,
+    blindEnd: blindEndTag,
     statusesStart: statusesStartTag,
     statusesEnd: statusesEndTag,
+    passiveStart: passiveStartTag,
+    passiveEnd: passiveEndTag,
   };
 
   const userStableText = stripManagedBlocksEvent(getMessageTextEvent(userMsg), managedTags);
@@ -780,6 +895,30 @@ export function handlePromptReadyEvent(
   if (guidanceResolved.changedMeta) {
     changedMeta = true;
   }
+  const blindResolved = resolvePromptBlindGuidanceInjectionEvent(
+    meta,
+    userMsgId,
+    isSameUserPrompt,
+    blindStartTag,
+    blindEndTag
+  );
+  const blindGuidanceBlockText = normalizeBlockTextEvent(blindResolved.text);
+  if (blindResolved.changedMeta) {
+    changedMeta = true;
+  }
+
+  const passiveResolved = resolvePromptPassiveDiscoveryInjectionEvent(
+    meta,
+    settings,
+    userStableText,
+    passiveStartTag,
+    passiveEndTag,
+    deps.resolveSkillModifierBySkillNameEvent
+  );
+  const passiveDiscoveryBlockText = normalizeBlockTextEvent(passiveResolved.text);
+  if (passiveResolved.changedMeta) {
+    changedMeta = true;
+  }
 
   const statusBlockText = settings.enableStatusSystem
     ? buildActiveStatusesBlockEvent(ensureActiveStatusesFromMetaEvent(meta), statusesStartTag, statusesEndTag)
@@ -816,7 +955,9 @@ export function handlePromptReadyEvent(
       runtimePolicyBlockText,
       summaryBlockText,
       guidanceBlockText,
+      blindGuidanceBlockText,
       statusBlockText,
+      passiveDiscoveryBlockText,
     ]);
 
     if (!targetInjectionMsg && targetComposedText) {
@@ -855,7 +996,7 @@ export function handlePromptReadyEvent(
   logger.info(
     `通过 ${sourceEvent} 更新了提示词管理块 (路径=${chatTargets
       .map((target) => target.path)
-      .join(",")} 块=规则:${ruleBlockText ? 1 : 0},运行时:${runtimePolicyBlockText ? 1 : 0},摘要:${summaryBlockText ? 1 : 0},指引:${guidanceBlockText ? 1 : 0},状态:${statusBlockText ? 1 : 0} 操作=${targetSyncLogs.join(
+      .join(",")} 块=规则:${ruleBlockText ? 1 : 0},运行时:${runtimePolicyBlockText ? 1 : 0},摘要:${summaryBlockText ? 1 : 0},指引:${guidanceBlockText ? 1 : 0},暗骰:${blindGuidanceBlockText ? 1 : 0},状态:${statusBlockText ? 1 : 0},被动:${passiveDiscoveryBlockText ? 1 : 0} 操作=${targetSyncLogs.join(
       ";"
     )})`
   );

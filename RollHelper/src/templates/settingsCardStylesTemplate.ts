@@ -165,6 +165,31 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       align-items: stretch;
     }
 
+    #${cardId} .st-roll-editor-item {
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    #${cardId} .st-roll-editor-row {
+      width: 100%;
+      justify-content: stretch;
+      align-items: stretch;
+    }
+
+    #${cardId} .st-roll-editor-row .st-roll-rule-textarea {
+      width: 100%;
+      min-width: 0;
+      min-height: 220px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      line-height: 1.55;
+    }
+
+    #${cardId} .st-roll-editor-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
+
     #${cardId} .st-roll-item-main {
       min-width: 0;
       flex: 1;
@@ -1528,6 +1553,162 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     #${cardId} .st-roll-status-modal-head {
       border-bottom-color: var(--ss-theme-border);
       background: var(--ss-theme-toolbar-bg);
+    }
+
+    #${cardId} .st-roll-skill-modal.stx-shared-dialog-root,
+    #${cardId} .st-roll-status-modal.stx-shared-dialog-root {
+      padding: 0;
+    }
+
+    #${cardId} .st-roll-skill-modal .stx-shared-dialog-surface[data-stx-dialog-layout="bare"],
+    #${cardId} .st-roll-status-modal .stx-shared-dialog-surface[data-stx-dialog-layout="bare"] {
+      width: 0;
+      max-width: none;
+      max-height: none;
+      overflow: visible;
+    }
+
+    #${cardId} .st-roll-skill-modal .stx-shared-dialog-content,
+    #${cardId} .st-roll-status-modal .stx-shared-dialog-content {
+      width: 0;
+      padding: 0;
+      overflow: visible;
+    }
+
+    #${cardId} .st-roll-skill-modal-backdrop,
+    #${cardId} .st-roll-status-modal-backdrop {
+      background:
+        radial-gradient(circle at top, rgba(255, 255, 255, 0.04), transparent 36%),
+        rgba(6, 8, 12, 0.26);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+
+    #${cardId} .st-roll-skill-modal-panel,
+    #${cardId} .st-roll-status-modal-panel {
+      position: fixed;
+      top: 64px;
+      left: 24px;
+      right: auto;
+      bottom: auto;
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    #${cardId} .st-roll-skill-modal-panel {
+      width: min(1080px, calc(100vw - 32px));
+      height: min(78vh, 760px);
+      --st-roll-skill-col-name: 240px;
+      --st-roll-skill-col-modifier: 76px;
+      --st-roll-skill-col-actions: 116px;
+    }
+
+    #${cardId} .st-roll-status-modal-panel {
+      width: min(1180px, calc(100vw - 32px));
+      height: min(80vh, 780px);
+    }
+
+    #${cardId} .st-roll-skill-modal-panel.is-floating-dragging,
+    #${cardId} .st-roll-status-modal-panel.is-floating-dragging {
+      box-shadow: 0 26px 64px rgba(0, 0, 0, 0.42);
+    }
+
+    #${cardId} .st-roll-skill-modal-head,
+    #${cardId} .st-roll-status-modal-head {
+      cursor: grab;
+      user-select: none;
+      touch-action: none;
+      padding: 10px 12px;
+    }
+
+    #${cardId} .st-roll-skill-modal-panel.is-floating-dragging .st-roll-skill-modal-head,
+    #${cardId} .st-roll-status-modal-panel.is-floating-dragging .st-roll-status-modal-head {
+      cursor: grabbing;
+    }
+
+    #${cardId} .st-roll-skill-modal-title,
+    #${cardId} .st-roll-status-modal-title {
+      font-size: 13px;
+      gap: 7px;
+    }
+
+    #${cardId} .st-roll-skill-modal-close,
+    #${cardId} .st-roll-status-modal-close {
+      min-width: 64px;
+      min-height: 30px;
+    }
+
+    #${cardId} .st-roll-skill-modal-body,
+    #${cardId} .st-roll-status-modal-body {
+      padding: 10px;
+    }
+
+    #${cardId} .st-roll-skill-layout {
+      grid-template-columns: minmax(200px, 240px) 1fr;
+      gap: 8px;
+    }
+
+    #${cardId} .st-roll-skill-modal-panel .st-roll-workbench-toolbar,
+    #${cardId} .st-roll-status-modal-panel .st-roll-workbench-toolbar,
+    #${cardId} .st-roll-skill-modal-panel .st-roll-workbench-sidebar-head,
+    #${cardId} .st-roll-status-modal-panel .st-roll-workbench-sidebar-head,
+    #${cardId} .st-roll-skill-modal-panel .st-roll-workbench-context,
+    #${cardId} .st-roll-status-modal-panel .st-roll-workbench-context {
+      padding: 8px 10px;
+      gap: 8px;
+      border-radius: 12px;
+    }
+
+    #${cardId} .st-roll-skill-modal-panel .st-roll-workbench-head-copy,
+    #${cardId} .st-roll-status-modal-panel .st-roll-workbench-head-copy,
+    #${cardId} .st-roll-skill-modal-panel .st-roll-workbench-sidebar-copy,
+    #${cardId} .st-roll-status-modal-panel .st-roll-workbench-sidebar-copy {
+      gap: 3px;
+    }
+
+    #${cardId} .st-roll-skill-modal-panel .st-roll-btn,
+    #${cardId} .st-roll-status-modal-panel .st-roll-btn {
+      min-height: 30px;
+      font-size: 11px;
+      padding: 0 10px;
+    }
+
+    #${cardId} .st-roll-skill-presets,
+    #${cardId} .st-roll-status-layout,
+    #${cardId} .st-roll-status-sidebar,
+    #${cardId} .st-roll-status-main,
+    #${cardId} .st-roll-skill-main {
+      border-radius: 12px;
+    }
+
+    #${cardId} .st-roll-skill-preset-item,
+    #${cardId} .st-roll-status-chat-item {
+      padding: 8px 9px;
+      border-radius: 10px;
+    }
+
+    #${cardId} .st-roll-skill-preset-list {
+      max-height: none;
+    }
+
+    #${cardId} .st-roll-skill-rows,
+    #${cardId} .st-roll-status-rows {
+      padding: 8px;
+      border-radius: 12px;
+    }
+
+    #${cardId} .st-roll-status-chat-list {
+      gap: 8px;
+    }
+
+    #${cardId} .st-roll-status-chat-item {
+      min-height: 64px;
+    }
+
+    #${cardId} .st-roll-status-chat-avatar-wrap {
+      width: 48px;
+      height: 48px;
+      flex-basis: 48px;
     }
 
     #${cardId} .st-roll-status-layout {

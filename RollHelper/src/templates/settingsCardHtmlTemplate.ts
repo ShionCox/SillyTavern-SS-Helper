@@ -681,6 +681,71 @@ export function buildSettingsCardHtmlTemplateEvent(
               },
             })}
           </div>
+
+          <div class="st-roll-divider"><i class="fa-solid fa-eye-slash"></i><span>暗骰与隐匿检定</span><div class="st-roll-divider-line"></div></div>
+
+          ${buildCheckboxItemEvent(
+            ids.blindRollEnabledId,
+            "启用暗骰",
+            "主动暗骰与事件卡暗骰都会隐藏结果，只把真实结算喂给 AI。",
+            "blind roll 暗骰 hidden result",
+            "开启暗骰模式。"
+            )}
+
+          ${buildCheckboxItemEvent(
+            ids.passiveCheckEnabledId,
+            "启用被动检定",
+            "按技能表自动推导被动值，并扫描激活世界书中的 RH_PASSIVE 条目。",
+            "passive check 被动检定 worldbook",
+            "开启被动检定。"
+            )}
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="passive formula base">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">被动检定基础值</div>
+              <div class="st-roll-item-desc">首版公式固定为基础值 + 技能修正，默认 10。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.passiveFormulaBaseId,
+                type: "number",
+                attributes: {
+                  min: 0,
+                  step: 1,
+                  "data-tip": "设置被动检定基础值。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-item-stack st-roll-editor-item st-roll-search-item" data-st-roll-search="passive aliases passive skill aliases">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">被动技能别名</div>
+              <div class="st-roll-item-desc">JSON 格式，键为 perception / investigation / insight，值为技能名数组。</div>
+            </div>
+            <div class="st-roll-row st-roll-editor-row">
+              <textarea id="${ids.passiveAliasesId}" class="st-roll-rule-textarea" rows="8" data-tip="编辑被动检定别名 JSON。"></textarea>
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-item-stack st-roll-editor-item st-roll-search-item" data-st-roll-search="worldbook passive template RH_PASSIVE">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">世界书被动模板</div>
+              <div class="st-roll-item-desc">这里提供的是完整世界书条目样例，正文里已经嵌入 RH_PASSIVE，用法可直接照抄。</div>
+            </div>
+            <div class="st-roll-row st-roll-editor-row">
+              <textarea id="${ids.worldbookPassiveTemplateId}" class="st-roll-rule-textarea" rows="8" data-tip="这是可直接写入世界书的完整 RH_PASSIVE 条目样例。"></textarea>
+            </div>
+            <div class="st-roll-actions st-roll-editor-actions" style="margin-top: 10px;">
+              ${buildSharedButton({
+                id: ids.worldbookPassiveCreateId,
+                label: "写入当前世界书",
+                attributes: {
+                  "data-tip": "尝试把示例条目写入当前激活的世界书；失败时仍可手动复制模板。",
+                },
+              })}
+            </div>
+          </div>
         </div>
 
         <div id="${ids.panelAboutId}" class="st-roll-panel" hidden>

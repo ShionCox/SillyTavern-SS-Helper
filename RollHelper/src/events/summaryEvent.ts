@@ -78,6 +78,7 @@ export function createRoundSummarySnapshotEvent(
       timeLimit: event.timeLimit ?? "none",
       status,
       resultSource: record?.source ?? null,
+      visibility: record?.visibility,
       total,
       skillModifierApplied: Number(record?.skillModifierApplied ?? 0),
       statusModifierApplied: Number(record?.statusModifierApplied ?? 0),
@@ -176,7 +177,9 @@ function getSummaryDescMaxLenByModeEvent(detailMode: SummaryDetailModeEvent): nu
 
 function toSummarySourceTextEvent(source: EventRollSourceEvent | null | undefined): string {
   if (source === "manual_roll") return "手动检定";
+  if (source === "blind_manual_roll") return "暗骰检定";
   if (source === "ai_auto_roll") return "AI自动检定";
+  if (source === "passive_check") return "被动检定";
   if (source === "timeout_auto_fail") return "超时判定";
   return "未知";
 }
@@ -188,6 +191,9 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
 
   if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
     return "超时未操作，系统判定失败";
+  }
+  if (item.visibility === "blind" || item.resultSource === "blind_manual_roll") {
+    return "暗骰检定已结算（结果已隐藏）";
   }
 
   const totalText = item.total == null ? "-" : String(item.total);

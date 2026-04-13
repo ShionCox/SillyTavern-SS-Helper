@@ -1,6 +1,7 @@
 import type { DiceOptions, DiceResult } from "../types/diceEvent";
 import type {
   AdvantageStateEvent,
+  BlindGuidanceEvent,
   CompareOperatorEvent,
   DiceEventSpecEvent,
   DiceMetaEvent,
@@ -21,6 +22,10 @@ import {
   resolveStatusModifiersForSkillEvent,
   stripStatusTagsFromTextEvent,
 } from "./statusEvent";
+import {
+  normalizeBlindGuidanceEvent,
+  resolveNatStateEvent,
+} from "./passiveBlindEvent";
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
@@ -225,6 +230,39 @@ function enqueueResultGuidanceFromRecordEvent(
     source: record.source,
     rolledAt: record.rolledAt,
   });
+}
+
+function ensureBlindGuidanceQueueEvent(meta: DiceMetaEvent): BlindGuidanceEvent[] {
+  if (!Array.isArray(meta.pendingBlindGuidanceQueue)) {
+    meta.pendingBlindGuidanceQueue = [];
+  }
+  return meta.pendingBlindGuidanceQueue;
+}
+
+function enqueueBlindGuidanceFromRecordEvent(
+  meta: DiceMetaEvent,
+  event: DiceEventSpecEvent,
+  record: EventRollRecordEvent
+): void {
+  if (record.visibility !== "blind") return;
+  const queue = ensureBlindGuidanceQueueEvent(meta);
+  if (queue.some((item) => item.rollId === record.rollId)) return;
+  queue.push(
+    normalizeBlindGuidanceEvent({
+      rollId: record.rollId,
+      eventId: event.id,
+      eventTitle: event.title,
+      skill: event.skill,
+      diceExpr: record.diceExpr,
+      total: Number(record.result.total) || 0,
+      success: record.success,
+      resultGrade: record.resultGrade,
+      natState: record.natState ?? "none",
+      targetLabel: record.targetLabelUsed || event.targetLabel,
+      rolledAt: record.rolledAt,
+      source: record.source,
+    })
+  );
 }
 
 export interface CreateSyntheticTimeoutDiceResultDepsEvent {
@@ -887,7 +925,7 @@ export interface PerformEventRollByIdDepsEvent {
   createIdEvent: (prefix: string) => string;
 }
 
-type ManualEventRollModeEvent = "initial" | "reroll";
+type ManualEventRollModeEvent = "initial" | "reroll" | "blind_initial" | "blind_reroll";
 
 /**
  * 功能：执行一次事件手动掷骰，可用于首次结算或重新投掷。
@@ -905,7 +943,8 @@ async function executeManualEventRollEvent(
   mode: ManualEventRollModeEvent,
   deps: PerformEventRollByIdDepsEvent
 ): Promise<string> {
-  const allowExistingRecord = mode === "reroll";
+  const allowExistingRecord = mode === "reroll" || mode === "blind_reroll";
+  const isBlindMode = mode === "blind_initial" || mode === "blind_reroll";
   deps.sweepTimeoutFailuresEvent();
   const eventId = String(eventIdRaw || "").trim();
   if (!eventId) {
@@ -1001,7 +1040,9 @@ async function executeManualEventRollEvent(
   const compareUsed = deps.normalizeCompareOperatorEvent(event.compare) ?? ">=";
   const dcUsed = Number.isFinite(event.dc) ? Number(event.dc) : null;
   const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
-  const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, "manual_roll");
+  const recordSource: EventRollRecordEvent["source"] = isBlindMode ? "blind_manual_roll" : "manual_roll";
+  const natState = resolveNatStateEvent(result.rolls, Number(result.sides) || 0);
+  const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, recordSource);
   if (shouldPlay3DRollAnimationEvent(settings, result)) {
     await playRollResultAnimationEvent(resolveRollVisualStatusFromGradeEvent(grade.resultGrade));
   }
@@ -1028,7 +1069,10 @@ async function executeManualEventRollEvent(
     finalModifierUsed: statusAdjusted.finalModifierUsed,
     targetLabelUsed: event.targetLabel,
     rolledAt: Date.now(),
-    source: "manual_roll",
+    source: recordSource,
+    visibility: isBlindMode ? "blind" : "public",
+    concealResult: isBlindMode,
+    natState,
     timeoutAt: null,
     explodePolicyApplied,
     explodePolicyReason,
@@ -1039,6 +1083,7 @@ async function executeManualEventRollEvent(
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
   }
+  enqueueBlindGuidanceFromRecordEvent(meta, event, record);
   applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
   deps.saveMetadataSafeEvent();
   deps.refreshAllWidgetsFromStateEvent();
@@ -1055,6 +1100,15 @@ export async function performEventRollByIdEvent(
   return executeManualEventRollEvent(eventIdRaw, overrideExpr, expectedRoundId, "initial", deps);
 }
 
+export async function performBlindEventRollByIdEvent(
+  eventIdRaw: string,
+  overrideExpr: string | undefined,
+  expectedRoundId: string | undefined,
+  deps: PerformEventRollByIdDepsEvent
+): Promise<string> {
+  return executeManualEventRollEvent(eventIdRaw, overrideExpr, expectedRoundId, "blind_initial", deps);
+}
+
 /**
  * 功能：对同一事件发起重新投掷，并保留旧记录。
  * @param eventIdRaw 事件 ID
@@ -1068,6 +1122,14 @@ export async function rerollEventByIdEvent(
   deps: PerformEventRollByIdDepsEvent
 ): Promise<string> {
   return executeManualEventRollEvent(eventIdRaw, undefined, expectedRoundId, "reroll", deps);
+}
+
+export async function rerollBlindEventByIdEvent(
+  eventIdRaw: string,
+  expectedRoundId: string | undefined,
+  deps: PerformEventRollByIdDepsEvent
+): Promise<string> {
+  return executeManualEventRollEvent(eventIdRaw, undefined, expectedRoundId, "blind_reroll", deps);
 }
 
 export interface AutoRollEventsByAiModeDepsEvent {
@@ -1186,9 +1248,12 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
       baseModifierUsed: adjusted.baseModifierUsed,
       finalModifierUsed: statusAdjusted.finalModifierUsed,
       targetLabelUsed: event.targetLabel,
-      rolledAt: Date.now(),
-      source: "ai_auto_roll",
-      timeoutAt: null,
+    rolledAt: Date.now(),
+    source: "ai_auto_roll",
+    visibility: "public",
+    concealResult: false,
+    natState: resolveNatStateEvent(result.rolls, Number(result.sides) || 0),
+    timeoutAt: null,
       explodePolicyApplied,
       explodePolicyReason,
       sourceAssistantMsgId: event.sourceAssistantMsgId,
@@ -1285,6 +1350,9 @@ export function formatRollRecordSummaryEvent(
 
   if (record.source === "timeout_auto_fail") {
     return `超时自动判定失败${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
+  }
+  if (record.source === "blind_manual_roll" || record.visibility === "blind") {
+    return `暗骰检定已结算（结果已隐藏，仅命运知晓）${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
   }
   if (record.source === "ai_auto_roll") {
     const status = record.success === null ? "未判定" : record.success ? "成功" : "失败";

@@ -74,12 +74,14 @@ import {
   getSkillPresetStoreEvent as getSkillPresetStoreStoreEvent,
   getUniqueSkillPresetNameEvent as getUniqueSkillPresetNameStoreEvent,
   normalizeSkillPresetNameKeyEvent as normalizeSkillPresetNameKeyStoreEvent,
+  resolveSkillModifierBySkillNameEvent as resolveSkillModifierBySkillNameStoreEvent,
   normalizeSkillTableTextForSettingsEvent as normalizeSkillTableTextForSettingsStoreEvent,
   cleanupUnusedChatStatesForCurrentTavernEvent as cleanupUnusedChatStatesForCurrentTavernStoreEvent,
   listChatScopedStatusSummariesEvent as listChatScopedStatusSummariesStoreEvent,
   listHostChatsForCurrentScopeEvent as listHostChatsForCurrentScopeStoreEvent,
   loadStatusesForChatKeyEvent as loadStatusesForChatKeyStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
+  saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
   saveStatusesForChatKeyEvent as saveStatusesForChatKeyStoreEvent,
   saveSkillPresetStoreEvent as saveSkillPresetStoreStoreEvent,
   setActiveStatusesEvent as setActiveStatusesStoreEvent,
@@ -102,6 +104,7 @@ import {
 import { createSkillEditorRuntimeEvent } from "../settings/skillEditorRuntimeEvent";
 import { registerBaseMacrosAndCommandsEvent as registerBaseMacrosAndCommandsModuleEvent } from "../commands/baseRollCommandEvent";
 import { buildResultMessageTemplateEvent } from "../templates/diceResultTemplates";
+import { buildBlindResultMessageTemplateEvent } from "../templates/diceResultTemplates";
 import {
   fetchMemoryChatKeysEvent as fetchMemoryChatKeysIntegrationEvent,
   probeMemoryPluginEvent as probeMemoryPluginIntegrationEvent,
@@ -303,10 +306,16 @@ export function registerBaseMacrosAndCommandsEvent(): void {
     SlashCommandArgument: slashCommandRuntime.argument,
     ARGUMENT_TYPE: slashCommandRuntime.argumentType,
     getDiceMeta: getDiceMetaStoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    getSettingsEvent: getSettingsStoreEvent,
     rollDiceEvent: rollDiceWithEngineCoreEvent,
     saveLastRoll: saveLastRollStoreEvent,
     buildResultMessage: buildResultMessageTemplateEvent,
+    buildBlindResultMessage: buildBlindResultMessageTemplateEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,
+    resolveSkillModifierBySkillNameEvent: resolveSkillModifierBySkillNameStoreEvent,
+    createIdEvent: createIdCoreEvent,
+    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
     playDiceRevealOnlyEvent: playDiceRevealOnlyCoreEvent,
   });
 }
