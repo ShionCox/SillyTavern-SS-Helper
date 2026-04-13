@@ -239,22 +239,26 @@ export function resolvePassiveDiscoveriesEvent(
 }
 
 function buildBlindInstructionEvent(item: BlindGuidanceEvent): string {
+  const targetText = normalizeInlineTextEvent(item.targetLabel || "");
+  const noteText = normalizeInlineTextEvent(item.note || "");
+  const contextText = targetText ? `触发片段是「${targetText}」。` : "";
+  const noteHint = noteText ? `附加说明：${noteText}。` : "";
   if (item.natState === "nat20") {
-    return "玩家掷出了暗骰大成功。必须安排极其有利、明确且戏剧化的正向结果，但不要透露点数。";
+    return `玩家掷出了暗骰大成功。${contextText}${noteHint}必须安排极其有利、明确且戏剧化的正向结果，但不要透露点数。`;
   }
   if (item.natState === "nat1") {
-    return "玩家掷出了暗骰大失败。必须安排显著误判、风险或滑稽后果，但不要透露点数。";
+    return `玩家掷出了暗骰大失败。${contextText}${noteHint}必须安排显著误判、风险或滑稽后果，但不要透露点数。`;
   }
   switch (item.resultGrade) {
     case "critical_success":
-      return "这是一次暗骰大成功。用强烈成功口吻推进剧情，但不要暴露检定值。";
+      return `这是一次暗骰大成功。${contextText}${noteHint}用强烈成功口吻推进剧情，但不要暴露检定值。`;
     case "critical_failure":
-      return "这是一次暗骰大失败。允许给出错误信息或危险误判，但不要暴露检定值。";
+      return `这是一次暗骰大失败。${contextText}${noteHint}允许给出错误信息、危险误判或触发新的风险，但不要暴露检定值。`;
     case "success":
     case "partial_success":
-      return "这是一次暗骰成功。自然描述玩家获得的信息或收益，不要提及掷骰过程。";
+      return `这是一次暗骰成功。${contextText}${noteHint}自然描述玩家获得的信息、收益或新优势，不要提及掷骰过程。`;
     default:
-      return "这是一次暗骰失败。可以提供错误线索、模糊判断或一无所获，不要提及掷骰过程。";
+      return `这是一次暗骰失败。${contextText}${noteHint}可以提供错误线索、模糊判断、自信的误判或一无所获，并附带叙事代价，但不要提及掷骰过程。`;
   }
 }
 
@@ -265,7 +269,9 @@ export function buildBlindGuidanceBlockEvent(queue: BlindGuidanceEvent[], startT
     lines.push(
       `- event="${normalizeInlineTextEvent(item.eventTitle)}" skill="${normalizeInlineTextEvent(item.skill)}" expr="${normalizeInlineTextEvent(
         item.diceExpr
-      )}" total=${item.total} success=${item.success === null ? "unknown" : item.success ? "1" : "0"} grade=${item.resultGrade} nat=${item.natState}`
+      )}" total=${item.total} success=${item.success === null ? "unknown" : item.success ? "1" : "0"} grade=${item.resultGrade} nat=${item.natState} target="${normalizeInlineTextEvent(
+        item.targetLabel
+      )}" sourceId="${normalizeInlineTextEvent(item.sourceId || "")}"`
     );
     lines.push(`  instruction: ${buildBlindInstructionEvent(item)}`);
   }
@@ -287,7 +293,7 @@ export function buildPassiveDiscoveryBlockEvent(
       )}"`
     );
     lines.push(`  reveal: ${normalizeInlineTextEvent(item.content)}`);
-    lines.push("  instruction: 这是被动检定自动发现的信息。请自然描写，不要提及系统、DC、被动检定或暗骰。");
+    lines.push("  instruction: 这是被动检定自动发现的信息。请自然描写，不要提及系统、DC、被动检定或暗骰；如果其中有值得继续追查的短词或线索，可以继续用 rh-trigger 标记。");
   }
   lines.push(endTag);
   return lines.join("\n");
@@ -376,6 +382,7 @@ export function buildPassiveWorldbookTemplateEvent(): string {
     "2. `type` 目前支持 perception / investigation / insight。",
     "3. `dc` 是被动检定门槛，`id` 用于去重，`priority` 越高越优先注入，`scope` 可选 once 或 persistent。",
     "4. RH_PASSIVE 后面的正文就是命中后提供给 AI 的隐藏信息；未命中时这段信息不会注入。",
+    "5. 如果命中后的信息里有值得继续点击或调查的词，AI 下一轮可以把它写成 [[rh-trigger ...]]词语[[/rh-trigger]] 交互片段。",
   ].join("\n");
 }
 

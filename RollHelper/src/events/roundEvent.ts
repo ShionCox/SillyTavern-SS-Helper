@@ -11,6 +11,7 @@ import type {
   EventRollRecordEvent,
   EventRollModeEvent,
   EventTimerStateEvent,
+  InteractiveTriggerEvent,
   PendingResultGuidanceEvent,
   PendingRoundEvent,
 } from "../types/eventDomainEvent";
@@ -923,6 +924,171 @@ export interface PerformEventRollByIdDepsEvent {
   normalizeCompareOperatorEvent: (raw: any) => CompareOperatorEvent | null;
   evaluateSuccessEvent: (total: number, compare: CompareOperatorEvent, dc: number | null) => boolean | null;
   createIdEvent: (prefix: string) => string;
+}
+
+export interface PerformInteractiveTriggerRollDepsEvent extends PerformEventRollByIdDepsEvent {}
+
+export interface PerformInteractiveTriggerRollResultEvent {
+  round: PendingRoundEvent;
+  event: DiceEventSpecEvent;
+  record: EventRollRecordEvent;
+}
+
+function buildInteractiveTriggerEventSpecEvent(
+  trigger: InteractiveTriggerEvent,
+  eventId: string
+): DiceEventSpecEvent {
+  const label = String(trigger.label || "").trim() || "未指定线索";
+  const action = String(trigger.action || "").trim() || String(trigger.skill || "").trim() || "检定";
+  const skill = String(trigger.skill || "").trim() || action;
+  const dcHint = Number.isFinite(Number(trigger.dcHint)) ? Math.max(0, Math.floor(Number(trigger.dcHint))) : 10;
+  const noteText = String(trigger.note || "").trim();
+  const loreText = String(trigger.loreType || "").trim();
+  const descParts = [
+    `来自交互触发词「${label}」的即时检定。`,
+    loreText ? `线索类型：${loreText}。` : "",
+    noteText ? `备注：${noteText}。` : "",
+  ].filter(Boolean);
+  const dcReason = trigger.dcHint != null ? `由交互触发提供的 DC 提示 ${dcHint}` : "交互触发未提供 DC，使用默认阈值 10";
+  return {
+    id: eventId,
+    title: `${action}【${label}】`,
+    checkDice: String(trigger.diceExpr || "").trim() || "1d20",
+    dc: dcHint,
+    compare: ">=",
+    scope: "protagonist",
+    rollMode: "manual",
+    advantageState: "normal",
+    skill,
+    targetType: "object",
+    targetLabel: label,
+    targetName: trigger.sourceId || label,
+    timeLimit: "none",
+    desc: descParts.join(" "),
+    dcReason,
+    outcomes: {
+      success: `${action}成功，围绕「${label}」获得更明确的进展。`,
+      failure: `${action}失败，围绕「${label}」产生误判、延误或新的风险。`,
+    },
+    sourceAssistantMsgId: "",
+  };
+}
+
+export async function performInteractiveTriggerRollEvent(
+  trigger: InteractiveTriggerEvent,
+  deps: PerformInteractiveTriggerRollDepsEvent
+): Promise<PerformInteractiveTriggerRollResultEvent> {
+  deps.sweepTimeoutFailuresEvent();
+  const settings = deps.getSettingsEvent();
+  if (!settings.enabled) {
+    throw new Error("RollHelper 主开关已关闭，当前不能执行交互检定。");
+  }
+
+  const meta = deps.getDiceMetaEvent();
+  const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
+  const eventId = deps.createIdEvent("itr_event");
+  const event = buildInteractiveTriggerEventSpecEvent(trigger, eventId);
+  round.events.push(event);
+  round.sourceAssistantMsgIds = Array.isArray(round.sourceAssistantMsgIds) ? round.sourceAssistantMsgIds : [];
+
+  const exprRaw = String(event.checkDice || "").trim();
+  if (!exprRaw) {
+    throw new Error(`交互检定 ${event.title} 缺少可用骰式。`);
+  }
+
+  const requestedExplode = exprRaw.includes("!");
+  const explodePolicyApplied: EventRollRecordEvent["explodePolicyApplied"] = requestedExplode
+    ? settings.enableExplodingDice
+      ? "enabled"
+      : "disabled_globally"
+    : "not_requested";
+  const explodePolicyReason = requestedExplode
+    ? settings.enableExplodingDice
+      ? "已请求爆骰，按真实掷骰结果决定是否触发连爆。"
+      : "已请求爆骰，但全局爆骰功能关闭，按普通骰结算。"
+    : "未请求爆骰。";
+  const expr = requestedExplode && !settings.enableExplodingDice ? exprRaw.replace("!", "") : exprRaw;
+
+  const execution = resolveRollExecutionOptionsEvent(expr, event, settings, deps.parseDiceExpression);
+  if (execution.errorText) {
+    throw new Error(`掷骰失败：${execution.errorText}`);
+  }
+
+  let result: DiceResult;
+  try {
+    result = await deps.rollDiceEvent(expr, {
+      rule: settings.ruleText,
+      adv: execution.adv,
+      dis: execution.dis,
+    });
+  } catch (error: any) {
+    throw new Error(`掷骰失败：${error?.message ?? String(error)}`);
+  }
+
+  const skillModifierApplied = deps.resolveSkillModifierBySkillNameEvent(event.skill, settings);
+  const adjusted = deps.applySkillModifierToDiceResultEvent(result, skillModifierApplied);
+  result = adjusted.result;
+  const statusResolved = resolveStatusModifierBySkillNameForRollEvent(event.skill, meta, settings);
+  const statusAdjusted = applyStatusModifierToDiceResultEvent(result, statusResolved.modifier);
+  result = statusAdjusted.result;
+
+  const compareUsed = deps.normalizeCompareOperatorEvent(event.compare) ?? ">=";
+  const dcUsed = Number.isFinite(event.dc) ? Number(event.dc) : null;
+  const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
+  const recordSource: EventRollRecordEvent["source"] = trigger.blind ? "blind_manual_roll" : "manual_roll";
+  const natState = resolveNatStateEvent(result.rolls, Number(result.sides) || 0);
+  const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, recordSource);
+  if (shouldPlay3DRollAnimationEvent(settings, result)) {
+    await playRollResultAnimationEvent(resolveRollVisualStatusFromGradeEvent(grade.resultGrade));
+  }
+
+  deps.saveLastRoll(result);
+
+  const record: EventRollRecordEvent = {
+    rollId: deps.createIdEvent("eroll"),
+    roundId: round.roundId,
+    eventId: event.id,
+    eventTitle: event.title,
+    diceExpr: expr,
+    result,
+    success,
+    compareUsed,
+    dcUsed,
+    advantageStateApplied: execution.advantageStateApplied,
+    resultGrade: grade.resultGrade,
+    marginToDc: grade.marginToDc,
+    skillModifierApplied,
+    statusModifierApplied: statusResolved.modifier,
+    statusModifiersApplied: statusResolved.matched,
+    baseModifierUsed: adjusted.baseModifierUsed,
+    finalModifierUsed: statusAdjusted.finalModifierUsed,
+    targetLabelUsed: event.targetLabel,
+    rolledAt: Date.now(),
+    source: recordSource,
+    visibility: trigger.blind ? "blind" : "public",
+    concealResult: trigger.blind,
+    natState,
+    timeoutAt: null,
+    explodePolicyApplied,
+    explodePolicyReason,
+    sourceAssistantMsgId: event.sourceAssistantMsgId,
+  };
+
+  round.rolls.push(record);
+  if (settings.enableDynamicResultGuidance) {
+    enqueueResultGuidanceFromRecordEvent(meta, event, record);
+  }
+  enqueueBlindGuidanceFromRecordEvent(meta, event, record);
+  applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
+  deps.saveMetadataSafeEvent();
+  deps.refreshAllWidgetsFromStateEvent();
+  deps.refreshCountdownDomEvent();
+
+  return {
+    round,
+    event,
+    record,
+  };
 }
 
 type ManualEventRollModeEvent = "initial" | "reroll" | "blind_initial" | "blind_reroll";

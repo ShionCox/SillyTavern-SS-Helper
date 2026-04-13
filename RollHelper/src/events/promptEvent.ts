@@ -146,25 +146,35 @@ function formatGradeLabelEvent(grade: EventResultGradeEvent): string {
   }
 }
 
-function buildResultGuidanceInstructionEvent(item: PendingResultGuidanceEvent): string {
+function buildResultGuidanceInstructionEvent(
+  item: PendingResultGuidanceEvent,
+  settings: DicePluginSettingsEvent
+): string {
   const title = item.eventTitle || item.eventId;
+  const sourceHint = normalizeInlineTextEvent(item.targetLabel || "");
+  const sourceText = sourceHint ? `，触发片段是「${sourceHint}」` : "";
   switch (item.resultGrade) {
     case "critical_success":
-      return `玩家在「${title}」中掷出大成功，请用英雄化、戏剧性的口吻描述其完美完成动作，并给出额外收益。`;
+      return `玩家在「${title}」中掷出大成功${sourceText}，请用英雄化、戏剧性的口吻描述其完美完成动作，并给出额外收益、额外线索或更优局面。`;
     case "partial_success":
-      return `玩家在「${title}」中勉强成功，请描述“成功但有代价”，代价可包含受伤、暴露、资源损失或引来威胁。`;
+      return `玩家在「${title}」中勉强成功${sourceText}，请描述“成功但有代价”，代价可包含受伤、暴露、资源损失或引来威胁。`;
     case "success":
-      return `玩家在「${title}」中成功，请给出稳定推进的叙事结果，避免额外惩罚。`;
+      return `玩家在「${title}」中成功${sourceText}，请给出稳定推进的叙事结果，避免无缘无故追加重罚。`;
     case "failure":
-      return `玩家在「${title}」中失败，请描述受阻但剧情继续推进，可引入新的困难或替代路径。`;
+      return settings.enableNarrativeCostEnforcement
+        ? `玩家在「${title}」中失败${sourceText}。必须附带明确叙事代价，至少体现时间损失、误判、暴露、资源消耗或引发下一风险之一，同时让剧情继续推进。`
+        : `玩家在「${title}」中失败${sourceText}，请描述受阻但剧情继续推进，可引入新的困难或替代路径。`;
     case "critical_failure":
-      return `玩家在「${title}」中大失败，请描述显著且可感知的严重后果，同时保持后续可行动性。`;
+      return settings.enableNarrativeCostEnforcement
+        ? `玩家在「${title}」中大失败${sourceText}。必须出现显著误判或危险后果，并带来明确叙事代价，但不要把剧情直接写死，仍要保留后续行动空间。`
+        : `玩家在「${title}」中大失败${sourceText}，请描述显著且可感知的严重后果，同时保持后续可行动性。`;
     default:
       return `玩家在「${title}」中完成检定，请根据结果推进叙事。`;
   }
 }
 function buildResultGuidanceTextEvent(
   queue: PendingResultGuidanceEvent[],
+  settings: DicePluginSettingsEvent,
   guidanceStartTag: string,
   guidanceEndTag: string
 ): string {
@@ -182,7 +192,7 @@ function buildResultGuidanceTextEvent(
         item.targetLabel
       )}" total=${item.total} check=${compareText} margin=${marginText} advantage=${advantageText}`
     );
-    lines.push(`  instruction: ${buildResultGuidanceInstructionEvent(item)}`);
+    lines.push(`  instruction: ${buildResultGuidanceInstructionEvent(item, settings)}`);
   }
   lines.push(guidanceEndTag);
   return normalizeBlockTextEvent(lines.join("\n"));
@@ -430,7 +440,29 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push("   - 状态数值绝对值需与当前骰子面数匹配，避免失衡，还需要注意状态请勿轻易附加，避免破坏平衡！");
   }
 
-  lines.push("6. **必须遵守 <dice_runtime_policy> 的运行时限制。**");
+  if (settings.enableInteractiveTriggers) {
+    const blindSkillText = String(settings.defaultBlindSkillsText ?? "")
+      .split(/[\n,|]+/)
+      .map((item) => normalizeInlineTextEvent(item))
+      .filter(Boolean)
+      .join("、") || "洞察、潜行、搜查、历史、调查";
+    lines.push("6. 正文中的可交互线索请使用交互标记：");
+    lines.push('   - 语法：[[rh-trigger action="调查" skill="调查" blind="1" sourceId="bookshelf_scratches"]]异常的刮痕[[/rh-trigger]]');
+    lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
+    lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
+    lines.push(`   - 下列技能通常应默认暗骰：${blindSkillText}。适用时请写 blind="1"。`);
+    lines.push("   - 被动检定自动发现的信息，如果值得继续追查，也可以继续标成可点击词。");
+  }
+
+  if (settings.enableNarrativeCostEnforcement) {
+    lines.push("7. 叙事结果约束：");
+    lines.push("   - 成功可以推进，但不要无缘无故追加重罚。");
+    lines.push("   - 失败必须附带明确叙事代价，至少体现时间损失、误判、暴露、资源消耗或引发下一风险之一。");
+    lines.push("   - 大失败必须带来显著误判、危险后果或滑稽失手，但不要把剧情直接写死。");
+    lines.push("   - 搜查、调查、洞察、历史等信息类失败，允许给出错误线索、漏掉关键点或自信的误判。");
+  }
+
+  lines.push("8. **必须遵守 <dice_runtime_policy> 的运行时限制。**");
   return normalizeBlockTextEvent(lines.join("\n"));
 }
 
@@ -598,7 +630,7 @@ function resolvePromptGuidanceInjectionEvent(
   }
 
   const consumed = queue.splice(0, queue.length);
-  const guidanceText = buildResultGuidanceTextEvent(consumed, guidanceStartTag, guidanceEndTag);
+  const guidanceText = buildResultGuidanceTextEvent(consumed, settings, guidanceStartTag, guidanceEndTag);
   const lastRollId = consumed[consumed.length - 1]?.rollId || consumed[0]?.rollId || "";
   meta.outboundResultGuidance = {
     userMsgId,

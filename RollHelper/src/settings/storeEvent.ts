@@ -740,7 +740,13 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   const minSeconds = Number.isFinite(minSecondsRaw) ? Math.floor(minSecondsRaw) : 10;
   bucket.minTimeLimitSeconds = Math.max(1, minSeconds);
   bucket.enableSkillSystem = bucket.enableSkillSystem !== false;
+  bucket.enableInteractiveTriggers = bucket.enableInteractiveTriggers !== false;
+  bucket.interactiveTriggerMode = "ai_markup";
   bucket.enableBlindRoll = bucket.enableBlindRoll !== false;
+  bucket.defaultBlindSkillsText =
+    typeof bucket.defaultBlindSkillsText === "string" && bucket.defaultBlindSkillsText.trim().length > 0
+      ? bucket.defaultBlindSkillsText
+      : DEFAULT_SETTINGS_Event.defaultBlindSkillsText;
   bucket.enablePassiveCheck = bucket.enablePassiveCheck !== false;
   const passiveFormulaBaseRaw = Number((source as any)?.passiveFormulaBase);
   bucket.passiveFormulaBase = Number.isFinite(passiveFormulaBaseRaw)
@@ -755,6 +761,7 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
     worldbookPassiveModeRaw === "disabled" || worldbookPassiveModeRaw === "read_only"
       ? (worldbookPassiveModeRaw as DicePluginSettingsEvent["worldbookPassiveMode"])
       : "read_write";
+  bucket.enableNarrativeCostEnforcement = bucket.enableNarrativeCostEnforcement !== false;
   bucket.blindUiWarnInConsole = bucket.blindUiWarnInConsole !== false;
   bucket.blindRevealInSummary = bucket.blindRevealInSummary === true;
   bucket.skillTableText =
@@ -1272,4 +1279,3 @@ export function serializeSkillRowsToSkillTableTextEvent(rows: SkillEditorRowDraf
   if (validation.errors.length > 0) return null;
   return JSON.stringify(validation.table, null, 2);
 }
-

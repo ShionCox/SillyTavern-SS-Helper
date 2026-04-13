@@ -62,10 +62,14 @@ export interface DicePluginSettingsEvent {
   enableTimeLimit: boolean;
   minTimeLimitSeconds: number;
   enableSkillSystem: boolean;
+  enableInteractiveTriggers: boolean;
+  interactiveTriggerMode: "ai_markup";
   enableBlindRoll: boolean;
+  defaultBlindSkillsText: string;
   enablePassiveCheck: boolean;
   passiveFormulaBase: number;
   passiveSkillAliasesText: string;
+  enableNarrativeCostEnforcement: boolean;
   worldbookPassiveMode: "disabled" | "read_only" | "read_write";
   blindUiWarnInConsole: boolean;
   blindRevealInSummary: boolean;
@@ -228,6 +232,23 @@ export interface BlindGuidanceEvent {
   targetLabel: string;
   rolledAt: number;
   source: EventRollSourceEvent;
+  sourceId?: string;
+  note?: string;
+}
+
+export interface InteractiveTriggerEvent {
+  triggerId: string;
+  label: string;
+  action: string;
+  skill: string;
+  blind: boolean;
+  sourceMessageId: string;
+  sourceId: string;
+  textRange?: { start: number; end: number } | null;
+  dcHint?: number | null;
+  loreType?: string;
+  note?: string;
+  diceExpr?: string;
 }
 
 export interface PassiveDiscoveryEvent {

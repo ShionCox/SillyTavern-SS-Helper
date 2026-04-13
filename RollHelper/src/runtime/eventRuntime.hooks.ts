@@ -37,6 +37,10 @@ import {
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
 } from "../settings/storeEvent";
 import {
+  bindInteractiveTriggerDomEventsEvent as bindInteractiveTriggerDomEventsModuleEvent,
+  enhanceInteractiveTriggersInDomEvent as enhanceInteractiveTriggersInDomModuleEvent,
+} from "../events/interactiveTriggersEvent";
+import {
   bindEventButtonsEvent as bindEventButtonsModuleEvent,
   buildAssistantMessageIdEvent as buildAssistantMessageIdModuleEvent,
   clearDiceMetaEventState as clearDiceMetaEventStateModuleEvent,
@@ -59,8 +63,9 @@ import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } 
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
 import { registerAnimationDebugCommandEvent as registerAnimationDebugCommandModuleEvent } from "../commands/animationDebugCommandEvent";
-import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performBlindEventRollByIdEvent as performBlindEventRollByIdModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
+import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performBlindEventRollByIdEvent as performBlindEventRollByIdModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, performInteractiveTriggerRollEvent as performInteractiveTriggerRollModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
 import { playRollAnimation as playRollAnimationCoreEvent, roll3DDice as roll3DDiceCoreEvent } from "../core/diceBox";
+import { buildBlindResultMessageTemplateEvent, buildResultMessageTemplateEvent } from "../templates/diceResultTemplates";
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
 import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
 import {
@@ -157,6 +162,7 @@ export function restoreRuntimeUiFromStateEvent(retry = 0): void {
   sweepTimeoutFailuresEvent();
   refreshCountdownDomEvent();
   const refreshResult = refreshAllWidgetsFromStateWiredEvent();
+  enhanceInteractiveTriggersInDomEvent();
 
   if (!shouldRetryInitialWidgetRestoreEvent(refreshResult)) {
     return;
@@ -207,6 +213,17 @@ function performEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, ex
 
 function performBlindEventRollByIdEvent(eventIdRaw: string, overrideExpr?: string, expectedRoundId?: string): Promise<string> {
   return performBlindEventRollByIdModuleEvent(eventIdRaw, overrideExpr, expectedRoundId, {
+    ...rollDepsEvent,
+    sweepTimeoutFailuresEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    recordTimeoutFailureIfNeededEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
+    refreshCountdownDomEvent,
+  });
+}
+
+function performInteractiveTriggerRollEvent(trigger: Parameters<typeof performInteractiveTriggerRollModuleEvent>[0]) {
+  return performInteractiveTriggerRollModuleEvent(trigger, {
     ...rollDepsEvent,
     sweepTimeoutFailuresEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
@@ -303,6 +320,10 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
   });
 }
 
+function enhanceInteractiveTriggersInDomEvent(): void {
+  enhanceInteractiveTriggersInDomModuleEvent(getSettingsStoreEvent());
+}
+
 export function bindEventButtonsEvent(): void {
   bindEventButtonsModuleEvent({
     performEventRollByIdEvent,
@@ -312,6 +333,14 @@ export function bindEventButtonsEvent(): void {
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
   });
+  bindInteractiveTriggerDomEventsModuleEvent({
+    getSettingsEvent: getSettingsStoreEvent,
+    buildResultMessage: buildResultMessageTemplateEvent,
+    buildBlindResultMessage: buildBlindResultMessageTemplateEvent,
+    appendToConsoleEvent: appendToConsoleCoreEvent,
+    performInteractiveTriggerRollEvent,
+  });
+  enhanceInteractiveTriggersInDomEvent();
 }
 
 export function registerEventRollCommandEvent(): void {
@@ -355,6 +384,7 @@ export function registerEventHooksEvent(): void {
     loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     reconcilePendingRoundWithCurrentChatEvent,
+    enhanceInteractiveTriggersInDomEvent,
   });
 }
 

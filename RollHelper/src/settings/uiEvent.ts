@@ -591,12 +591,15 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event: string;
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event: string;
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
@@ -627,10 +630,13 @@ export interface BindBasicSettingsInputsDepsEvent {
     enableDynamicDcReason?: boolean;
     enableStatusSystem?: boolean;
     aiAllowedDiceSidesText?: string;
+    enableInteractiveTriggers?: boolean;
     enableBlindRoll?: boolean;
+    defaultBlindSkillsText?: string;
     enablePassiveCheck?: boolean;
     passiveFormulaBase?: number;
     passiveSkillAliasesText?: string;
+    enableNarrativeCostEnforcement?: boolean;
     summaryDetailMode?: "minimal" | "balanced" | "detailed";
     summaryHistoryRounds?: number;
     eventApplyScope?: "protagonist_only" | "all";
@@ -678,9 +684,15 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
   ) as HTMLElement | null;
+  const interactiveTriggersEnabledInput = document.getElementById(
+    deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const blindRollEnabledInput = document.getElementById(
     deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const defaultBlindSkillsInput = document.getElementById(
+    deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event
+  ) as HTMLTextAreaElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -693,6 +705,9 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const worldbookPassiveTemplateInput = document.getElementById(
     deps.SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event
   ) as HTMLTextAreaElement | null;
+  const narrativeCostEnabledInput = document.getElementById(
+    deps.SETTINGS_NARRATIVE_COST_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const worldbookPassiveCreateButton = document.getElementById(
     deps.SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event
   ) as HTMLButtonElement | null;
@@ -814,8 +829,14 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ enableStatusSystem: value });
   });
+  interactiveTriggersEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableInteractiveTriggers: Boolean((event.target as HTMLInputElement).checked) });
+  });
   blindRollEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enableBlindRoll: Boolean((event.target as HTMLInputElement).checked) });
+  });
+  defaultBlindSkillsInput?.addEventListener("change", (event) => {
+    deps.updateSettingsEvent({ defaultBlindSkillsText: String((event.target as HTMLTextAreaElement).value ?? "") });
   });
   passiveCheckEnabledInput?.addEventListener("input", (event) => {
     deps.updateSettingsEvent({ enablePassiveCheck: Boolean((event.target as HTMLInputElement).checked) });
@@ -826,6 +847,9 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   });
   passiveAliasesInput?.addEventListener("change", (event) => {
     deps.updateSettingsEvent({ passiveSkillAliasesText: String((event.target as HTMLTextAreaElement).value ?? "") });
+  });
+  narrativeCostEnabledInput?.addEventListener("input", (event) => {
+    deps.updateSettingsEvent({ enableNarrativeCostEnforcement: Boolean((event.target as HTMLInputElement).checked) });
   });
   if (worldbookPassiveTemplateInput && !worldbookPassiveTemplateInput.value.trim()) {
     worldbookPassiveTemplateInput.value = buildPassiveWorldbookTemplateEvent();
@@ -1007,10 +1031,13 @@ export interface SyncSettingsUiDepsEvent {
     enableDynamicDcReason: boolean;
     enableStatusSystem: boolean;
     aiAllowedDiceSidesText: string;
+    enableInteractiveTriggers: boolean;
     enableBlindRoll: boolean;
+    defaultBlindSkillsText: string;
     enablePassiveCheck: boolean;
     passiveFormulaBase: number;
     passiveSkillAliasesText: string;
+    enableNarrativeCostEnforcement: boolean;
     summaryDetailMode: string;
     summaryHistoryRounds: number;
     eventApplyScope: string;
@@ -1039,12 +1066,15 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event: string;
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event: string;
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
@@ -1111,9 +1141,15 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const allowedDiceSidesInput = document.getElementById(
     deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event
   ) as HTMLElement | null;
+  const interactiveTriggersEnabledInput = document.getElementById(
+    deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const blindRollEnabledInput = document.getElementById(
     deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event
   ) as HTMLInputElement | null;
+  const defaultBlindSkillsInput = document.getElementById(
+    deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event
+  ) as HTMLTextAreaElement | null;
   const passiveCheckEnabledInput = document.getElementById(
     deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -1126,6 +1162,9 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const worldbookPassiveTemplateInput = document.getElementById(
     deps.SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event
   ) as HTMLTextAreaElement | null;
+  const narrativeCostEnabledInput = document.getElementById(
+    deps.SETTINGS_NARRATIVE_COST_ENABLED_ID_Event
+  ) as HTMLInputElement | null;
   const summaryDetailInput = document.getElementById(
     deps.SETTINGS_SUMMARY_DETAIL_ID_Event
   ) as HTMLSelectElement | null;
@@ -1197,8 +1236,14 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (statusSystemEnabledInput) {
     statusSystemEnabledInput.checked = Boolean(settings.enableStatusSystem);
   }
+  if (interactiveTriggersEnabledInput) {
+    interactiveTriggersEnabledInput.checked = Boolean(settings.enableInteractiveTriggers);
+  }
   if (blindRollEnabledInput) {
     blindRollEnabledInput.checked = Boolean(settings.enableBlindRoll);
+  }
+  if (defaultBlindSkillsInput) {
+    defaultBlindSkillsInput.value = String(settings.defaultBlindSkillsText ?? "");
   }
   if (passiveCheckEnabledInput) {
     passiveCheckEnabledInput.checked = Boolean(settings.enablePassiveCheck);
@@ -1208,6 +1253,9 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   }
   if (passiveAliasesInput) {
     passiveAliasesInput.value = String(settings.passiveSkillAliasesText ?? "");
+  }
+  if (narrativeCostEnabledInput) {
+    narrativeCostEnabledInput.checked = Boolean(settings.enableNarrativeCostEnforcement);
   }
   if (worldbookPassiveTemplateInput && !worldbookPassiveTemplateInput.value.trim()) {
     worldbookPassiveTemplateInput.value = buildPassiveWorldbookTemplateEvent();

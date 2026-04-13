@@ -24,6 +24,7 @@ export interface EventHooksDepsEvent {
   loadChatScopedStateIntoRuntimeEvent: (reason?: string) => Promise<void>;
   refreshAllWidgetsFromStateEvent: () => void;
   reconcilePendingRoundWithCurrentChatEvent: (reason?: string) => boolean;
+  enhanceInteractiveTriggersInDomEvent: () => void;
 }
 
 export interface HandleGenerationEndedDepsEvent {
@@ -1020,6 +1021,7 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
               deps.sweepTimeoutFailuresEvent();
               deps.refreshCountdownDomEvent();
               deps.refreshAllWidgetsFromStateEvent();
+              deps.enhanceInteractiveTriggersInDomEvent();
             }, 0);
           });
       } catch (error) {
@@ -1050,6 +1052,7 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
           deps.sweepTimeoutFailuresEvent();
           deps.refreshCountdownDomEvent();
           deps.refreshAllWidgetsFromStateEvent();
+          deps.enhanceInteractiveTriggersInDomEvent();
         }, 50);
       } catch (error) {
         logger.warn("Swipe/edit widget refresh 异常", error);

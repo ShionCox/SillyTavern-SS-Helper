@@ -112,12 +112,15 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_STATUS_COLS_ID_Event: string;
   SETTINGS_STATUS_MEMORY_STATE_ID_Event: string;
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event: string;
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event: string;
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event: string;
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event: string;
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event: string;
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event: string;
   SETTINGS_PASSIVE_ALIASES_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event: string;
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event: string;
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event: string;
   SETTINGS_THEME_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
@@ -252,12 +255,15 @@ export function buildSettingsCardTemplateIdsEvent(
     statusColsId: deps.SETTINGS_STATUS_COLS_ID_Event,
     statusMemoryStateId: deps.SETTINGS_STATUS_MEMORY_STATE_ID_Event,
     allowedDiceSidesId: deps.SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+    interactiveTriggersEnabledId: deps.SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
     blindRollEnabledId: deps.SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+    defaultBlindSkillsId: deps.SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
     passiveCheckEnabledId: deps.SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
     passiveFormulaBaseId: deps.SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
     passiveAliasesId: deps.SETTINGS_PASSIVE_ALIASES_ID_Event,
     worldbookPassiveTemplateId: deps.SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
     worldbookPassiveCreateId: deps.SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
+    narrativeCostEnabledId: deps.SETTINGS_NARRATIVE_COST_ENABLED_ID_Event,
     themeId: deps.SETTINGS_THEME_ID_Event,
     summaryDetailId: deps.SETTINGS_SUMMARY_DETAIL_ID_Event,
     summaryRoundsId: deps.SETTINGS_SUMMARY_ROUNDS_ID_Event,

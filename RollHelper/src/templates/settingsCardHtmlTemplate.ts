@@ -685,6 +685,14 @@ export function buildSettingsCardHtmlTemplateEvent(
           <div class="st-roll-divider"><i class="fa-solid fa-eye-slash"></i><span>暗骰与隐匿检定</span><div class="st-roll-divider-line"></div></div>
 
           ${buildCheckboxItemEvent(
+            ids.interactiveTriggersEnabledId,
+            "启用上下文触发",
+            "允许 AI 在回复里标记可交互线索词，点击或划词后弹出检定菜单。",
+            "interactive trigger highlight tooltip context",
+            "开启叙事片段触发检定。"
+            )}
+
+          ${buildCheckboxItemEvent(
             ids.blindRollEnabledId,
             "启用暗骰",
             "主动暗骰与事件卡暗骰都会隐藏结果，只把真实结算喂给 AI。",
@@ -692,12 +700,30 @@ export function buildSettingsCardHtmlTemplateEvent(
             "开启暗骰模式。"
             )}
 
+          <div class="st-roll-item st-roll-item-stack st-roll-editor-item st-roll-search-item" data-st-roll-search="default blind skills default blind dark skills">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">默认暗骰技能</div>
+              <div class="st-roll-item-desc">每行一个技能名。上下文触发命中这些技能时，会默认走暗骰。</div>
+            </div>
+            <div class="st-roll-row st-roll-editor-row">
+              <textarea id="${ids.defaultBlindSkillsId}" class="st-roll-rule-textarea" rows="6" data-tip="编辑默认暗骰技能列表。"></textarea>
+            </div>
+          </div>
+
           ${buildCheckboxItemEvent(
             ids.passiveCheckEnabledId,
             "启用被动检定",
             "按技能表自动推导被动值，并扫描激活世界书中的 RH_PASSIVE 条目。",
             "passive check 被动检定 worldbook",
             "开启被动检定。"
+            )}
+
+          ${buildCheckboxItemEvent(
+            ids.narrativeCostEnabledId,
+            "失败必须附带叙事代价",
+            "失败与大失败会更强地约束 AI 给出误判、暴露、资源损失或下一风险。",
+            "narrative cost failure consequence enforcement",
+            "开启失败叙事代价约束。"
             )}
 
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="passive formula base">

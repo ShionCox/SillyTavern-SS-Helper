@@ -53,12 +53,15 @@ export interface SettingsCardTemplateIdsEvent {
   statusColsId: string;
   statusMemoryStateId: string;
   allowedDiceSidesId: string;
+  interactiveTriggersEnabledId: string;
   blindRollEnabledId: string;
+  defaultBlindSkillsId: string;
   passiveCheckEnabledId: string;
   passiveFormulaBaseId: string;
   passiveAliasesId: string;
   worldbookPassiveTemplateId: string;
   worldbookPassiveCreateId: string;
+  narrativeCostEnabledId: string;
   themeId: string;
   summaryDetailId: string;
   summaryRoundsId: string;

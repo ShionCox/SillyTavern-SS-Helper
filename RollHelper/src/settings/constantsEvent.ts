@@ -36,12 +36,15 @@ export const SETTINGS_STATUS_CHAT_META_ID_Event = "st-roll-settings-Event-status
 export const SETTINGS_STATUS_COLS_ID_Event = "st-roll-settings-Event-status-cols";
 export const SETTINGS_STATUS_MEMORY_STATE_ID_Event = "st-roll-settings-Event-status-memory-state";
 export const SETTINGS_ALLOWED_DICE_SIDES_ID_Event = "st-roll-settings-Event-allowed-dice-sides";
+export const SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event = "st-roll-settings-Event-interactive-triggers-enabled";
 export const SETTINGS_BLIND_ROLL_ENABLED_ID_Event = "st-roll-settings-Event-blind-roll-enabled";
+export const SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event = "st-roll-settings-Event-default-blind-skills";
 export const SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event = "st-roll-settings-Event-passive-check-enabled";
 export const SETTINGS_PASSIVE_FORMULA_BASE_ID_Event = "st-roll-settings-Event-passive-formula-base";
 export const SETTINGS_PASSIVE_ALIASES_ID_Event = "st-roll-settings-Event-passive-aliases";
 export const SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event = "st-roll-settings-Event-worldbook-passive-template";
 export const SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event = "st-roll-settings-Event-worldbook-passive-create";
+export const SETTINGS_NARRATIVE_COST_ENABLED_ID_Event = "st-roll-settings-Event-narrative-cost-enabled";
 export const SETTINGS_THEME_ID_Event = "st-roll-settings-Event-theme";
 export const SETTINGS_SUMMARY_DETAIL_ID_Event = "st-roll-settings-Event-summary-detail";
 export const SETTINGS_SUMMARY_ROUNDS_ID_Event = "st-roll-settings-Event-summary-rounds";
@@ -176,12 +179,15 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_STATUS_COLS_ID_Event,
   SETTINGS_STATUS_MEMORY_STATE_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event,
   SETTINGS_THEME_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
@@ -267,12 +273,15 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event,
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
   SETTINGS_SCOPE_ID_Event,
@@ -329,12 +338,15 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_DYNAMIC_DC_REASON_ID_Event,
   SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event,
   SETTINGS_ALLOWED_DICE_SIDES_ID_Event,
+  SETTINGS_INTERACTIVE_TRIGGERS_ENABLED_ID_Event,
   SETTINGS_BLIND_ROLL_ENABLED_ID_Event,
+  SETTINGS_DEFAULT_BLIND_SKILLS_ID_Event,
   SETTINGS_PASSIVE_CHECK_ENABLED_ID_Event,
   SETTINGS_PASSIVE_FORMULA_BASE_ID_Event,
   SETTINGS_PASSIVE_ALIASES_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_TEMPLATE_ID_Event,
   SETTINGS_WORLDBOOK_PASSIVE_CREATE_ID_Event,
+  SETTINGS_NARRATIVE_COST_ENABLED_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
   SETTINGS_SCOPE_ID_Event,
@@ -422,7 +434,10 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   enableTimeLimit: true,
   minTimeLimitSeconds: 10,
   enableSkillSystem: true,
+  enableInteractiveTriggers: true,
+  interactiveTriggerMode: "ai_markup",
   enableBlindRoll: true,
+  defaultBlindSkillsText: "洞察\n潜行\n搜查\n历史\n调查",
   enablePassiveCheck: true,
   passiveFormulaBase: 10,
   passiveSkillAliasesText: JSON.stringify(
@@ -434,6 +449,7 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
     null,
     2
   ),
+  enableNarrativeCostEnforcement: true,
   worldbookPassiveMode: "read_write",
   blindUiWarnInConsole: true,
   blindRevealInSummary: false,
