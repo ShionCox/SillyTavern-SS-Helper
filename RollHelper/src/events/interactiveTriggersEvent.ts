@@ -4,17 +4,24 @@ import { logger } from "../../index";
 import type {
   DiceMetaEvent,
   DicePluginSettingsEvent,
+  EventRollRecordEvent,
+  RollVisibilityEvent,
   InteractiveTriggerEvent,
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import {
   buildInteractiveTriggerTooltipHtmlEvent,
   getMessageInteractiveTriggersEvent,
-  stripInteractiveTriggerMarkupFromTextEvent,
 } from "./interactiveTriggerMetadataEvent";
 
 const TRIGGER_STYLE_ID_Event = "st-rh-inline-trigger-style";
 const TRIGGER_SIGNATURE_ATTR_Event = "data-rh-trigger-signature";
+
+type ResolvedTriggerStateEvent = {
+  resolved: boolean;
+  statusLabel: string;
+  visibility: RollVisibilityEvent | "public";
+};
 
 function normalizeTextEvent(value: unknown): string {
   return String(value ?? "");
@@ -46,8 +53,108 @@ function parseDefaultBlindSkillsEvent(settings: DicePluginSettingsEvent): Set<st
   );
 }
 
-function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolved = false): string {
-  const tooltip = buildInteractiveTriggerTooltipHtmlEvent(payload);
+/**
+ * 功能：把交互触发的动作与技能整理成更自然的中文短语。
+ * @param trigger 当前交互触发。
+ * @returns 适合按钮与状态文案使用的检定名称。
+ */
+function formatTriggerCheckNameEvent(trigger: InteractiveTriggerEvent): string {
+  const action = normalizeInlineTextEvent(trigger.action || trigger.skill || "检定");
+  const skill = normalizeInlineTextEvent(trigger.skill || trigger.action || "检定");
+  if (!action && !skill) return "检定";
+  if (!action) return skill;
+  if (!skill) return action;
+  if (action === skill) return skill;
+  if (action === "回忆") return `回忆（${skill}）`;
+  return skill;
+}
+
+/**
+ * 功能：根据已结算记录生成交互触发的状态标签。
+ * @param record 已命中的检定记录。
+ * @returns 适合展示给玩家的状态文本。
+ */
+function buildResolvedTriggerStatusLabelEvent(record: EventRollRecordEvent): string {
+  const visibility = record.visibility || "public";
+  if (visibility === "blind") {
+    if (record.success === true) return "该线索已暗骰通过";
+    if (record.success === false) return "该线索已暗骰失败";
+    return "该线索已完成暗骰";
+  }
+  if (record.success === true) return "该线索已检定通过";
+  if (record.success === false) return "该线索已检定失败";
+  return "该线索已完成检定";
+}
+
+/**
+ * 功能：查找交互触发对应的最新检定记录。
+ * @param trigger 当前交互触发。
+ * @param meta 当前运行时骰子元数据。
+ * @returns 命中的事件与记录；未命中时返回 `null`。
+ */
+function findResolvedTriggerStateEvent(
+  trigger: InteractiveTriggerEvent,
+  meta: DiceMetaEvent | null | undefined
+): ResolvedTriggerStateEvent {
+  const round = meta?.pendingRound;
+  if (!round) {
+    return {
+      resolved: false,
+      statusLabel: "",
+      visibility: "public",
+    };
+  }
+
+  for (let index = round.rolls.length - 1; index >= 0; index -= 1) {
+    const record = round.rolls[index];
+    const event = round.events.find((item) => item.id === record?.eventId);
+    if (!event) continue;
+    const matched = String(event.sourceAssistantMsgId || "").trim() === String(trigger.sourceMessageId || "").trim()
+      && String(event.targetName || "").trim() === String(trigger.sourceId || trigger.label || "").trim()
+      && String(event.skill || "").trim() === String(trigger.skill || "").trim();
+    if (!matched) continue;
+    return {
+      resolved: true,
+      statusLabel: buildResolvedTriggerStatusLabelEvent(record),
+      visibility: record.visibility || "public",
+    };
+  }
+
+  return {
+    resolved: false,
+    statusLabel: "",
+    visibility: "public",
+  };
+}
+
+/**
+ * 功能：构建交互触发节点的 tooltip 文本。
+ * @param payload 当前交互触发。
+ * @param resolvedState 当前触发的已结算状态。
+ * @returns 可直接挂载到节点上的 HTML 提示内容。
+ */
+function buildTriggerTooltipHtmlEvent(
+  payload: InteractiveTriggerEvent,
+  resolvedState: ResolvedTriggerStateEvent
+): string {
+  const baseTooltip = buildInteractiveTriggerTooltipHtmlEvent(payload);
+  if (!resolvedState.resolved) {
+    return baseTooltip;
+  }
+  const resolvedDesc = resolvedState.visibility === "blind"
+    ? "这条线索已经按暗骰方式结算，点数不会公开。"
+    : "这条线索已经完成检定，可点击查看状态。";
+  return `${baseTooltip}<br><span class="st-rh-trigger-tip-state">${escapeHtmlEvent(resolvedState.statusLabel)}｜${resolvedDesc}</span>`;
+}
+
+/**
+ * 功能：构建交互触发节点的 HTML 标记。
+ * @param payload 当前交互触发。
+ * @param resolvedState 当前触发的已结算状态。
+ * @returns 交互触发节点 HTML。
+ */
+function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolvedState: ResolvedTriggerStateEvent): string {
+  const tooltip = buildTriggerTooltipHtmlEvent(payload, resolvedState);
   const hoverEnabled = typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(hover: hover) and (pointer: fine)").matches
     : false;
@@ -63,11 +170,13 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolved = fa
     Number(payload.dcHint)
   )
     ? String(Math.floor(Number(payload.dcHint)))
-    : ""}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}" data-occurrence-index="${Number.isFinite(
+    : ""}" data-difficulty="${escapeHtmlEvent(payload.difficulty || "normal")}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}" data-occurrence-index="${Number.isFinite(
     Number(payload.occurrenceIndex)
   )
     ? String(Math.max(0, Math.floor(Number(payload.occurrenceIndex))))
-    : "0"}" data-resolved="${resolved ? "1" : "0"}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
+    : "0"}" data-resolved="${resolvedState.resolved ? "1" : "0"}" data-resolved-label="${escapeHtmlEvent(
+    resolvedState.statusLabel
+  )}" data-resolved-visibility="${escapeHtmlEvent(resolvedState.visibility)}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
 }
 
 function resolveMessageContainerIdEvent(node: HTMLElement): string {
@@ -115,42 +224,6 @@ function unwrapExistingTriggerMarkupEvent(node: HTMLElement): void {
   node.querySelectorAll<HTMLElement>(".st-rh-inline-trigger").forEach((triggerNode) => {
     triggerNode.replaceWith(document.createTextNode(triggerNode.textContent ?? ""));
   });
-}
-
-function sanitizeLegacyTriggerTextNodesEvent(node: HTMLElement): boolean {
-  const stripLooseTriggerTokensEvent = (input: string): string => String(input ?? "")
-    .replace(/\[{1,2}rh-trigger[^\]]*\]{1,2}/gi, "")
-    .replace(/\[{1,2}\/rh-trigger\]{1,2}/gi, "");
-
-  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let current: Node | null = walker.nextNode();
-  while (current) {
-    if (current instanceof Text && current.parentElement && !current.parentElement.closest(".st-rh-inline-trigger")) {
-      textNodes.push(current);
-    }
-    current = walker.nextNode();
-  }
-
-  if (textNodes.length <= 0) return false;
-  const rawJoined = textNodes.map((textNode) => textNode.nodeValue ?? "").join("");
-  if (!rawJoined.includes("rh-trigger")) return false;
-
-  const cleanedJoined = stripLooseTriggerTokensEvent(stripInteractiveTriggerMarkupFromTextEvent(rawJoined));
-  if (cleanedJoined === rawJoined) return false;
-
-  let offset = 0;
-  for (let index = 0; index < textNodes.length; index += 1) {
-    const textNode = textNodes[index];
-    const originalLength = (textNode.nodeValue ?? "").length;
-    if (index === textNodes.length - 1) {
-      textNode.nodeValue = cleanedJoined.slice(offset);
-      continue;
-    }
-    textNode.nodeValue = cleanedJoined.slice(offset, offset + originalLength);
-    offset += originalLength;
-  }
-  return true;
 }
 
 function collectTextMatchesEvent(text: string, needle: string): number[] {
@@ -215,13 +288,30 @@ function buildRenderableTriggerRangesEvent(
   return ranges;
 }
 
-function createTriggerNodeEvent(trigger: InteractiveTriggerEvent, resolved = false): HTMLElement {
+/**
+ * 功能：把单个交互触发配置转换成 DOM 节点。
+ * @param trigger 当前交互触发。
+ * @param resolvedState 当前触发的已结算状态。
+ * @returns 已构建完成的触发节点。
+ */
+function createTriggerNodeEvent(trigger: InteractiveTriggerEvent, resolvedState: ResolvedTriggerStateEvent): HTMLElement {
   const template = document.createElement("template");
-  template.innerHTML = buildTriggerMarkupEvent(trigger, resolved);
+  template.innerHTML = buildTriggerMarkupEvent(trigger, resolvedState);
   return template.content.firstElementChild as HTMLElement;
 }
 
-function buildTriggerSignatureEvent(text: string, triggers: InteractiveTriggerEvent[]): string {
+/**
+ * 功能：生成触发节点的签名，用于判断是否需要重绘。
+ * @param text 当前消息正文。
+ * @param triggers 当前消息的交互触发列表。
+ * @param meta 当前运行时骰子元数据。
+ * @returns 描述当前渲染状态的稳定签名文本。
+ */
+function buildTriggerSignatureEvent(
+  text: string,
+  triggers: InteractiveTriggerEvent[],
+  meta: DiceMetaEvent | null | undefined
+): string {
   return JSON.stringify({
     text,
     triggers: triggers.map((trigger) => ({
@@ -233,22 +323,8 @@ function buildTriggerSignatureEvent(text: string, triggers: InteractiveTriggerEv
       sourceId: normalizeInlineTextEvent(trigger.sourceId),
       sourceMessageId: normalizeInlineTextEvent(trigger.sourceMessageId),
       occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
+      resolvedState: findResolvedTriggerStateEvent(trigger, meta),
     })),
-  });
-}
-
-function isTriggerResolvedEvent(
-  trigger: InteractiveTriggerEvent,
-  meta: DiceMetaEvent | null | undefined
-): boolean {
-  const round = meta?.pendingRound;
-  if (!round) return false;
-  return round.rolls.some((record) => {
-    const event = round.events.find((item) => item.id === record?.eventId);
-    if (!event) return false;
-    return String(event.sourceAssistantMsgId || "").trim() === String(trigger.sourceMessageId || "").trim()
-      && String(event.targetName || "").trim() === String(trigger.sourceId || trigger.label || "").trim()
-      && String(event.skill || "").trim() === String(trigger.skill || "").trim();
   });
 }
 
@@ -259,11 +335,8 @@ function enhanceMessageNodeEvent(
 ): boolean {
   const triggers = getMessageInteractiveTriggersEvent(message).filter((trigger) => normalizeInlineTextEvent(trigger.label));
   let changed = false;
-  if (normalizeTextEvent(node.textContent).includes("rh-trigger")) {
-    changed = sanitizeLegacyTriggerTextNodesEvent(node) || changed;
-  }
   const currentText = normalizeTextEvent(node.textContent);
-  const nextSignature = buildTriggerSignatureEvent(currentText, triggers);
+  const nextSignature = buildTriggerSignatureEvent(currentText, triggers, meta);
   const currentSignature = node.getAttribute(TRIGGER_SIGNATURE_ATTR_Event) || "";
   if (currentSignature === nextSignature && node.querySelectorAll(".st-rh-inline-trigger").length === triggers.length) {
     return changed;
@@ -290,7 +363,7 @@ function enhanceMessageNodeEvent(
       if (localStart > cursor) {
         fragment.appendChild(document.createTextNode(raw.slice(cursor, localStart)));
       }
-      fragment.appendChild(createTriggerNodeEvent(range.trigger, isTriggerResolvedEvent(range.trigger, meta)));
+      fragment.appendChild(createTriggerNodeEvent(range.trigger, findResolvedTriggerStateEvent(range.trigger, meta)));
       cursor = localEnd;
     }
     if (cursor < raw.length) {
@@ -300,7 +373,7 @@ function enhanceMessageNodeEvent(
     changed = true;
   }
 
-  node.setAttribute(TRIGGER_SIGNATURE_ATTR_Event, buildTriggerSignatureEvent(normalizeTextEvent(node.textContent), triggers));
+  node.setAttribute(TRIGGER_SIGNATURE_ATTR_Event, buildTriggerSignatureEvent(normalizeTextEvent(node.textContent), triggers, meta));
   return changed;
 }
 
@@ -353,8 +426,6 @@ export interface ExecuteInteractiveTriggerDepsEvent {
   getLiveContextEvent?: () => { chat?: TavernMessageEvent[] | unknown } | null;
   persistChatSafeEvent?: () => void;
   refreshInteractiveTriggersInDomEvent?: () => void;
-  buildBlindResultMessage: (title: string) => string;
-  buildResultMessage: (result: any) => string;
   appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error" | "card") => void;
   performInteractiveTriggerRollEvent: (trigger: InteractiveTriggerEvent) => Promise<{
     record: {
@@ -391,14 +462,46 @@ function buildTriggerMenuItemsEvent(
   trigger: InteractiveTriggerEvent,
   deps: ExecuteInteractiveTriggerDepsEvent
 ) {
-  const label = normalizeInlineTextEvent(trigger.action || trigger.skill || "检定");
-  const suffix = trigger.blind ? "（暗骰）" : "";
+  const checkName = formatTriggerCheckNameEvent(trigger);
   return [
     {
       id: `${trigger.triggerId}:primary`,
-      label: `${label}${suffix}`,
+      label: trigger.blind ? `进行${checkName}暗骰` : `进行${checkName}检定`,
       iconClassName: trigger.blind ? "fa-solid fa-eye-slash" : "fa-solid fa-dice-d20",
       onSelect: () => executeInteractiveTriggerEvent(trigger, deps),
+    },
+  ];
+}
+
+/**
+ * 功能：生成已结算交互触发的只读菜单项。
+ * @param trigger 当前交互触发。
+ * @param triggerNode 当前触发节点。
+ * @returns 用于上下文菜单的只读条目列表。
+ */
+function buildResolvedTriggerMenuItemsEvent(
+  trigger: InteractiveTriggerEvent,
+  triggerNode: HTMLElement
+) {
+  const statusLabel = normalizeInlineTextEvent(triggerNode.dataset.resolvedLabel || "已检定完成");
+  const visibility = normalizeInlineTextEvent(triggerNode.dataset.resolvedVisibility || (trigger.blind ? "blind" : "public"));
+  const detailLabel = visibility === "blind"
+    ? "这条线索已按暗骰处理，点数不会公开。"
+    : "这条线索已经结算，可以直接参考这个结果。";
+  return [
+    {
+      id: `${trigger.triggerId}:resolved-status`,
+      label: statusLabel,
+      iconClassName: visibility === "blind" ? "fa-solid fa-eye-slash" : "fa-solid fa-circle-check",
+      disabled: true,
+      onSelect: () => undefined,
+    },
+    {
+      id: `${trigger.triggerId}:resolved-detail`,
+      label: detailLabel,
+      iconClassName: "fa-solid fa-circle-info",
+      disabled: true,
+      onSelect: () => undefined,
     },
   ];
 }
@@ -417,6 +520,7 @@ function buildSelectionFallbackTriggersEvent(
     sourceId: `selection:${label}`,
     textRange: null,
     dcHint: null,
+    difficulty: "normal" as const,
     loreType: "",
     note: "来自玩家划词触发",
     diceExpr: "1d20",
@@ -444,6 +548,27 @@ function showTriggerMenuAtEvent(
   });
 }
 
+/**
+ * 功能：在指定位置展示已结算交互触发的状态菜单。
+ * @param x 菜单横坐标。
+ * @param y 菜单纵坐标。
+ * @param trigger 当前交互触发。
+ * @param triggerNode 当前触发节点。
+ * @returns 无返回值。
+ */
+function showResolvedTriggerMenuAtEvent(
+  x: number,
+  y: number,
+  trigger: InteractiveTriggerEvent,
+  triggerNode: HTMLElement
+): void {
+  showSharedContextMenu({
+    x,
+    y,
+    items: buildResolvedTriggerMenuItemsEvent(trigger, triggerNode),
+  });
+}
+
 function showSelectionMenuEvent(
   selectionText: string,
   x: number,
@@ -456,7 +581,9 @@ function showSelectionMenuEvent(
     y,
     items: triggers.map((trigger) => ({
       id: trigger.triggerId,
-      label: `${normalizeInlineTextEvent(trigger.action)}${trigger.blind ? "（暗骰）" : ""}`,
+      label: trigger.blind
+        ? `进行${formatTriggerCheckNameEvent(trigger)}暗骰`
+        : `进行${formatTriggerCheckNameEvent(trigger)}检定`,
       iconClassName: trigger.blind ? "fa-solid fa-eye-slash" : "fa-solid fa-dice-d20",
       onSelect: () => executeInteractiveTriggerEvent(trigger, deps),
     })),
@@ -500,6 +627,13 @@ function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTrigger
       : 0,
     textRange: null,
     dcHint: Number.isFinite(Number(triggerNode.dataset.dcHint)) ? Math.floor(Number(triggerNode.dataset.dcHint)) : null,
+    difficulty:
+      triggerNode.dataset.difficulty === "easy"
+      || triggerNode.dataset.difficulty === "normal"
+      || triggerNode.dataset.difficulty === "hard"
+      || triggerNode.dataset.difficulty === "extreme"
+        ? triggerNode.dataset.difficulty
+        : "normal",
     loreType: normalizeInlineTextEvent(triggerNode.dataset.loreType),
     note: normalizeInlineTextEvent(triggerNode.dataset.note),
     diceExpr: normalizeInlineTextEvent(triggerNode.dataset.diceExpr) || "1d20",
@@ -560,13 +694,16 @@ export function bindInteractiveTriggerDomEventsEvent(
       const target = event.target as HTMLElement | null;
       const triggerNode = target?.closest(".st-rh-inline-trigger") as HTMLElement | null;
       if (!triggerNode) return;
-      if (triggerNode.dataset.resolved === "1") return;
       event.preventDefault();
       event.stopPropagation();
       const trigger = buildTriggerFromNodeEvent(triggerNode);
       document.querySelectorAll(".st-rh-inline-trigger.is-active").forEach((node) => node.classList.remove("is-active"));
       triggerNode.classList.add("is-active");
       const rect = triggerNode.getBoundingClientRect();
+      if (triggerNode.dataset.resolved === "1") {
+        showResolvedTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, triggerNode);
+        return;
+      }
       showTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, deps);
     },
     true
@@ -580,9 +717,12 @@ export function bindInteractiveTriggerDomEventsEvent(
       const selection = window.getSelection();
       const selectedTriggerNode = resolveSelectionTriggerNodeEvent(selection);
       if (selectedTriggerNode) {
-        if (selectedTriggerNode.dataset.resolved === "1") return;
         const trigger = buildTriggerFromNodeEvent(selectedTriggerNode);
         const rect = selectedTriggerNode.getBoundingClientRect();
+        if (selectedTriggerNode.dataset.resolved === "1") {
+          showResolvedTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, selectedTriggerNode);
+          return;
+        }
         showTriggerMenuAtEvent(rect.left + rect.width / 2, rect.bottom + 8, trigger, deps);
         return;
       }

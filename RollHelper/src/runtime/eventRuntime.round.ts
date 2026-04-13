@@ -16,6 +16,8 @@ import {
   DICE_ACTIVE_STATUSES_BLOCK_END_Event,
   DICE_PASSIVE_DISCOVERY_BLOCK_START_Event,
   DICE_PASSIVE_DISCOVERY_BLOCK_END_Event,
+  DICE_BLIND_SUMMARY_BLOCK_END_Event,
+  DICE_BLIND_SUMMARY_BLOCK_START_Event,
   DICE_SUMMARY_BLOCK_END_Event,
   DICE_SUMMARY_BLOCK_START_Event,
   ISO_8601_DURATION_REGEX_Event,
@@ -69,6 +71,7 @@ import {
 } from "../core/utilsEvent";
 import { parseDiceExpression as parseDiceExpressionCoreEvent } from "../core/diceEngineEvent";
 import type {
+  BuiltSummaryBlocksEvent,
   DiceEventSpecEvent,
   DicePluginSettingsEvent,
   EventRollRecordEvent,
@@ -231,7 +234,7 @@ export function buildSummaryBlockFromHistoryEvent(
   lastNRounds: number,
   includeOutcomeInSummary: boolean,
   settings: DicePluginSettingsEvent
-): string {
+): BuiltSummaryBlocksEvent {
   return buildSummaryBlockFromHistoryModuleEvent(history, detailMode, lastNRounds, includeOutcomeInSummary, settings, {
     SUMMARY_HISTORY_ROUNDS_MAX_Event,
     SUMMARY_HISTORY_ROUNDS_MIN_Event,
@@ -239,6 +242,8 @@ export function buildSummaryBlockFromHistoryEvent(
     SUMMARY_MAX_TOTAL_EVENT_LINES_Event,
     DICE_SUMMARY_BLOCK_START_Event,
     DICE_SUMMARY_BLOCK_END_Event,
+    DICE_BLIND_SUMMARY_BLOCK_START_Event,
+    DICE_BLIND_SUMMARY_BLOCK_END_Event,
   });
 }
 
@@ -253,6 +258,8 @@ export function handlePromptReadyEvent(payload: any, sourceEvent = "unknown"): v
       getSettingsEvent: getSettingsStoreEvent,
       DICE_RULE_BLOCK_START_Event,
       DICE_RULE_BLOCK_END_Event,
+      DICE_BLIND_SUMMARY_BLOCK_START_Event,
+      DICE_BLIND_SUMMARY_BLOCK_END_Event,
       DICE_SUMMARY_BLOCK_START_Event,
       DICE_SUMMARY_BLOCK_END_Event,
       DICE_RESULT_GUIDANCE_BLOCK_START_Event,

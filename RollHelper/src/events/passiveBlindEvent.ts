@@ -402,7 +402,7 @@ export function buildPassiveWorldbookTemplateEvent(): string {
     "2. `type` 目前支持 perception / investigation / insight。",
     "3. `dc` 是被动检定门槛，`id` 用于去重，`priority` 越高越优先注入，`scope` 可选 once 或 persistent。",
     "4. RH_PASSIVE 后面的正文就是命中后提供给 AI 的隐藏信息；未命中时这段信息不会注入。",
-    "5. 如果命中后的信息里有值得继续点击或调查的词，AI 下一轮可以把它写成 [[rh-trigger ...]]词语[[/rh-trigger]] 交互片段。",
+    '5. 如果命中后的信息里有值得继续点击或调查的词，AI 下一轮可以把它写成 <rh-trigger action="调查" skill="调查">词语</rh-trigger> 交互片段。',
   ].join("\n");
 }
 

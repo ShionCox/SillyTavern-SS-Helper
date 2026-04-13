@@ -1,4 +1,5 @@
 import { parseDiceExpression } from "../core/diceEngineEvent";
+import { simpleHashEvent } from "../core/utilsEvent";
 import { AI_SUPPORTED_DICE_SIDES_Event, DEFAULT_SETTINGS_Event } from "../settings/constantsEvent";
 import type {
   AdvantageStateEvent,
@@ -15,6 +16,37 @@ import { logger } from "../../index";
 
 export type RemovalRangeEvent = { start: number; end: number };
 
+const RECENT_PARSE_FAILURE_LOG_LIMIT_Event = 32;
+const recentParseFailureFingerprintsEvent: string[] = [];
+const recentParseFailureFingerprintSetEvent = new Set<string>();
+
+export function resetRecentParseFailureLogsEvent(): void {
+  recentParseFailureFingerprintsEvent.length = 0;
+  recentParseFailureFingerprintSetEvent.clear();
+}
+
+/**
+ * 功能：对解析失败的原始文本做去重日志，避免同一份坏数据在重试或重生成时无限刷屏。
+ * @param raw 解析失败的原始文本。
+ * @returns 是否需要输出详细调试日志。
+ */
+function shouldLogParseFailureRawEvent(raw: string): boolean {
+  const normalizedRaw = String(raw ?? "").trim();
+  if (!normalizedRaw) return false;
+  const fingerprint = `${simpleHashEvent(normalizedRaw)}:${normalizedRaw.length}`;
+  if (recentParseFailureFingerprintSetEvent.has(fingerprint)) {
+    return false;
+  }
+  recentParseFailureFingerprintsEvent.push(fingerprint);
+  recentParseFailureFingerprintSetEvent.add(fingerprint);
+  while (recentParseFailureFingerprintsEvent.length > RECENT_PARSE_FAILURE_LOG_LIMIT_Event) {
+    const expired = recentParseFailureFingerprintsEvent.shift();
+    if (!expired) continue;
+    recentParseFailureFingerprintSetEvent.delete(expired);
+  }
+  return true;
+}
+
 export function normalizeCompareOperatorEvent(raw: any): CompareOperatorEvent | null {
   if (raw == null || raw === "") return ">=";
   if (raw === ">=" || raw === ">" || raw === "<=" || raw === "<") return raw;
@@ -26,7 +58,7 @@ export function normalizeCompareOperatorEvent(raw: any): CompareOperatorEvent | 
  * @param raw 原始难度文本
  * @returns 统一后的难度等级；无法识别时返回空值
  */
-function normalizeDifficultyLevelEvent(raw: any): EventDifficultyLevelEvent | undefined {
+export function normalizeDifficultyLevelEvent(raw: any): EventDifficultyLevelEvent | undefined {
   const value = normalizeStringFieldEvent(raw).toLowerCase();
   if (!value) return undefined;
   if (value === "easy" || value === "simple" || value === "easier" || value === "简单" || value === "容易") {
@@ -263,7 +295,7 @@ function computeDcFromDifficultyEvent(
  * @param advantageState 优劣骰状态
  * @returns 规范化后的 DC 解析结果；缺失时返回空值
  */
-function resolveEventThresholdEvent(
+export function resolveEventThresholdEvent(
   eventId: string,
   checkDice: string,
   compare: CompareOperatorEvent,
@@ -932,6 +964,65 @@ export function decodeHtmlEntitiesEvent(input: string): string {
   }
 }
 
+function isRangeCoveredEvent(index: number, ranges: RemovalRangeEvent[]): boolean {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function countBareDiceEventMarkersEvent(input: string): number {
+  const text = String(input ?? "");
+  const markers = [
+    /"type"\s*:\s*"dice_events"/i,
+    /"version"\s*:\s*"1"/i,
+    /"events"\s*:/i,
+    /"id"\s*:/i,
+    /"title"\s*:/i,
+    /"checkDice"\s*:/i,
+    /"difficulty"\s*:/i,
+    /"desc"\s*:/i,
+  ];
+  return markers.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
+}
+
+/**
+ * 功能：从正文尾部识别裸露的骰子事件控制块，并给出可删除区间。
+ * 参数：
+ *   text：完整消息文本。
+ *   occupiedRanges：已被 fenced 或 HTML 代码块占用的区间。
+ * 返回：
+ *   { start: number; end: number; raw: string } | null：命中时返回裸控制块区间与文本。
+ */
+function findTrailingBareDiceEventRangeEvent(
+  text: string,
+  occupiedRanges: RemovalRangeEvent[]
+): { start: number; end: number; raw: string } | null {
+  const anchorRegex = /"type"\s*:\s*"dice_events"/gi;
+  const matches = Array.from(text.matchAll(anchorRegex));
+  if (matches.length <= 0) return null;
+
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const anchor = matches[index];
+    const anchorIndex = Number(anchor.index);
+    if (!Number.isFinite(anchorIndex) || anchorIndex < 0) continue;
+    if (isRangeCoveredEvent(anchorIndex, occupiedRanges)) continue;
+
+    const start = text.lastIndexOf("{", anchorIndex);
+    if (start < 0) continue;
+    if (isRangeCoveredEvent(start, occupiedRanges)) continue;
+
+    const raw = decodeHtmlEntitiesEvent(text.slice(start)).trim();
+    if (!raw) continue;
+    if (!raw.startsWith("{")) continue;
+    if (countBareDiceEventMarkersEvent(raw) < 3) continue;
+    return {
+      start,
+      end: text.length,
+      raw,
+    };
+  }
+
+  return null;
+}
+
 export function parseEventEnvelopesEvent(
   text: string,
   deps: NormalizeEnvelopeDepsEvent
@@ -957,7 +1048,9 @@ export function parseEventEnvelopesEvent(
     } catch (error) {
       if (hasDiceEventType) {
         logger.warn("事件 JSON 解析失败，已隐藏代码块", error);
-        logger.debug("解析失败的原始文本:", raw);
+        if (shouldLogParseFailureRawEvent(raw)) {
+          logger.debug("解析失败的原始文本:", raw);
+        }
       }
       continue;
     }
@@ -995,6 +1088,28 @@ export function parseEventEnvelopesEvent(
     if (!normalized) continue;
     events.push(...normalized.events);
     if (normalized.shouldEndRound) shouldEndRound = true;
+  }
+
+  const bareTail = findTrailingBareDiceEventRangeEvent(text, ranges);
+  if (bareTail) {
+    let parsed: any = null;
+    try {
+      parsed = repairAndParseEventJsonEvent(bareTail.raw);
+    } catch (error) {
+      logger.warn("正文尾部裸事件 JSON 修复失败，将仅执行清理。", error);
+    }
+
+    ranges.push({ start: bareTail.start, end: bareTail.end });
+
+    if (parsed) {
+      const normalized = normalizeEnvelopeEvent(parsed, deps);
+      if (normalized) {
+        events.push(...normalized.events);
+        if (normalized.shouldEndRound) shouldEndRound = true;
+      }
+    } else {
+      logger.warn("正文尾部检测到损坏的裸 dice_events 控制块，已按清理区间移除。");
+    }
   }
 
   return { events, ranges, shouldEndRound };

@@ -1,6 +1,7 @@
 import { formatIsoDurationNaturalLanguageEvent, formatModifier } from "../core/utilsEvent";
 import { stripStatusTagsFromTextEvent } from "./statusEvent";
 import type {
+  BuiltSummaryBlocksEvent,
   CompareOperatorEvent,
   DiceEventSpecEvent,
   DiceMetaEvent,
@@ -184,6 +185,15 @@ function toSummarySourceTextEvent(source: EventRollSourceEvent | null | undefine
   return "未知";
 }
 
+/**
+ * 功能：判断摘要条目是否属于暗骰。
+ * @param item 单条摘要事件。
+ * @returns 若该条目属于暗骰则返回 `true`。
+ */
+function isBlindSummaryItemEvent(item: RoundSummaryEventItemEvent): boolean {
+  return item.visibility === "blind" || item.resultSource === "blind_manual_roll";
+}
+
 function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string {
   if (item.status === "pending") {
     return "待判定（尚未掷骰）";
@@ -213,6 +223,28 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
   }
 
   return `已完成（总值 ${totalText}）`;
+}
+
+/**
+ * 功能：把检定分级转换为暗骰摘要中的结果句子。
+ * @param item 单条摘要事件。
+ * @returns 仅暴露等级、不暴露点数的暗骰结果文本。
+ */
+function toBlindSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string {
+  if (item.status === "pending") {
+    return "暗骰待结算";
+  }
+  if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
+    return "暗骰失败";
+  }
+  if (item.resultGrade === "critical_success") return "暗骰大成功";
+  if (item.resultGrade === "critical_failure") return "暗骰大失败";
+  if (item.resultGrade === "partial_success") return "暗骰勉强成功";
+  if (item.resultGrade === "success") return "暗骰成功";
+  if (item.resultGrade === "failure") return "暗骰失败";
+  if (item.success === true) return "暗骰成功";
+  if (item.success === false) return "暗骰失败";
+  return "暗骰已结算";
 }
 
 function toSummaryOutcomeSentenceEvent(
@@ -297,6 +329,56 @@ function buildSummaryEventNaturalLineByModeEvent(
     : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}`;
 }
 
+/**
+ * 功能：按摘要模式生成暗骰条目的自然语言行。
+ * @param item 单条摘要事件。
+ * @param detailMode 摘要详细度。
+ * @returns 面向 AI 的暗骰摘要单行文本。
+ */
+function buildBlindSummaryEventNaturalLineByModeEvent(
+  item: RoundSummaryEventItemEvent,
+  detailMode: SummaryDetailModeEvent
+): string {
+  const title = truncateSummaryTextEvent(item.title, 48);
+  const desc = truncateSummaryTextEvent(item.desc, getSummaryDescMaxLenByModeEvent(detailMode));
+  const target = truncateSummaryTextEvent(item.targetLabel || "未指定", 20);
+  const resultSentence = toBlindSummaryResultSentenceEvent(item);
+  const sourceText = toSummarySourceTextEvent(item.resultSource);
+
+  if (detailMode === "minimal") {
+    return `- 暗骰：${title}｜对象：${target}｜结果等级：${resultSentence}｜线索：${desc}`;
+  }
+
+  const skill = truncateSummaryTextEvent(item.skill, 20);
+  const checkDice = truncateSummaryTextEvent(item.checkDice, 24);
+  const difficultyText = item.difficulty ? `｜难度=${formatDifficultyLabelForSummaryEvent(item.difficulty)}` : "";
+  const gradeText = item.resultGrade ? `｜分级=${formatGradeLabelForBlindSummaryEvent(item.resultGrade)}` : "";
+
+  if (detailMode === "balanced") {
+    return `- 暗骰：${title}｜对象：${target}｜检定：${skill} ${checkDice}${difficultyText}｜结果等级：${resultSentence}${gradeText}｜线索：${desc}`;
+  }
+
+  const timeLimit = truncateSummaryTextEvent(
+    formatIsoDurationNaturalLanguageEvent(item.timeLimit || "none"),
+    26
+  );
+  return `- 暗骰：${title}｜对象：${target}｜检定：${skill} ${checkDice}${difficultyText}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果等级：${resultSentence}${gradeText}｜线索：${desc}`;
+}
+
+/**
+ * 功能：把结果等级转换为暗骰摘要中的中文分级标签。
+ * @param grade 检定分级。
+ * @returns 中文分级文本。
+ */
+function formatGradeLabelForBlindSummaryEvent(grade: RoundSummaryEventItemEvent["resultGrade"]): string {
+  if (grade === "critical_success") return "大成功";
+  if (grade === "partial_success") return "勉强成功";
+  if (grade === "success") return "成功";
+  if (grade === "failure") return "失败";
+  if (grade === "critical_failure") return "大失败";
+  return "未知";
+}
+
 export interface BuildSummaryBlockFromHistoryDepsEvent {
   SUMMARY_HISTORY_ROUNDS_MAX_Event: number;
   SUMMARY_HISTORY_ROUNDS_MIN_Event: number;
@@ -304,6 +386,8 @@ export interface BuildSummaryBlockFromHistoryDepsEvent {
   SUMMARY_MAX_TOTAL_EVENT_LINES_Event: number;
   DICE_SUMMARY_BLOCK_START_Event: string;
   DICE_SUMMARY_BLOCK_END_Event: string;
+  DICE_BLIND_SUMMARY_BLOCK_START_Event: string;
+  DICE_BLIND_SUMMARY_BLOCK_END_Event: string;
 }
 
 export function buildSummaryBlockFromHistoryEvent(
@@ -313,53 +397,118 @@ export function buildSummaryBlockFromHistoryEvent(
   includeOutcomeInSummary: boolean,
   settings: DicePluginSettingsEvent,
   deps: BuildSummaryBlockFromHistoryDepsEvent
-): string {
-  if (!Array.isArray(history) || history.length === 0) return "";
+): BuiltSummaryBlocksEvent {
+  if (!Array.isArray(history) || history.length === 0) {
+    return {
+      publicSummaryText: "",
+      blindSummaryText: "",
+    };
+  }
   const roundsWindow = Math.min(
     deps.SUMMARY_HISTORY_ROUNDS_MAX_Event,
     Math.max(deps.SUMMARY_HISTORY_ROUNDS_MIN_Event, Math.floor(Number(lastNRounds) || 1))
   );
   const selected = history.slice(-roundsWindow);
-  if (selected.length === 0) return "";
+  if (selected.length === 0) {
+    return {
+      publicSummaryText: "",
+      blindSummaryText: "",
+    };
+  }
 
-  const lines: string[] = [];
-  lines.push(deps.DICE_SUMMARY_BLOCK_START_Event);
-  lines.push(
+  const publicLines: string[] = [];
+  const blindLines: string[] = [];
+  publicLines.push(deps.DICE_SUMMARY_BLOCK_START_Event);
+  publicLines.push(
     `v=5 fmt=nl detail=${detailMode} window_rounds=${roundsWindow} included_rounds=${selected.length} include_outcome=${includeOutcomeInSummary ? "1" : "0"}`
   );
+  blindLines.push(deps.DICE_BLIND_SUMMARY_BLOCK_START_Event);
+  blindLines.push(
+    `v=1 fmt=nl detail=${detailMode} window_rounds=${roundsWindow} included_rounds=${selected.length}`
+  );
+  blindLines.push("说明：本区块仅提供暗骰的结果等级与线索背景，不公开点数、修正、总值或具体隐藏后果。");
 
-  let emittedEventLines = 0;
-  let truncatedByTotalLimit = false;
+  let emittedPublicEventLines = 0;
+  let emittedBlindEventLines = 0;
+  let publicTruncatedByTotalLimit = false;
+  let blindTruncatedByTotalLimit = false;
+  let hasPublicContent = false;
+  let hasBlindContent = false;
   for (let i = 0; i < selected.length; i++) {
     const snapshot = selected[i];
-    const unresolved = Math.max(0, snapshot.eventsCount - snapshot.rolledCount);
-    lines.push(
-      `【第 ${i + 1} 轮 / roundId=${snapshot.roundId} / 关闭时间=${new Date(
-        snapshot.closedAt
-      ).toISOString()}】`
-    );
-    lines.push(`本轮事件数=${snapshot.eventsCount}，已结算=${snapshot.rolledCount}，未结算=${unresolved}`);
+    const publicItems = snapshot.events.filter((item) => !isBlindSummaryItemEvent(item));
+    const blindItems = snapshot.events.filter((item) => isBlindSummaryItemEvent(item));
+    const publicRolledCount = publicItems.filter((item) => item.status !== "pending").length;
+    const blindRolledCount = blindItems.filter((item) => item.status !== "pending").length;
+    const publicUnresolved = Math.max(0, publicItems.length - publicRolledCount);
+    const blindUnresolved = Math.max(0, blindItems.length - blindRolledCount);
 
-    const limitedPerRound = snapshot.events.slice(0, deps.SUMMARY_MAX_EVENTS_Event);
-    for (const item of limitedPerRound) {
-      if (emittedEventLines >= deps.SUMMARY_MAX_TOTAL_EVENT_LINES_Event) {
-        truncatedByTotalLimit = true;
+    if (publicItems.length > 0) {
+      hasPublicContent = true;
+      publicLines.push(
+        `【第 ${i + 1} 轮 / roundId=${snapshot.roundId} / 关闭时间=${new Date(
+          snapshot.closedAt
+        ).toISOString()}】`
+      );
+      publicLines.push(`本轮事件数=${publicItems.length}，已结算=${publicRolledCount}，未结算=${publicUnresolved}`);
+    }
+
+    if (blindItems.length > 0) {
+      hasBlindContent = true;
+      blindLines.push(
+        `【第 ${i + 1} 轮 / roundId=${snapshot.roundId} / 关闭时间=${new Date(
+          snapshot.closedAt
+        ).toISOString()}】`
+      );
+      blindLines.push(`本轮暗骰数=${blindItems.length}，已结算=${blindRolledCount}，未结算=${blindUnresolved}`);
+    }
+
+    const limitedPublicPerRound = publicItems.slice(0, deps.SUMMARY_MAX_EVENTS_Event);
+    for (const item of limitedPublicPerRound) {
+      if (emittedPublicEventLines >= deps.SUMMARY_MAX_TOTAL_EVENT_LINES_Event) {
+        publicTruncatedByTotalLimit = true;
         break;
       }
-      lines.push(buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary, settings));
-      emittedEventLines++;
+      publicLines.push(buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary, settings));
+      emittedPublicEventLines++;
     }
 
-    if (snapshot.events.length > deps.SUMMARY_MAX_EVENTS_Event) {
-      lines.push(`注：本轮还有 ${snapshot.events.length - deps.SUMMARY_MAX_EVENTS_Event} 个事件未展开。`);
+    const limitedBlindPerRound = blindItems.slice(0, deps.SUMMARY_MAX_EVENTS_Event);
+    for (const item of limitedBlindPerRound) {
+      if (emittedBlindEventLines >= deps.SUMMARY_MAX_TOTAL_EVENT_LINES_Event) {
+        blindTruncatedByTotalLimit = true;
+        break;
+      }
+      blindLines.push(buildBlindSummaryEventNaturalLineByModeEvent(item, detailMode));
+      emittedBlindEventLines++;
     }
 
-    if (truncatedByTotalLimit) break;
+    if (publicItems.length > deps.SUMMARY_MAX_EVENTS_Event) {
+      publicLines.push(`注：本轮还有 ${publicItems.length - deps.SUMMARY_MAX_EVENTS_Event} 个公开事件未展开。`);
+    }
+
+    if (blindItems.length > deps.SUMMARY_MAX_EVENTS_Event) {
+      blindLines.push(`注：本轮还有 ${blindItems.length - deps.SUMMARY_MAX_EVENTS_Event} 个暗骰未展开。`);
+    }
+
+    if (publicTruncatedByTotalLimit && blindTruncatedByTotalLimit) break;
   }
 
-  if (truncatedByTotalLimit) {
-    lines.push("注：后续事件因长度限制未展开。");
+  if (publicTruncatedByTotalLimit) {
+    publicLines.push("注：后续公开事件因长度限制未展开。");
   }
-  lines.push(deps.DICE_SUMMARY_BLOCK_END_Event);
-  return lines.join("\n");
+  if (blindTruncatedByTotalLimit) {
+    blindLines.push("注：后续暗骰因长度限制未展开。");
+  }
+  if (hasPublicContent) {
+    publicLines.push(deps.DICE_SUMMARY_BLOCK_END_Event);
+  }
+  if (hasBlindContent) {
+    blindLines.push(deps.DICE_BLIND_SUMMARY_BLOCK_END_Event);
+  }
+
+  return {
+    publicSummaryText: hasPublicContent ? publicLines.join("\n") : "",
+    blindSummaryText: hasBlindContent ? blindLines.join("\n") : "",
+  };
 }

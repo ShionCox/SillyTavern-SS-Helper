@@ -34,6 +34,16 @@ type ResolvedOutcomeEvent = {
   explosionTriggered: boolean;
 };
 
+/**
+ * 功能：判断某条检定记录是否属于暗骰结果。
+ * @param record 检定记录。
+ * @returns 若该记录属于暗骰则返回 true。
+ */
+function isBlindResultRecordEvent(record: EventRollRecordEvent | null | undefined): boolean {
+  if (!record) return false;
+  return record.visibility === "blind" || record.source === "blind_manual_roll";
+}
+
 export function formatCountdownMsEvent(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -649,8 +659,13 @@ export function buildEventListCardEvent(
   const meta = deps.getDiceMetaEvent();
   const activeStatuses = ensureActiveStatusesEvent(meta);
   deps.ensureRoundEventTimersSyncedEvent(round);
+  const visibleEvents = round.events.filter((event) => {
+    const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
+    return !isBlindResultRecordEvent(lastRecord);
+  });
+  if (visibleEvents.length <= 0) return "";
   const buildItemHtmlByVariantEvent = (templateVariant: "desktop" | "mobile"): string =>
-    round.events
+    visibleEvents
     .map((event) => {
       const compare = event.compare ?? ">=";
       const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);

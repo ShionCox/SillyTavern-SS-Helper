@@ -1,6 +1,7 @@
 import { normalizeBlankLinesEvent, simpleHashEvent } from "../core/utilsEvent";
 import { buildActiveStatusesBlockEvent, ensureActiveStatusesEvent as ensureActiveStatusesFromMetaEvent } from "./statusEvent";
 import {
+  extractTavernMessageOriginalTextEvent as extractSdkTavernMessageOriginalTextEvent,
   extractTavernPromptMessagesEvent as extractSdkTavernPromptMessagesEvent,
   findFirstTavernPromptSystemIndexEvent as findFirstSdkTavernPromptSystemIndexEvent,
   findLastTavernPromptSystemIndexEvent as findLastSdkTavernPromptSystemIndexEvent,
@@ -15,6 +16,7 @@ import {
 import type { SdkTavernPromptTargetEvent } from "../../../SDK/tavern";
 import type {
   BlindGuidanceEvent,
+  BuiltSummaryBlocksEvent,
   DiceMetaEvent,
   DicePluginSettingsEvent,
   EventResultGradeEvent,
@@ -32,10 +34,11 @@ import {
   buildPassiveDiscoveryBlockEvent,
   resolvePassiveDiscoveriesEvent,
 } from "./passiveBlindEvent";
-import { stripInteractiveTriggerMarkupFromTextEvent } from "./interactiveTriggerMetadataEvent";
 
 const DEFAULT_RULE_BLOCK_START_Event = "<dice_rules>";
 const DEFAULT_RULE_BLOCK_END_Event = "</dice_rules>";
+const DEFAULT_BLIND_SUMMARY_BLOCK_START_Event = "<dice_blind_round_summary>";
+const DEFAULT_BLIND_SUMMARY_BLOCK_END_Event = "</dice_blind_round_summary>";
 const DEFAULT_SUMMARY_BLOCK_START_Event = "<dice_round_summary>";
 const DEFAULT_SUMMARY_BLOCK_END_Event = "</dice_round_summary>";
 const DEFAULT_RESULT_GUIDANCE_BLOCK_START_Event = "<dice_result_guidance>";
@@ -71,6 +74,8 @@ function getBlockTagsEvent(
     ruleEnd: string;
     runtimePolicyStart: string;
     runtimePolicyEnd: string;
+    blindSummaryStart: string;
+    blindSummaryEnd: string;
     summaryStart: string;
     summaryEnd: string;
     guidanceStart: string;
@@ -87,6 +92,8 @@ function getBlockTagsEvent(
   const ruleEnd = tags?.ruleEnd || DEFAULT_RULE_BLOCK_END_Event;
   const runtimePolicyStart = tags?.runtimePolicyStart || DEFAULT_RUNTIME_POLICY_BLOCK_START_Event;
   const runtimePolicyEnd = tags?.runtimePolicyEnd || DEFAULT_RUNTIME_POLICY_BLOCK_END_Event;
+  const blindSummaryStart = tags?.blindSummaryStart || DEFAULT_BLIND_SUMMARY_BLOCK_START_Event;
+  const blindSummaryEnd = tags?.blindSummaryEnd || DEFAULT_BLIND_SUMMARY_BLOCK_END_Event;
   const summaryStart = tags?.summaryStart || DEFAULT_SUMMARY_BLOCK_START_Event;
   const summaryEnd = tags?.summaryEnd || DEFAULT_SUMMARY_BLOCK_END_Event;
   const guidanceStart = tags?.guidanceStart || DEFAULT_RESULT_GUIDANCE_BLOCK_START_Event;
@@ -100,6 +107,7 @@ function getBlockTagsEvent(
   return [
     { start: ruleStart, end: ruleEnd },
     { start: runtimePolicyStart, end: runtimePolicyEnd },
+    { start: blindSummaryStart, end: blindSummaryEnd },
     { start: summaryStart, end: summaryEnd },
     { start: guidanceStart, end: guidanceEnd },
     { start: blindStart, end: blindEnd },
@@ -205,18 +213,41 @@ export function getMessageTextEvent(message: TavernMessageEvent | undefined): st
   return getSdkTavernPromptMessageTextEvent(message);
 }
 
+/**
+ * 功能：读取适合“复制原格式”的助手原文，保留正文与 ROLLJSON，但不拼入宿主单独保存的思维链。
+ * @param message 待读取的助手消息。
+ * @returns 复制用原始文本；不存在时返回空字符串。
+ */
+export function getAssistantOriginalSourceTextFromHostEvent(
+  message: TavernMessageEvent | undefined
+): string {
+  const preferredText = getPreferredAssistantSourceTextEvent(message);
+  const result = extractSdkTavernMessageOriginalTextEvent(message);
+  const originalText = String(result.text ?? "");
+  if (!preferredText.trim()) {
+    return originalText;
+  }
+  if (originalText === preferredText) {
+    return originalText;
+  }
+  if (originalText.endsWith(`\n${preferredText}`) || originalText.endsWith(preferredText)) {
+    return preferredText;
+  }
+  return originalText;
+}
+
 export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent | undefined): string {
   if (!message || typeof message !== "object") return "";
   const swipeId = Number((message as any).swipe_id ?? (message as any).swipeId);
   const swipes = (message as any).swipes;
   if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
     const swipeText = String(swipes[swipeId] ?? "");
-    if (swipeText.trim()) return stripInteractiveTriggerMarkupFromTextEvent(swipeText);
+    if (swipeText.trim()) return swipeText;
   }
   if (typeof (message as any).mes === "string" && (message as any).mes.trim()) {
-    return stripInteractiveTriggerMarkupFromTextEvent((message as any).mes);
+    return String((message as any).mes);
   }
-  return stripInteractiveTriggerMarkupFromTextEvent(getMessageTextEvent(message));
+  return getMessageTextEvent(message);
 }
 
 export function setMessageTextEvent(message: TavernMessageEvent, text: string): void {
@@ -308,6 +339,8 @@ export function stripManagedBlocksEvent(
     ruleEnd: string;
     runtimePolicyStart: string;
     runtimePolicyEnd: string;
+    blindSummaryStart: string;
+    blindSummaryEnd: string;
     summaryStart: string;
     summaryEnd: string;
     guidanceStart: string;
@@ -450,9 +483,10 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
       .filter(Boolean)
       .join("、") || "洞察、潜行、搜查、历史、调查";
     lines.push("6. 正文中的可交互线索请使用交互标记：");
-    lines.push('   - 语法：[[rh-trigger action="调查" skill="调查" blind="1" sourceId="bookshelf_scratches"]]异常的刮痕[[/rh-trigger]]');
+    lines.push('   - 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" blind="1" sourceId="bookshelf_scratches">异常的刮痕</rh-trigger>');
     lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
     lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
+    lines.push("   - difficulty 仅允许 easy / normal / hard / extreme，由系统自动换算阈值；不要手写成功点数。");
     lines.push(`   - 下列技能通常应默认暗骰：${blindSkillText}。适用时请写 blind="1"。`);
     lines.push("   - 被动检定自动发现的信息，如果值得继续追查，也可以继续标成可点击词。");
   }
@@ -813,6 +847,8 @@ export interface HandlePromptReadyDepsEvent {
   DICE_RULE_BLOCK_END_Event: string;
   DICE_RUNTIME_POLICY_BLOCK_START_Event?: string;
   DICE_RUNTIME_POLICY_BLOCK_END_Event?: string;
+  DICE_BLIND_SUMMARY_BLOCK_START_Event?: string;
+  DICE_BLIND_SUMMARY_BLOCK_END_Event?: string;
   DICE_SUMMARY_BLOCK_START_Event: string;
   DICE_SUMMARY_BLOCK_END_Event: string;
   DICE_RESULT_GUIDANCE_BLOCK_START_Event?: string;
@@ -835,7 +871,7 @@ export interface HandlePromptReadyDepsEvent {
     lastNRounds: number,
     includeOutcomeInSummary: boolean,
     settings: DicePluginSettingsEvent
-  ) => string;
+  ) => BuiltSummaryBlocksEvent;
   saveMetadataSafeEvent: () => void;
 }
 
@@ -865,6 +901,10 @@ export function handlePromptReadyEvent(
     deps.DICE_RUNTIME_POLICY_BLOCK_START_Event || DEFAULT_RUNTIME_POLICY_BLOCK_START_Event;
   const runtimePolicyEndTag =
     deps.DICE_RUNTIME_POLICY_BLOCK_END_Event || DEFAULT_RUNTIME_POLICY_BLOCK_END_Event;
+  const blindSummaryStartTag =
+    deps.DICE_BLIND_SUMMARY_BLOCK_START_Event || DEFAULT_BLIND_SUMMARY_BLOCK_START_Event;
+  const blindSummaryEndTag =
+    deps.DICE_BLIND_SUMMARY_BLOCK_END_Event || DEFAULT_BLIND_SUMMARY_BLOCK_END_Event;
   const summaryStartTag = deps.DICE_SUMMARY_BLOCK_START_Event || DEFAULT_SUMMARY_BLOCK_START_Event;
   const summaryEndTag = deps.DICE_SUMMARY_BLOCK_END_Event || DEFAULT_SUMMARY_BLOCK_END_Event;
   const guidanceStartTag =
@@ -888,6 +928,8 @@ export function handlePromptReadyEvent(
     ruleEnd: ruleEndTag,
     runtimePolicyStart: runtimePolicyStartTag,
     runtimePolicyEnd: runtimePolicyEndTag,
+    blindSummaryStart: blindSummaryStartTag,
+    blindSummaryEnd: blindSummaryEndTag,
     summaryStart: summaryStartTag,
     summaryEnd: summaryEndTag,
     guidanceStart: guidanceStartTag,
@@ -953,8 +995,13 @@ export function handlePromptReadyEvent(
   }
 
   let summaryBlockText = "";
+  let blindSummaryBlockText = "";
   if (isSameUserPrompt && meta.outboundSummary && meta.outboundSummary.userMsgId === userMsgId) {
-    summaryBlockText = normalizeBlockTextEvent(meta.outboundSummary.summaryText);
+    const legacySummaryText = normalizeBlockTextEvent(
+      String((meta.outboundSummary as unknown as { summaryText?: unknown }).summaryText ?? "")
+    );
+    summaryBlockText = normalizeBlockTextEvent(meta.outboundSummary.publicSummaryText || legacySummaryText);
+    blindSummaryBlockText = normalizeBlockTextEvent(meta.outboundSummary.blindSummaryText);
   } else {
     const history = deps.ensureSummaryHistoryEvent(meta);
     const built = deps.buildSummaryBlockFromHistoryEvent(
@@ -964,12 +1011,14 @@ export function handlePromptReadyEvent(
       settings.includeOutcomeInSummary,
       settings
     );
-    summaryBlockText = normalizeBlockTextEvent(built);
-    if (summaryBlockText) {
+    summaryBlockText = normalizeBlockTextEvent(built.publicSummaryText);
+    blindSummaryBlockText = normalizeBlockTextEvent(built.blindSummaryText);
+    if (summaryBlockText || blindSummaryBlockText) {
       meta.outboundSummary = {
         userMsgId,
         roundId: meta.pendingRound?.roundId || "",
-        summaryText: summaryBlockText,
+        publicSummaryText: summaryBlockText,
+        blindSummaryText: blindSummaryBlockText,
       };
     } else if (meta.outboundSummary) {
       delete meta.outboundSummary;
@@ -1048,6 +1097,7 @@ export function handlePromptReadyEvent(
       ruleBlockText,
       runtimePolicyBlockText,
       summaryBlockText,
+      blindSummaryBlockText,
       guidanceBlockText,
       blindGuidanceBlockText,
       statusBlockText,
@@ -1090,7 +1140,7 @@ export function handlePromptReadyEvent(
   logger.info(
     `通过 ${sourceEvent} 更新了提示词管理块 (路径=${chatTargets
       .map((target) => target.path)
-      .join(",")} 块=规则:${ruleBlockText ? 1 : 0},运行时:${runtimePolicyBlockText ? 1 : 0},摘要:${summaryBlockText ? 1 : 0},指引:${guidanceBlockText ? 1 : 0},暗骰:${blindGuidanceBlockText ? 1 : 0},状态:${statusBlockText ? 1 : 0},被动:${passiveDiscoveryBlockText ? 1 : 0} 操作=${targetSyncLogs.join(
+      .join(",")} 块=规则:${ruleBlockText ? 1 : 0},运行时:${runtimePolicyBlockText ? 1 : 0},摘要:${summaryBlockText ? 1 : 0},暗骰摘要:${blindSummaryBlockText ? 1 : 0},指引:${guidanceBlockText ? 1 : 0},暗骰:${blindGuidanceBlockText ? 1 : 0},状态:${statusBlockText ? 1 : 0},被动:${passiveDiscoveryBlockText ? 1 : 0} 操作=${targetSyncLogs.join(
       ";"
     )})`
   );

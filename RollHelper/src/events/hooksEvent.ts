@@ -9,15 +9,39 @@ import { logger } from "../../index";
 import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
 import { ensureSdkFloatingToolbar, SDK_FLOATING_TOOLBAR_ID } from "../../../SDK/toolbar";
-import { sanitizeMessageInteractiveTriggersEvent } from "./interactiveTriggerMetadataEvent";
+import {
+  collectAssistantSourceCandidatesEvent,
+  getAssistantOriginalSourceTextEvent,
+  getMessageTextSafe,
+  hasAssistantOriginalSourceTextEvent,
+  rememberAssistantOriginalSnapshotEvent,
+  rememberAssistantOriginalSourceTextEvent,
+  resetAssistantSwipeRuntimeStateEvent,
+  sanitizeAssistantMessageArtifactsEvent,
+} from "./messageSanitizerEvent";
+import { copyTextToClipboardEvent } from "../settings/skillEditorUiEvent";
+
+const RH_COPY_SOURCE_BUTTON_ATTR_Event = "data-rh-copy-source";
+const RH_COPY_SOURCE_BUTTON_STYLE_ID_Event = "st-rh-copy-source-style";
 
 export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
   eventSource: any;
   event_types: Record<string, string> | undefined;
+  isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
+  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
+  parseEventEnvelopesEvent: (text: string) => {
+    events: DiceEventSpecEvent[];
+    ranges: Array<{ start: number; end: number }>;
+    shouldEndRound?: boolean;
+  };
+  resetRecentParseFailureLogsEvent: () => void;
   extractPromptChatFromPayloadEvent: (payload: any) => any[] | null;
   handlePromptReadyEvent: (payload: any, sourceEvent?: string) => void;
   handleGenerationEndedEvent: () => void;
+  resetAssistantProcessedStateEvent: () => void;
   clearDiceMetaEventState: (reason?: string) => void;
   sanitizeCurrentChatEventBlocksEvent: () => void;
   sweepTimeoutFailuresEvent: () => boolean;
@@ -26,6 +50,7 @@ export interface EventHooksDepsEvent {
   refreshAllWidgetsFromStateEvent: () => void;
   reconcilePendingRoundWithCurrentChatEvent: (reason?: string) => boolean;
   enhanceInteractiveTriggersInDomEvent: () => void;
+  enhanceAssistantRawSourceButtonsEvent: () => void;
 }
 
 export interface HandleGenerationEndedDepsEvent {
@@ -41,6 +66,7 @@ export interface HandleGenerationEndedDepsEvent {
   ) => { msg: TavernMessageEvent; index: number } | null;
   getDiceMetaEvent: () => DiceMetaEvent;
   buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
+  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -79,6 +105,7 @@ export interface ReconcilePendingRoundWithCurrentChatDepsEvent {
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
   buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
   buildAssistantFloorKeyEvent: (assistantMsgId: string) => string | null;
+  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -105,6 +132,20 @@ type ResolvedAssistantEnvelopeEvent = {
   chosenShouldEndRound: boolean;
 };
 
+type AssistantMessageTargetEvent = {
+  msg: TavernMessageEvent;
+  index: number;
+};
+
+type AssistantGenerationSessionStateEvent = {
+  key: string;
+  swipeId: number;
+  sequence: number;
+  finalized: boolean;
+};
+
+const assistantGenerationSessionsEvent = new Map<string, AssistantGenerationSessionStateEvent>();
+
 /**
  * 功能：解析助手消息中的骰子事件包，并按当前作用域过滤事件。
  * @param message 目标助手消息。
@@ -117,16 +158,14 @@ function resolveAssistantEnvelopeEvent(
   applyScope: "protagonist_only" | "all",
   deps: Pick<
     HandleGenerationEndedDepsEvent,
+    | "getAssistantOriginalSourceTextEvent"
     | "getPreferredAssistantSourceTextEvent"
     | "getMessageTextEvent"
     | "parseEventEnvelopesEvent"
     | "filterEventsByApplyScopeEvent"
   >
 ): ResolvedAssistantEnvelopeEvent {
-  const sourceCandidates = [
-    deps.getPreferredAssistantSourceTextEvent(message),
-    deps.getMessageTextEvent(message),
-  ].filter((item, index, array) => item && array.indexOf(item) === index);
+  const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
 
   let chosenText = "";
   let chosenEvents: DiceEventSpecEvent[] = [];
@@ -230,6 +269,234 @@ function collectSummaryHistoryFloorVersionsEvent(
   return tracked;
 }
 
+function ensureAssistantRawSourceButtonStyleEvent(): void {
+  if (document.getElementById(RH_COPY_SOURCE_BUTTON_STYLE_ID_Event)) return;
+  const style = document.createElement("style");
+  style.id = RH_COPY_SOURCE_BUTTON_STYLE_ID_Event;
+  style.textContent = `
+    [${RH_COPY_SOURCE_BUTTON_ATTR_Event}="1"] {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    [${RH_COPY_SOURCE_BUTTON_ATTR_Event}="1"][data-rh-copy-source-state="copied"] {
+      color: #9fe3b1;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function resolveMessageRecordByMesIdEvent(
+  mesElement: HTMLElement,
+  chat: TavernMessageEvent[]
+): TavernMessageEvent | null {
+  const rawMesId = mesElement.getAttribute("mesid") || "";
+  const messageIndex = Number(rawMesId);
+  if (!Number.isFinite(messageIndex) || messageIndex < 0 || messageIndex >= chat.length) {
+    return null;
+  }
+  return chat[messageIndex] ?? null;
+}
+
+function resolveAssistantSwipeIdEvent(message: TavernMessageEvent): number {
+  const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
+  if (Number.isFinite(swipeId) && swipeId >= 0) return swipeId;
+  return -1;
+}
+
+function resolveAssistantRuntimeMessageKeyEvent(message: TavernMessageEvent, index: number): string {
+  const explicitId = String(message.id ?? message.cid ?? message.uid ?? "").trim();
+  if (explicitId) return `assistant:${explicitId}`;
+  const timestamp = String((message as any)?.create_date ?? (message as any)?.create_time ?? (message as any)?.timestamp ?? "").trim();
+  if (timestamp) return `assistant_ts:${timestamp}`;
+  return `assistant_idx:${index}`;
+}
+
+function buildAssistantGenerationSessionKeyEvent(state: AssistantGenerationSessionStateEvent): string {
+  return `${state.key}:swipe_${state.swipeId}:session_${state.sequence}`;
+}
+
+function resolveAssistantEventTargetEvent(
+  eventArgs: unknown[],
+  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent" | "isAssistantMessageEvent">
+): AssistantMessageTargetEvent | null {
+  const liveCtx = deps.getLiveContextEvent();
+  const chat = liveCtx?.chat;
+  if (!Array.isArray(chat) || chat.length <= 0) return null;
+  const rawMessageId = eventArgs.find((value) => Number.isInteger(Number(value)));
+  const messageIndex = Number(rawMessageId);
+  if (Number.isInteger(messageIndex) && messageIndex >= 0 && messageIndex < chat.length) {
+    const target = chat[messageIndex] as TavernMessageEvent;
+    if (deps.isAssistantMessageEvent(target)) {
+      return { msg: target, index: messageIndex };
+    }
+  }
+  return findLatestAssistantEvent(chat as TavernMessageEvent[], {
+    isAssistantMessageEvent: deps.isAssistantMessageEvent,
+  });
+}
+
+function beginAssistantGenerationSessionEvent(
+  target: AssistantMessageTargetEvent,
+  reason: string,
+  deps: Pick<EventHooksDepsEvent, "resetRecentParseFailureLogsEvent" | "resetAssistantProcessedStateEvent">
+): string {
+  const key = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const swipeId = resolveAssistantSwipeIdEvent(target.msg);
+  const previous = assistantGenerationSessionsEvent.get(key);
+  const shouldStartNew = !previous || previous.swipeId !== swipeId || previous.finalized;
+  const nextState: AssistantGenerationSessionStateEvent = shouldStartNew
+    ? {
+      key,
+      swipeId,
+      sequence: (previous?.sequence ?? 0) + 1,
+      finalized: false,
+    }
+    : previous;
+
+  if (shouldStartNew) {
+    assistantGenerationSessionsEvent.set(key, nextState);
+    resetAssistantSwipeRuntimeStateEvent(target.msg);
+    deps.resetRecentParseFailureLogsEvent();
+    deps.resetAssistantProcessedStateEvent();
+    logger.info(`[内容处理] 检测到助手重生成会话开始 source=${reason} key=${buildAssistantGenerationSessionKeyEvent(nextState)}`);
+  }
+
+  return buildAssistantGenerationSessionKeyEvent(nextState);
+}
+
+function tryFinalizeAssistantGenerationSessionEvent(
+  target: AssistantMessageTargetEvent
+): { sessionKey: string; shouldFinalize: boolean } {
+  const key = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const swipeId = resolveAssistantSwipeIdEvent(target.msg);
+  const previous = assistantGenerationSessionsEvent.get(key);
+  const nextState: AssistantGenerationSessionStateEvent = !previous || previous.swipeId !== swipeId
+    ? {
+      key,
+      swipeId,
+      sequence: (previous?.sequence ?? 0) + 1,
+      finalized: true,
+    }
+    : {
+      ...previous,
+      finalized: true,
+    };
+  assistantGenerationSessionsEvent.set(key, nextState);
+  return {
+    sessionKey: buildAssistantGenerationSessionKeyEvent(nextState),
+    shouldFinalize: !(previous && previous.swipeId === swipeId && previous.finalized),
+  };
+}
+
+/**
+ * 功能：在流式输出尚未结束前尽早保留助手原始文本快照，避免控制块被宿主后续覆盖。
+ * 参数：
+ *   reason：触发快照捕获的原因。
+ *   deps：快照捕获依赖。
+ * 返回：
+ *   void
+ */
+function captureLatestAssistantOriginalSnapshotEvent(
+  reason: string,
+  eventArgs: unknown[],
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "getLiveContextEvent"
+    | "isAssistantMessageEvent"
+    | "getAssistantOriginalSourceTextEvent"
+    | "getPreferredAssistantSourceTextEvent"
+    | "getMessageTextEvent"
+    | "parseEventEnvelopesEvent"
+    | "resetRecentParseFailureLogsEvent"
+    | "resetAssistantProcessedStateEvent"
+  >
+): void {
+  const target = resolveAssistantEventTargetEvent(eventArgs, deps);
+  if (!target) return;
+  const sessionKey = beginAssistantGenerationSessionEvent(target, reason, deps);
+  const changed = rememberAssistantOriginalSnapshotEvent(target.msg, {
+    getAssistantOriginalSourceTextEvent: deps.getAssistantOriginalSourceTextEvent,
+    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+    getMessageTextEvent: deps.getMessageTextEvent,
+    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+  });
+  if (changed) {
+    logger.info(`[内容处理] 已提前保留助手原文快照 source=${reason} session=${sessionKey}`);
+  }
+}
+
+function buildAssistantRawSourceCopyButtonEvent(): HTMLDivElement {
+  const button = document.createElement("div");
+  button.className = "mes_button interactable";
+  button.setAttribute(RH_COPY_SOURCE_BUTTON_ATTR_Event, "1");
+  button.setAttribute("title", "复制原格式");
+  button.setAttribute("aria-label", "复制原格式");
+  button.setAttribute("tabindex", "0");
+  button.setAttribute("role", "button");
+  button.innerHTML = `<i class="fa-solid fa-code fa-fw" aria-hidden="true"></i>`;
+  return button;
+}
+
+/**
+ * 功能：把复制按钮切换到指定提示状态，给用户可见反馈。
+ * 参数：
+ *   button：复制按钮节点。
+ *   state：状态名称。
+ *   title：按钮提示文本。
+ * 返回：
+ *   void
+ */
+function setAssistantRawSourceButtonStateEvent(
+  button: HTMLElement,
+  state: "copied" | "failed",
+  title: string
+): void {
+  button.dataset.rhCopySourceState = state;
+  button.setAttribute("title", title);
+  window.setTimeout(() => {
+    if (!button.isConnected) return;
+    delete button.dataset.rhCopySourceState;
+    button.setAttribute("title", "复制原格式");
+  }, 1400);
+}
+
+export function enhanceAssistantRawSourceButtonsEvent(
+  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent"> & {
+    isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
+  }
+): void {
+  const liveCtx = deps.getLiveContextEvent();
+  const chat = liveCtx?.chat;
+  if (!Array.isArray(chat)) return;
+  const chatRoot = document.getElementById("chat");
+  if (!chatRoot) return;
+
+  ensureAssistantRawSourceButtonStyleEvent();
+  const messageNodes = Array.from(chatRoot.querySelectorAll(".mes")) as HTMLElement[];
+  for (const mesElement of messageNodes) {
+    const buttonWrap = mesElement.querySelector(".mes_buttons") as HTMLElement | null;
+    if (!buttonWrap) continue;
+
+    const message = resolveMessageRecordByMesIdEvent(mesElement, chat as TavernMessageEvent[]);
+    const shouldShow =
+      deps.isAssistantMessageEvent(message ?? undefined)
+      && hasAssistantOriginalSourceTextEvent(message ?? undefined);
+    const existed = buttonWrap.querySelector(
+      `[${RH_COPY_SOURCE_BUTTON_ATTR_Event}="1"]`
+    ) as HTMLElement | null;
+
+    if (!shouldShow) {
+      existed?.remove();
+      continue;
+    }
+    if (existed) continue;
+
+    buttonWrap.appendChild(buildAssistantRawSourceCopyButtonEvent());
+  }
+}
+
 /**
  * 功能：把当前可见聊天中的助手楼层与未归档轮次状态做一次对账。
  * @param reason 触发本次对账的原因。
@@ -329,6 +596,8 @@ export function handleGenerationEndedEvent(
   const chosenEvents = resolvedEnvelope.chosenEvents;
   const chosenRanges = resolvedEnvelope.chosenRanges;
   const chosenShouldEndRound = resolvedEnvelope.chosenShouldEndRound;
+  const sourceCandidates = collectAssistantSourceCandidatesEvent(latestAssistant.msg, deps);
+  const fallbackSnapshotText = sourceCandidates.find((item) => String(item ?? "").trim()) || "";
 
   if (!chosenText.trim()) {
     return;
@@ -336,38 +605,20 @@ export function handleGenerationEndedEvent(
 
   const events = chosenEvents;
   const ranges = chosenRanges;
-  const triggerSanitizedEarly = sanitizeMessageInteractiveTriggersEvent(latestAssistant.msg, {
-    settings: deps.getSettingsEvent(),
-    sourceMessageId: assistantMsgId,
-  });
   if (events.length === 0 && ranges.length === 0) {
-    if (!triggerSanitizedEarly) {
-      return;
-    }
-    const floorInvalidated = deps.invalidatePendingRoundFloorEvent(assistantMsgId);
-    const historyInvalidated = deps.invalidateSummaryHistoryFloorEvent(assistantMsgId);
-    meta.lastProcessedAssistantMsgId = assistantMsgId;
-    if (triggerSanitizedEarly) {
-      deps.persistChatSafeEvent();
-      deps.hideEventCodeBlocksInDomEvent();
-    }
-    if (floorInvalidated || historyInvalidated || triggerSanitizedEarly) {
-      deps.refreshAllWidgetsFromStateEvent();
-      deps.refreshCountdownDomEvent();
-    }
     return;
   }
 
   meta.lastProcessedAssistantMsgId = assistantMsgId;
+  const snapshotText = chosenText.trim() || fallbackSnapshotText.trim();
+  const originalSnapshotChanged = snapshotText
+    ? rememberAssistantOriginalSourceTextEvent(latestAssistant.msg, snapshotText, true)
+    : false;
   const cleaned = deps.removeRangesEvent(chosenText, ranges);
   deps.setMessageTextEvent(latestAssistant.msg, cleaned);
-  const triggerSanitized = triggerSanitizedEarly || sanitizeMessageInteractiveTriggersEvent(latestAssistant.msg, {
-    settings: deps.getSettingsEvent(),
-    sourceMessageId: assistantMsgId,
-  });
 
   deps.hideEventCodeBlocksInDomEvent();
-  if (ranges.length > 0 || triggerSanitized) {
+  if (ranges.length > 0 || originalSnapshotChanged) {
     deps.persistChatSafeEvent();
   }
 
@@ -413,6 +664,7 @@ export function findLatestAssistantEvent(
 
 export interface BuildAssistantMessageIdDepsEvent {
   simpleHashEvent: (input: string) => string;
+  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -433,16 +685,25 @@ function buildAssistantMessageVersionTextEvent(
   message: TavernMessageEvent,
   deps: BuildAssistantMessageIdDepsEvent
 ): string {
-  const preferredText = deps.getPreferredAssistantSourceTextEvent(message);
-  const fallbackText = deps.getMessageTextEvent(message);
-  const sourceText = preferredText || fallbackText;
-  if (!sourceText.trim()) return fallbackText;
-
-  const parsed = deps.parseEventEnvelopesEvent(sourceText);
-  if (!Array.isArray(parsed.ranges) || parsed.ranges.length <= 0) {
-    return sourceText;
+  const sourceCandidates = [
+    deps.getAssistantOriginalSourceTextEvent(message),
+    deps.getPreferredAssistantSourceTextEvent(message),
+    deps.getMessageTextEvent(message),
+  ].filter((item, index, array) => item && array.indexOf(item) === index);
+  if (sourceCandidates.length <= 0) {
+    return "";
   }
-  return deps.removeRangesEvent(sourceText, parsed.ranges);
+
+  for (const sourceText of sourceCandidates) {
+    const parsed = deps.parseEventEnvelopesEvent(sourceText);
+    if (!Array.isArray(parsed.ranges) || parsed.ranges.length <= 0) {
+      if (sourceText.trim()) return sourceText;
+      continue;
+    }
+    return deps.removeRangesEvent(sourceText, parsed.ranges);
+  }
+
+  return sourceCandidates[0] ?? "";
 }
 
 /**
@@ -495,6 +756,7 @@ export interface SanitizeAssistantMessageDepsEvent {
   getSettingsEvent: () => {
     defaultBlindSkillsText?: string;
   };
+  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -511,27 +773,16 @@ export function sanitizeAssistantMessageEventBlocksEvent(
   index: number | undefined,
   deps: SanitizeAssistantMessageDepsEvent
 ): boolean {
-  let changed = false;
-  const sourceCandidates = [
-    deps.getPreferredAssistantSourceTextEvent(message),
-    deps.getMessageTextEvent(message),
-  ].filter((item, index, array) => item && array.indexOf(item) === index);
-
-  for (const sourceText of sourceCandidates) {
-    const { ranges } = deps.parseEventEnvelopesEvent(sourceText);
-    if (ranges.length === 0) continue;
-    const cleaned = deps.removeRangesEvent(sourceText, ranges);
-    deps.setMessageTextEvent(message, cleaned);
-    changed = true;
-    break;
-  }
-
-  const triggerChanged = sanitizeMessageInteractiveTriggersEvent(message, {
-    settings: deps.getSettingsEvent(),
-    sourceMessageId: deps.resolveSourceMessageIdEvent?.(message, index),
+  return sanitizeAssistantMessageArtifactsEvent(message, index, {
+    getSettingsEvent: deps.getSettingsEvent,
+    getAssistantOriginalSourceTextEvent: deps.getAssistantOriginalSourceTextEvent,
+    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+    getMessageTextEvent: deps.getMessageTextEvent,
+    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+    removeRangesEvent: deps.removeRangesEvent,
+    setMessageTextEvent: deps.setMessageTextEvent,
+    resolveSourceMessageIdEvent: deps.resolveSourceMessageIdEvent,
   });
-
-  return changed || triggerChanged;
 }
 
 export interface SanitizeCurrentChatDepsEvent {
@@ -582,6 +833,7 @@ export function clearDiceMetaEventState(
   delete meta.pendingResultGuidanceQueue;
   delete meta.outboundResultGuidance;
   delete meta.pendingBlindGuidanceQueue;
+  delete meta.blindHistory;
   delete meta.outboundBlindGuidance;
   delete meta.pendingPassiveDiscoveries;
   delete meta.outboundPassiveDiscovery;
@@ -647,10 +899,12 @@ const SSHELPER_TOOLBAR_TIP_EXPAND_Event = "展开工具栏";
 const SSHELPER_TOOLBAR_TIP_COLLAPSE_Event = "收起工具栏";
 const SSHELPER_TOOLBAR_TIP_SKILLS_Event = "技能预览";
 const SSHELPER_TOOLBAR_TIP_STATUSES_Event = "状态预览";
+const SSHELPER_TOOLBAR_TIP_BLIND_HISTORY_Event = "暗骰列表";
 const SSHELPER_TOOLBAR_ARIA_EXPAND_Event = "展开 SSHELPER 工具栏";
 const SSHELPER_TOOLBAR_ARIA_COLLAPSE_Event = "收起 SSHELPER 工具栏";
 const SSHELPER_TOOLBAR_ARIA_SKILLS_Event = "打开技能预览";
 const SSHELPER_TOOLBAR_ARIA_STATUSES_Event = "打开状态预览";
+const SSHELPER_TOOLBAR_ARIA_BLIND_HISTORY_Event = "打开暗骰列表";
 
 const SSHELPER_TOOLBAR_GROUP_ID_Event = "rollhelper";
 
@@ -685,6 +939,17 @@ function ensureSSToolbarEvent(): HTMLElement | null {
           "data-event-preview-open": "statuses",
         },
         order: 20,
+      },
+      {
+        key: "blind-history",
+        iconClassName: "fa-solid fa-eye-slash",
+        tooltip: SSHELPER_TOOLBAR_TIP_BLIND_HISTORY_Event,
+        ariaLabel: SSHELPER_TOOLBAR_ARIA_BLIND_HISTORY_Event,
+        buttonClassName: "stx-sdk-toolbar-action-rollhelper-blind-history",
+        attributes: {
+          "data-event-preview-open": "blind-history",
+        },
+        order: 30,
       },
     ],
   });
@@ -817,7 +1082,70 @@ function buildStatusPreviewHtmlEvent(meta: DiceMetaEvent): string {
     .join("")}</ul>`;
 }
 
-function openPreviewDialogEvent(kind: "skills" | "statuses", deps: BindEventButtonsDepsEvent): void {
+/**
+ * 功能：把暗骰来源代码转换为便于阅读的中文标签。
+ * 参数：
+ *   origin：暗骰来源类型。
+ * 返回：
+ *   string：暗骰来源说明。
+ */
+function formatBlindHistoryOriginLabelEvent(origin?: "slash_broll" | "event_blind" | "interactive_blind"): string {
+  if (origin === "slash_broll") return "命令暗骰";
+  if (origin === "interactive_blind") return "交互暗骰";
+  if (origin === "event_blind") return "事件暗骰";
+  return "暗骰";
+}
+
+/**
+ * 功能：把时间戳转换为本地可读时间文本。
+ * 参数：
+ *   value：时间戳。
+ * 返回：
+ *   string：格式化后的时间文本。
+ */
+function formatBlindHistoryTimeEvent(value: number): string {
+  if (!Number.isFinite(Number(value))) return "未知时间";
+  try {
+    return new Date(Number(value)).toLocaleString("zh-CN", {
+      hour12: false,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return "未知时间";
+  }
+}
+
+/**
+ * 功能：构建暗骰历史预览弹窗的列表 HTML。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ * 返回：
+ *   string：暗骰历史列表 HTML。
+ */
+function buildBlindHistoryPreviewHtmlEvent(meta: DiceMetaEvent): string {
+  const history = Array.isArray(meta.blindHistory) ? [...meta.blindHistory] : [];
+  if (history.length <= 0) {
+    return `<div class="st-rh-preview-empty">当前还没有暗骰记录。</div>`;
+  }
+  history.sort((left, right) => Number(right?.rolledAt || 0) - Number(left?.rolledAt || 0));
+  return `<ul class="st-rh-preview-list">${history
+    .map((item) => {
+      const title = escapePreviewHtmlEvent(item.eventTitle || "暗骰检定");
+      const skill = escapePreviewHtmlEvent(item.skill || "未指定");
+      const target = escapePreviewHtmlEvent(item.targetLabel || "未指定");
+      const expr = escapePreviewHtmlEvent(item.diceExpr || "1d20");
+      const origin = escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin));
+      const rolledAt = escapePreviewHtmlEvent(formatBlindHistoryTimeEvent(item.rolledAt));
+      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>目标：${target}</div><div>骰式：${expr}</div><div>来源：${origin}</div><div>时间：${rolledAt}</div></li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function openPreviewDialogEvent(kind: "skills" | "statuses" | "blind-history", deps: BindEventButtonsDepsEvent): void {
   const dialog = ensurePreviewDialogEvent();
   const titleNode = dialog.querySelector<HTMLElement>("[data-preview-title=\"1\"]");
   const bodyNode = dialog.querySelector<HTMLElement>("[data-preview-body=\"1\"]");
@@ -829,6 +1157,9 @@ function openPreviewDialogEvent(kind: "skills" | "statuses", deps: BindEventButt
     bodyNode.innerHTML = settings.enableSkillSystem === false
       ? `<div class="st-rh-preview-empty">技能系统已关闭。</div>`
       : buildSkillPreviewHtmlEvent(String(settings.skillTableText ?? "{}"));
+  } else if (kind === "blind-history") {
+    titleNode.textContent = "暗骰列表（当前聊天）";
+    bodyNode.innerHTML = buildBlindHistoryPreviewHtmlEvent(deps.getDiceMetaEvent());
   } else {
     titleNode.textContent = "状态预览（当前生效）";
     bodyNode.innerHTML = buildStatusPreviewHtmlEvent(deps.getDiceMetaEvent());
@@ -862,7 +1193,7 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
         event.preventDefault();
         event.stopPropagation();
         const kind = String(previewOpenButton.dataset.eventPreviewOpen ?? "").toLowerCase();
-        if (kind === "skills" || kind === "statuses") {
+        if (kind === "skills" || kind === "statuses" || kind === "blind-history") {
           openPreviewDialogEvent(kind, deps);
         }
         return;
@@ -995,17 +1326,45 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     )
   );
 
-  const runGenerationPostProcessPassEvent = (reason: string, delayMs: number): void => {
+  const messageReceivedEvents = Array.from(
+    new Set(
+      [types.MESSAGE_RECEIVED, "message_received"].filter(
+        (item): item is string => typeof item === "string" && item.length > 0
+      )
+    )
+  );
+  const streamSnapshotEvents = Array.from(
+    new Set(
+      [
+        types.STREAM_TOKEN_RECEIVED,
+        "stream_token_received",
+      ].filter((item): item is string => typeof item === "string" && item.length > 0)
+    )
+  );
+
+  const runAssistantFinalizePassEvent = (reason: string, delayMs: number, eventArgs: unknown[]): void => {
     setTimeout(() => {
       try {
+        const target = resolveAssistantEventTargetEvent(eventArgs, deps);
+        if (!target) return;
+        if (reason === (types.MESSAGE_RECEIVED || "message_received") || reason === "message_received") {
+          beginAssistantGenerationSessionEvent(target, reason, deps);
+        }
+        const finalized = tryFinalizeAssistantGenerationSessionEvent(target);
+        if (!finalized.shouldFinalize) {
+          logger.info(`[内容处理] 跳过重复最终处理 source=${reason} session=${finalized.sessionKey}`);
+          return;
+        }
+        logger.info(`[内容处理] 进入最终消息统一处理阶段 source=${reason} delay=${delayMs}ms`);
         deps.handleGenerationEndedEvent();
         deps.sanitizeCurrentChatEventBlocksEvent();
         deps.sweepTimeoutFailuresEvent();
         deps.refreshCountdownDomEvent();
         deps.refreshAllWidgetsFromStateEvent();
         deps.enhanceInteractiveTriggersInDomEvent();
+        deps.enhanceAssistantRawSourceButtonsEvent();
       } catch (error) {
-        logger.warn(`Generation 后处理异常 (${reason}, ${delayMs}ms)`, error);
+        logger.warn(`最终消息后处理异常 (${reason}, ${delayMs}ms)`, error);
       }
     }, delayMs);
   };
@@ -1038,13 +1397,33 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   }
 
   for (const eventName of generationEvents) {
-    src.on(eventName, () => {
+    src.on(eventName, (...eventArgs: unknown[]) => {
       try {
-        runGenerationPostProcessPassEvent(eventName, 0);
-        runGenerationPostProcessPassEvent(eventName, 300);
-        runGenerationPostProcessPassEvent(eventName, 900);
+        // 酒馆的 generation_ended 会先于 MESSAGE_RECEIVED 触发，这里只保留一个慢速兜底。
+        runAssistantFinalizePassEvent(eventName, 800, eventArgs);
       } catch (error) {
         logger.error("Generation hook 错误", error);
+      }
+    });
+  }
+
+  for (const eventName of messageReceivedEvents) {
+    src.on(eventName, (...eventArgs: unknown[]) => {
+      try {
+        // MESSAGE_RECEIVED 发生在流式最终文本落稳之后，适合作为主处理时机。
+        runAssistantFinalizePassEvent(eventName, 30, eventArgs);
+      } catch (error) {
+        logger.error("Message received hook 错误", error);
+      }
+    });
+  }
+
+  for (const eventName of streamSnapshotEvents) {
+    src.on(eventName, (...eventArgs: unknown[]) => {
+      try {
+        captureLatestAssistantOriginalSnapshotEvent(eventName, eventArgs, deps);
+      } catch (error) {
+        logger.warn(`流式快照保留异常 (${eventName})`, error);
       }
     });
   }
@@ -1052,6 +1431,8 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   for (const eventName of resetEvents) {
     src.on(eventName, () => {
       try {
+        assistantGenerationSessionsEvent.clear();
+        deps.resetRecentParseFailureLogsEvent();
         deps.clearDiceMetaEventState(eventName);
         void deps
           .loadChatScopedStateIntoRuntimeEvent(eventName)
@@ -1065,6 +1446,7 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
               deps.refreshCountdownDomEvent();
               deps.refreshAllWidgetsFromStateEvent();
               deps.enhanceInteractiveTriggersInDomEvent();
+              deps.enhanceAssistantRawSourceButtonsEvent();
             }, 0);
           });
       } catch (error) {
@@ -1096,12 +1478,47 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
           deps.refreshCountdownDomEvent();
           deps.refreshAllWidgetsFromStateEvent();
           deps.enhanceInteractiveTriggersInDomEvent();
+          deps.enhanceAssistantRawSourceButtonsEvent();
         }, 50);
       } catch (error) {
         logger.warn("Swipe/edit widget refresh 异常", error);
       }
     });
   }
+
+  document.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    const button = target?.closest?.(`[${RH_COPY_SOURCE_BUTTON_ATTR_Event}="1"]`) as HTMLElement | null;
+    if (!button) return;
+    const mesElement = button.closest(".mes") as HTMLElement | null;
+    if (!mesElement) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const liveCtx = deps.getLiveContextEvent();
+    const chat = liveCtx?.chat;
+    if (!Array.isArray(chat)) return;
+    const message = resolveMessageRecordByMesIdEvent(mesElement, chat as TavernMessageEvent[]);
+    const originalSourceText = getAssistantOriginalSourceTextEvent(message ?? undefined);
+    const fallbackText = getMessageTextSafe(message ?? undefined);
+    const copyText = originalSourceText.trim() || fallbackText.trim();
+    if (!copyText) {
+      logger.warn("复制原格式失败：当前楼层没有可复制的原始源信息。");
+      setAssistantRawSourceButtonStateEvent(button, "failed", "复制失败：当前楼层没有可复制内容");
+      return;
+    }
+    void copyTextToClipboardEvent(copyText).then((copied) => {
+      if (!copied) {
+        logger.warn("复制原格式失败：浏览器未授予剪贴板权限。");
+        setAssistantRawSourceButtonStateEvent(button, "failed", "复制失败：浏览器未授予剪贴板权限");
+        return;
+      }
+      setAssistantRawSourceButtonStateEvent(
+        button,
+        "copied",
+        originalSourceText.trim() ? "已复制原格式（含 ROLLJSON）" : "已复制当前文本"
+      );
+    });
+  }, true);
 
   globalRef.__stRollEventHooksRegisteredEvent = true;
 }

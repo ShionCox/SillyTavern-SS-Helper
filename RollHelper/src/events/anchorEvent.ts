@@ -35,6 +35,16 @@ export interface RefreshAllWidgetsResultEvent {
 }
 
 /**
+ * 功能：判断一条检定记录是否属于暗骰结果。
+ * @param record 检定记录。
+ * @returns 若该记录应只显示在暗骰列表中则返回 true。
+ */
+function isBlindResultRecordEvent(record: EventRollRecordEvent | null | undefined): boolean {
+  if (!record) return false;
+  return record.visibility === "blind" || record.source === "blind_manual_roll";
+}
+
+/**
  * 功能：根据消息标识查找对应的聊天消息节点。
  * @param msgId 运行时记录的 assistant 消息标识。
  * @param chat 当前聊天消息数组。
@@ -273,7 +283,7 @@ function mountPendingRoundWidgetsEvent(
     }
     bucket.events.push(event);
     const record = deps.getLatestRollRecordForEvent(round, event.id);
-    if (record) {
+    if (record && !isBlindResultRecordEvent(record)) {
       bucket.records.push(record);
     }
   }
@@ -287,12 +297,15 @@ function mountPendingRoundWidgetsEvent(
     const cards: string[] = [];
 
     if (msgId === latestMsgId) {
-      cards.push(deps.buildEventListCardEvent(round));
+      const listCardHtml = deps.buildEventListCardEvent(round);
+      if (listCardHtml) {
+        cards.push(listCardHtml);
+      }
     }
 
     for (const event of bucket.events) {
       const record = deps.getLatestRollRecordForEvent(round, event.id);
-      if (record) {
+      if (record && !isBlindResultRecordEvent(record)) {
         cards.push(deps.buildEventRollResultCardEvent(event, record));
       }
     }
@@ -307,8 +320,10 @@ function mountPendingRoundWidgetsEvent(
     const mesElement = findMesElementByMsgIdEvent(latestMsgId, chat);
     if (mesElement) {
       const listCard = deps.buildEventListCardEvent(round);
-      mountWidgetToMesEvent(mesElement, listCard, `round-${round.roundId}-floor-${latestMsgId}`);
-      mountedCount += 1;
+      if (listCard) {
+        mountWidgetToMesEvent(mesElement, listCard, `round-${round.roundId}-floor-${latestMsgId}`);
+        mountedCount += 1;
+      }
     }
   }
 
@@ -336,6 +351,7 @@ function mountHistoryRoundWidgetsEvent(
 
     const rebuilt = rebuildEventAndRecordFromSnapshotEvent(item, snapshot.roundId);
     if (!rebuilt) continue;
+    if (isBlindResultRecordEvent(rebuilt.record)) continue;
 
     const msgId = item.sourceAssistantMsgId;
     let bucket = floorBuckets.get(msgId);

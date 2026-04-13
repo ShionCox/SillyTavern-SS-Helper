@@ -1,6 +1,7 @@
 import type { DiceOptions, DiceResult } from "../types/diceEvent";
 import type {
   AdvantageStateEvent,
+  BlindHistoryItemEvent,
   BlindGuidanceEvent,
   CompareOperatorEvent,
   DiceEventSpecEvent,
@@ -27,6 +28,7 @@ import {
   normalizeBlindGuidanceEvent,
   resolveNatStateEvent,
 } from "./passiveBlindEvent";
+import { resolveEventThresholdEvent } from "./parserEvent";
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
@@ -427,6 +429,160 @@ function ensureBlindGuidanceQueueEvent(meta: DiceMetaEvent): BlindGuidanceEvent[
     meta.pendingBlindGuidanceQueue = [];
   }
   return meta.pendingBlindGuidanceQueue;
+}
+
+/**
+ * 功能：确保暗骰历史列表存在。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ * 返回：
+ *   BlindHistoryItemEvent[]：可写入的暗骰历史列表。
+ */
+function ensureBlindHistoryEvent(meta: DiceMetaEvent): BlindHistoryItemEvent[] {
+  if (!Array.isArray(meta.blindHistory)) {
+    meta.blindHistory = [];
+  }
+  return meta.blindHistory;
+}
+
+/**
+ * 功能：规范化暗骰历史条目，保证只保留展示所需的安全字段。
+ * 参数：
+ *   input：原始暗骰历史条目。
+ * 返回：
+ *   BlindHistoryItemEvent：规范化后的暗骰历史条目。
+ */
+export function normalizeBlindHistoryItemEvent(input: BlindHistoryItemEvent): BlindHistoryItemEvent {
+  const sourceText = input.source;
+  const source =
+    sourceText === "manual_roll"
+    || sourceText === "blind_manual_roll"
+    || sourceText === "ai_auto_roll"
+    || sourceText === "passive_check"
+    || sourceText === "timeout_auto_fail"
+      ? sourceText
+      : "blind_manual_roll";
+  return {
+    rollId: String(input.rollId ?? "").trim(),
+    roundId: String(input.roundId ?? "").trim() || undefined,
+    eventId: String(input.eventId ?? "").trim() || "blind_history",
+    eventTitle: String(input.eventTitle ?? "").trim() || "暗骰检定",
+    skill: String(input.skill ?? "").trim() || "未指定",
+    diceExpr: String(input.diceExpr ?? "").trim() || "1d20",
+    targetLabel: String(input.targetLabel ?? "").trim() || "未指定",
+    rolledAt: Number.isFinite(Number(input.rolledAt)) ? Number(input.rolledAt) : Date.now(),
+    source,
+    origin:
+      input.origin === "slash_broll" || input.origin === "event_blind" || input.origin === "interactive_blind"
+        ? input.origin
+        : undefined,
+    sourceAssistantMsgId: String(input.sourceAssistantMsgId ?? "").trim() || undefined,
+    note: String(input.note ?? "").trim() || undefined,
+  };
+}
+
+/**
+ * 功能：向暗骰历史中追加一条新记录，并限制列表长度。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   item：待写入的暗骰历史条目。
+ * 返回：
+ *   void
+ */
+function appendBlindHistoryItemEvent(meta: DiceMetaEvent, item: BlindHistoryItemEvent): void {
+  const list = ensureBlindHistoryEvent(meta);
+  const normalized = normalizeBlindHistoryItemEvent(item);
+  if (!normalized.rollId) return;
+  const existedIndex = list.findIndex((entry) => entry?.rollId === normalized.rollId);
+  if (existedIndex >= 0) {
+    list[existedIndex] = normalized;
+  } else {
+    list.push(normalized);
+  }
+  if (list.length > 200) {
+    list.splice(0, list.length - 200);
+  }
+}
+
+/**
+ * 功能：把一条暗骰历史同时写入运行时列表与聊天级记录表。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   item：暗骰历史条目。
+ *   persistBlindHistoryRecordEvent：聊天级记录写入函数。
+ * 返回：
+ *   void
+ */
+function appendBlindHistoryItemAndPersistEvent(
+  meta: DiceMetaEvent,
+  item: BlindHistoryItemEvent,
+  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
+): void {
+  const normalized = normalizeBlindHistoryItemEvent(item);
+  appendBlindHistoryItemEvent(meta, normalized);
+  persistBlindHistoryRecordEvent?.(normalized);
+}
+
+/**
+ * 功能：根据暗骰记录写入暗骰历史列表。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   event：对应的事件定义。
+ *   record：暗骰记录。
+ *   origin：暗骰来源类型。
+ * 返回：
+ *   void
+ */
+export function appendBlindHistoryFromRecordEvent(
+  meta: DiceMetaEvent,
+  event: DiceEventSpecEvent,
+  record: EventRollRecordEvent,
+  origin: BlindHistoryItemEvent["origin"] = "event_blind",
+  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
+): void {
+  if (record.visibility !== "blind" && record.source !== "blind_manual_roll") return;
+  appendBlindHistoryItemAndPersistEvent(meta, {
+    rollId: record.rollId,
+    roundId: record.roundId,
+    eventId: event.id,
+    eventTitle: event.title,
+    skill: event.skill,
+    diceExpr: record.diceExpr,
+    targetLabel: record.targetLabelUsed || event.targetLabel,
+    rolledAt: record.rolledAt,
+    source: record.source,
+    origin,
+    sourceAssistantMsgId: String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim() || undefined,
+  }, persistBlindHistoryRecordEvent);
+}
+
+/**
+ * 功能：根据暗骰引导写入暗骰历史列表，供 `/broll` 等无事件卡来源复用。
+ * 参数：
+ *   meta：运行时骰子元数据。
+ *   item：规范化后的暗骰引导条目。
+ * 返回：
+ *   void
+ */
+export function appendBlindHistoryFromGuidanceEvent(
+  meta: DiceMetaEvent,
+  item: BlindGuidanceEvent,
+  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
+): void {
+  appendBlindHistoryItemAndPersistEvent(meta, {
+    rollId: item.rollId,
+    roundId: item.roundId,
+    eventId: item.eventId,
+    eventTitle: item.eventTitle,
+    skill: item.skill,
+    diceExpr: item.diceExpr,
+    targetLabel: item.targetLabel,
+    rolledAt: item.rolledAt,
+    source: item.source,
+    origin: item.origin,
+    sourceAssistantMsgId: item.sourceAssistantMsgId,
+    note: item.note,
+  }, persistBlindHistoryRecordEvent);
 }
 
 function enqueueBlindGuidanceFromRecordEvent(
@@ -1129,6 +1285,7 @@ export function sweepTimeoutFailuresEvent(deps: SweepTimeoutFailuresDepsEvent): 
 export interface PerformEventRollByIdDepsEvent {
   sweepTimeoutFailuresEvent: () => boolean;
   getDiceMetaEvent: () => DiceMetaEvent;
+  appendBlindHistoryRecordEvent: (item: BlindHistoryItemEvent) => void;
   ensureRoundEventTimersSyncedEvent: (round: PendingRoundEvent) => void;
   recordTimeoutFailureIfNeededEvent: (
     round: PendingRoundEvent,
@@ -1193,7 +1350,16 @@ function buildInteractiveTriggerEventSpecEvent(
   const label = String(trigger.label || "").trim() || "未指定线索";
   const action = String(trigger.action || "").trim() || String(trigger.skill || "").trim() || "检定";
   const skill = String(trigger.skill || "").trim() || action;
-  const dcHint = Number.isFinite(Number(trigger.dcHint)) ? Math.max(0, Math.floor(Number(trigger.dcHint))) : 10;
+  const difficulty = trigger.difficulty || "normal";
+  const threshold = resolveEventThresholdEvent(
+    eventId,
+    String(trigger.diceExpr || "").trim() || "1d20",
+    ">=",
+    trigger.dcHint,
+    difficulty,
+    "normal"
+  );
+  const resolvedDc = threshold?.dc ?? 10;
   const noteText = String(trigger.note || "").trim();
   const loreText = String(trigger.loreType || "").trim();
   const descParts = [
@@ -1201,12 +1367,14 @@ function buildInteractiveTriggerEventSpecEvent(
     loreText ? `线索类型：${loreText}。` : "",
     noteText ? `备注：${noteText}。` : "",
   ].filter(Boolean);
-  const dcReason = trigger.dcHint != null ? `由交互触发提供的 DC 提示 ${dcHint}` : "交互触发未提供 DC，使用默认阈值 10";
+  const dcReason = threshold?.generatedDcReason || "交互触发未提供难度，使用普通难度自动换算阈值。";
   return {
     id: eventId,
     title: `${action}【${label}】`,
     checkDice: String(trigger.diceExpr || "").trim() || "1d20",
-    dc: dcHint,
+    dc: resolvedDc,
+    difficulty,
+    dcSource: threshold?.dcSource ?? "difficulty_mapped",
     compare: ">=",
     scope: "protagonist",
     rollMode: "manual",
@@ -1337,6 +1505,13 @@ export async function performInteractiveTriggerRollEvent(
 
   enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
+  appendBlindHistoryFromRecordEvent(
+    meta,
+    event,
+    record,
+    "interactive_blind",
+    deps.appendBlindHistoryRecordEvent
+  );
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
   }
@@ -1521,6 +1696,13 @@ async function executeManualEventRollEvent(
 
   enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
+  appendBlindHistoryFromRecordEvent(
+    meta,
+    event,
+    record,
+    "event_blind",
+    deps.appendBlindHistoryRecordEvent
+  );
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
   }

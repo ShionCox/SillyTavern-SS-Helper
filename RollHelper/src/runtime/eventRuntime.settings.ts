@@ -67,9 +67,10 @@ import {
   ensureActiveStatusesEvent as ensureActiveStatusesStoreEvent,
   getActiveChatKeyEvent as getActiveChatKeyStoreEvent,
   getActiveSkillPresetEvent as getActiveSkillPresetStoreEvent,
-  getDiceMeta as getDiceMetaStoreEvent,
   getDiceMetaEvent as getDiceMetaStoreMetaEvent,
   getSettingsEvent as getSettingsStoreEvent,
+  getLastBaseRollEvent as getLastBaseRollStoreEvent,
+  getLastBaseRollTotalEvent as getLastBaseRollTotalStoreEvent,
   getSkillPresetByIdEvent as getSkillPresetByIdStoreEvent,
   getSkillPresetStoreEvent as getSkillPresetStoreStoreEvent,
   getUniqueSkillPresetNameEvent as getUniqueSkillPresetNameStoreEvent,
@@ -82,6 +83,7 @@ import {
   loadStatusesForChatKeyEvent as loadStatusesForChatKeyStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
+  appendBlindHistoryRecordEvent as appendBlindHistoryRecordStoreEvent,
   saveStatusesForChatKeyEvent as saveStatusesForChatKeyStoreEvent,
   saveSkillPresetStoreEvent as saveSkillPresetStoreStoreEvent,
   setActiveStatusesEvent as setActiveStatusesStoreEvent,
@@ -104,7 +106,6 @@ import {
 import { createSkillEditorRuntimeEvent } from "../settings/skillEditorRuntimeEvent";
 import { registerBaseMacrosAndCommandsEvent as registerBaseMacrosAndCommandsModuleEvent } from "../commands/baseRollCommandEvent";
 import { buildResultMessageTemplateEvent } from "../templates/diceResultTemplates";
-import { buildBlindResultMessageTemplateEvent } from "../templates/diceResultTemplates";
 import {
   fetchMemoryChatKeysEvent as fetchMemoryChatKeysIntegrationEvent,
   probeMemoryPluginEvent as probeMemoryPluginIntegrationEvent,
@@ -305,17 +306,18 @@ export function registerBaseMacrosAndCommandsEvent(): void {
     SlashCommand: slashCommandRuntime.command,
     SlashCommandArgument: slashCommandRuntime.argument,
     ARGUMENT_TYPE: slashCommandRuntime.argumentType,
-    getDiceMeta: getDiceMetaStoreEvent,
+    getLastBaseRollEvent: getLastBaseRollStoreEvent,
+    getLastBaseRollTotalEvent: getLastBaseRollTotalStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     getSettingsEvent: getSettingsStoreEvent,
     rollDiceEvent: rollDiceWithEngineCoreEvent,
     saveLastRoll: saveLastRollStoreEvent,
     buildResultMessage: buildResultMessageTemplateEvent,
-    buildBlindResultMessage: buildBlindResultMessageTemplateEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,
     resolveSkillModifierBySkillNameEvent: resolveSkillModifierBySkillNameStoreEvent,
     createIdEvent: createIdCoreEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+    appendBlindHistoryRecordEvent: appendBlindHistoryRecordStoreEvent,
     playDiceRevealOnlyEvent: playDiceRevealOnlyCoreEvent,
   });
 }

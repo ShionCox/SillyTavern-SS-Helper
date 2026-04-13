@@ -27,14 +27,16 @@ import {
   simpleHashEvent as simpleHashCoreEvent,
 } from "../core/utilsEvent";
 import {
-  getDiceMeta as getDiceMetaStoreEvent,
   getDiceMetaEvent as getDiceMetaStoreMetaEvent,
   getSettingsEvent as getSettingsStoreEvent,
+  getLastBaseRollEvent as getLastBaseRollStoreEvent,
+  getLastBaseRollTotalEvent as getLastBaseRollTotalStoreEvent,
   loadChatScopedStateIntoRuntimeEvent as loadChatScopedStateIntoRuntimeStoreEvent,
   persistChatSafeEvent as persistChatSafeStoreEvent,
   resolveSkillModifierBySkillNameEvent as resolveSkillModifierBySkillNameStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
+  appendBlindHistoryRecordEvent as appendBlindHistoryRecordStoreEvent,
 } from "../settings/storeEvent";
 import {
   bindInteractiveTriggerDomEventsEvent as bindInteractiveTriggerDomEventsModuleEvent,
@@ -44,6 +46,7 @@ import {
   bindEventButtonsEvent as bindEventButtonsModuleEvent,
   buildAssistantMessageIdEvent as buildAssistantMessageIdModuleEvent,
   clearDiceMetaEventState as clearDiceMetaEventStateModuleEvent,
+  enhanceAssistantRawSourceButtonsEvent as enhanceAssistantRawSourceButtonsModuleEvent,
   findLatestAssistantEvent as findLatestAssistantModuleEvent,
   handleGenerationEndedEvent as handleGenerationEndedModuleEvent,
   reconcilePendingRoundWithCurrentChatEvent as reconcilePendingRoundWithCurrentChatModuleEvent,
@@ -53,6 +56,7 @@ import {
   startCountdownTickerEvent as startCountdownTickerModuleEvent,
 } from "../events/hooksEvent";
 import {
+  getAssistantOriginalSourceTextFromHostEvent as getAssistantOriginalSourceTextFromHostModuleEvent,
   extractPromptChatFromPayloadEvent as extractPromptChatFromPayloadModuleEvent,
   getMessageTextEvent as getMessageTextModuleEvent,
   getPreferredAssistantSourceTextEvent as getPreferredAssistantSourceTextModuleEvent,
@@ -65,7 +69,6 @@ import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "..
 import { registerAnimationDebugCommandEvent as registerAnimationDebugCommandModuleEvent } from "../commands/animationDebugCommandEvent";
 import { autoRollEventsByAiModeEvent as autoRollEventsByAiModeModuleEvent, performBlindEventRollByIdEvent as performBlindEventRollByIdModuleEvent, performEventRollByIdEvent as performEventRollByIdModuleEvent, performInteractiveTriggerRollEvent as performInteractiveTriggerRollModuleEvent, rerollBlindEventByIdEvent as rerollBlindEventByIdModuleEvent, rerollEventByIdEvent as rerollEventByIdModuleEvent, applySkillModifierToDiceResultEvent as applySkillModifierToDiceResultModuleEvent } from "../events/roundEvent";
 import { playRollAnimation as playRollAnimationCoreEvent, roll3DDice as roll3DDiceCoreEvent } from "../core/diceBox";
-import { buildBlindResultMessageTemplateEvent, buildResultMessageTemplateEvent } from "../templates/diceResultTemplates";
 import type { DiceEventSpecEvent, PendingRoundEvent, TavernMessageEvent } from "../types/eventDomainEvent";
 import type { RefreshAllWidgetsResultEvent } from "../events/anchorEvent";
 import {
@@ -83,6 +86,7 @@ import {
   recordTimeoutFailureIfNeededEvent,
   sweepTimeoutFailuresEvent,
 } from "./eventRuntime.round";
+import { resetRecentParseFailureLogsEvent } from "../events/parserEvent";
 import {
   buildEventListCardEvent,
   buildEventRollResultCardEvent,
@@ -99,6 +103,7 @@ function findLatestAssistantEvent(chat: TavernMessageEvent[]): { msg: TavernMess
 function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number): string {
   return buildAssistantMessageIdModuleEvent(message, index, {
     simpleHashEvent: simpleHashCoreEvent,
+    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -109,6 +114,7 @@ function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number
 function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent, index?: number): boolean {
   return sanitizeAssistantMessageEventBlocksModuleEvent(message, index, {
     getSettingsEvent: getSettingsStoreEvent,
+    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -132,6 +138,13 @@ export function sanitizeCurrentChatEventBlocksEvent(): void {
     sanitizeAssistantMessageEventBlocksEvent,
     persistChatSafeEvent: persistChatSafeStoreEvent,
     hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
+  });
+}
+
+function enhanceAssistantRawSourceButtonsEvent(): void {
+  enhanceAssistantRawSourceButtonsModuleEvent({
+    getLiveContextEvent: getLiveContextCoreEvent,
+    isAssistantMessageEvent: isAssistantMessageModuleEvent,
   });
 }
 
@@ -172,6 +185,7 @@ export function restoreRuntimeUiFromStateEvent(retry = 0): void {
   refreshCountdownDomEvent();
   const refreshResult = refreshAllWidgetsFromStateWiredEvent();
   enhanceInteractiveTriggersInDomEvent();
+  enhanceAssistantRawSourceButtonsEvent();
 
   if (!shouldRetryInitialWidgetRestoreEvent(refreshResult)) {
     return;
@@ -200,6 +214,7 @@ const rollDepsEvent = {
   buildEventRollResultCardEvent,
   saveLastRoll: saveLastRollStoreEvent,
   saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+  appendBlindHistoryRecordEvent: appendBlindHistoryRecordStoreEvent,
 };
 
 /**
@@ -284,6 +299,7 @@ function handleGenerationEndedEvent(): void {
     findLatestAssistantEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     buildAssistantMessageIdEvent,
+    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -316,6 +332,7 @@ function reconcilePendingRoundWithCurrentChatEvent(reason = "chat_mutated"): boo
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
     buildAssistantMessageIdEvent,
     buildAssistantFloorKeyEvent,
+    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -340,6 +357,11 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
   });
 }
 
+function resetAssistantProcessedStateEvent(): void {
+  const meta = getDiceMetaStoreMetaEvent();
+  delete meta.lastProcessedAssistantMsgId;
+}
+
 function enhanceInteractiveTriggersInDomEvent(): void {
   enhanceInteractiveTriggersInDomModuleEvent(getSettingsStoreEvent(), getLiveContextCoreEvent, getDiceMetaStoreMetaEvent);
 }
@@ -360,12 +382,11 @@ export function bindEventButtonsEvent(): void {
     getLiveContextEvent: getLiveContextCoreEvent,
     persistChatSafeEvent: persistChatSafeStoreEvent,
     refreshInteractiveTriggersInDomEvent: enhanceInteractiveTriggersInDomEvent,
-    buildResultMessage: buildResultMessageTemplateEvent,
-    buildBlindResultMessage: buildBlindResultMessageTemplateEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,
     performInteractiveTriggerRollEvent,
   });
   enhanceInteractiveTriggersInDomEvent();
+  enhanceAssistantRawSourceButtonsEvent();
 }
 
 export function registerEventRollCommandEvent(): void {
@@ -399,9 +420,16 @@ export function registerEventHooksEvent(): void {
     getLiveContextEvent: getLiveContextCoreEvent,
     eventSource: getTavernEventSourceEvent() ?? undefined,
     event_types: getTavernEventTypesEvent() ?? undefined,
+    isAssistantMessageEvent: isAssistantMessageModuleEvent,
+    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
+    getMessageTextEvent: getMessageTextModuleEvent,
+    parseEventEnvelopesEvent,
+    resetRecentParseFailureLogsEvent,
     extractPromptChatFromPayloadEvent: extractPromptChatFromPayloadModuleEvent,
     handlePromptReadyEvent,
     handleGenerationEndedEvent,
+    resetAssistantProcessedStateEvent,
     clearDiceMetaEventState,
     sanitizeCurrentChatEventBlocksEvent,
     sweepTimeoutFailuresEvent,
@@ -410,6 +438,7 @@ export function registerEventHooksEvent(): void {
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     reconcilePendingRoundWithCurrentChatEvent,
     enhanceInteractiveTriggersInDomEvent,
+    enhanceAssistantRawSourceButtonsEvent,
   });
 }
 
@@ -418,7 +447,8 @@ export function registerDebugCommandEvent(): void {
   registerDebugCommandModuleEvent({
     SlashCommandParser: slashCommandRuntime.parser,
     SlashCommand: slashCommandRuntime.command,
-    getDiceMeta: getDiceMetaStoreEvent,
+    getLastBaseRollEvent: getLastBaseRollStoreEvent,
+    getLastBaseRollTotalEvent: getLastBaseRollTotalStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     escapeHtmlEvent: escapeHtmlCoreEvent,
     appendToConsoleEvent: appendToConsoleCoreEvent,

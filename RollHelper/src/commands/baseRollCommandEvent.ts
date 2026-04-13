@@ -1,8 +1,9 @@
 import { buildRollCommandHelpTemplateEvent } from "../templates/helpTemplates";
 import type { DiceResult } from "../types/diceEvent";
-import type { BlindGuidanceEvent, DiceMetaEvent, DicePluginSettingsEvent } from "../types/eventDomainEvent";
+import type { DiceMetaEvent, DicePluginSettingsEvent } from "../types/eventDomainEvent";
 import { normalizeBlindGuidanceEvent, resolveNatStateEvent } from "../events/passiveBlindEvent";
 import {
+  appendBlindHistoryFromGuidanceEvent,
   buildAssistantFloorKeyEvent,
   buildBlindGuidanceDedupKeyEvent,
   canEnqueueBlindGuidanceEvent,
@@ -10,28 +11,37 @@ import {
   isBlindSkillAllowedEvent,
 } from "../events/roundEvent";
 
-type DiceMetaLikeEvent = {
-  last?: DiceResult;
-  lastTotal?: number;
-};
-
 export interface BaseRollCommandDepsEvent {
   registerMacro: (name: string, fn: () => string) => void;
   SlashCommandParser: any;
   SlashCommand: any;
   SlashCommandArgument: any;
   ARGUMENT_TYPE: any;
-  getDiceMeta: () => DiceMetaLikeEvent;
+  getLastBaseRollEvent: () => DiceResult | undefined;
+  getLastBaseRollTotalEvent: () => number | undefined;
   getDiceMetaEvent: () => DiceMetaEvent;
   getSettingsEvent: () => DicePluginSettingsEvent;
   rollDiceEvent: (exprRaw: string) => Promise<DiceResult>;
   saveLastRoll: (result: DiceResult) => void;
   buildResultMessage: (result: DiceResult) => string;
-  buildBlindResultMessage: (title: string) => string;
   appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
   resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number;
   createIdEvent: (prefix: string) => string;
   saveMetadataSafeEvent: () => void;
+  appendBlindHistoryRecordEvent: (item: {
+    rollId: string;
+    roundId?: string;
+    eventId: string;
+    eventTitle: string;
+    skill: string;
+    diceExpr: string;
+    targetLabel: string;
+    rolledAt: number;
+    source: "manual_roll" | "blind_manual_roll" | "ai_auto_roll" | "passive_check" | "timeout_auto_fail";
+    origin?: "slash_broll" | "event_blind" | "interactive_blind";
+    sourceAssistantMsgId?: string;
+    note?: string;
+  }) => void;
   playDiceRevealOnlyEvent?: () => Promise<void>;
 }
 
@@ -44,17 +54,18 @@ export function registerBaseMacrosAndCommandsEvent(
     SlashCommand,
     SlashCommandArgument,
     ARGUMENT_TYPE,
-    getDiceMeta,
+    getLastBaseRollEvent,
+    getLastBaseRollTotalEvent,
     getDiceMetaEvent,
     getSettingsEvent,
     rollDiceEvent,
     saveLastRoll,
     buildResultMessage,
-    buildBlindResultMessage,
     appendToConsoleEvent,
     resolveSkillModifierBySkillNameEvent,
     createIdEvent,
     saveMetadataSafeEvent,
+    appendBlindHistoryRecordEvent,
     playDiceRevealOnlyEvent,
   } = deps;
 
@@ -62,19 +73,19 @@ export function registerBaseMacrosAndCommandsEvent(
 
   if (!globalRef.__stRollBaseMacrosRegisteredEvent) {
     registerMacro("lastRollTotal", () => {
-      const meta = getDiceMeta();
-      if (meta.lastTotal == null) {
+      const total = getLastBaseRollTotalEvent();
+      if (total == null) {
         return "尚未掷骰，请先使用 /roll";
       }
-      return String(meta.lastTotal);
+      return String(total);
     });
 
     registerMacro("lastRoll", () => {
-      const meta = getDiceMeta();
-      if (!meta.last) {
+      const lastRoll = getLastBaseRollEvent();
+      if (!lastRoll) {
         return "尚未掷骰，请先使用 /roll";
       }
-      return JSON.stringify(meta.last, null, 2);
+      return JSON.stringify(lastRoll, null, 2);
     });
     globalRef.__stRollBaseMacrosRegisteredEvent = true;
   }
@@ -187,38 +198,39 @@ export function registerBaseMacrosAndCommandsEvent(
           const natState = resolveNatStateEvent(result.rolls, Number(result.sides) || 0);
           const total = Number(result.total || 0);
           const now = Date.now();
+          const blindItem = normalizeBlindGuidanceEvent({
+            rollId: createIdEvent("broll"),
+            eventTitle: skillName ? `暗骰【${skillName}】` : `暗骰【${expr}】`,
+            skill: skillName || "未指定",
+            diceExpr: expr,
+            total,
+            success: null,
+            resultGrade: natState === "nat20" ? "critical_success" : natState === "nat1" ? "critical_failure" : total >= 10 ? "success" : "failure",
+            natState,
+            rolledAt: now,
+            source: "blind_manual_roll",
+            roundId: round.roundId,
+            sourceAssistantMsgId: sourceAssistantMsgId || undefined,
+            sourceFloorKey,
+            origin: "slash_broll",
+            createdAt: now,
+            consumed: false,
+            dedupeKey,
+          });
           const enqueueResult = enqueueBlindGuidanceSafeEvent({
             meta,
             settings,
             round,
-            item:
-            normalizeBlindGuidanceEvent({
-              rollId: createIdEvent("broll"),
-              eventTitle: skillName ? `暗骰【${skillName}】` : `暗骰【${expr}】`,
-              skill: skillName || "未指定",
-              diceExpr: expr,
-              total,
-              success: null,
-              resultGrade: natState === "nat20" ? "critical_success" : natState === "nat1" ? "critical_failure" : total >= 10 ? "success" : "failure",
-              natState,
-              rolledAt: now,
-              source: "blind_manual_roll",
-              roundId: round.roundId,
-              sourceAssistantMsgId: sourceAssistantMsgId || undefined,
-              sourceFloorKey,
-              origin: "slash_broll",
-              createdAt: now,
-              consumed: false,
-              dedupeKey,
-            }),
+            item: blindItem,
             now,
           });
           if (!enqueueResult.ok) {
             appendToConsoleEvent(enqueueResult.reason || "暗骰当前无法加入叙事引导。", "warn");
             return "";
           }
+          appendBlindHistoryFromGuidanceEvent(meta, blindItem, appendBlindHistoryRecordEvent);
           saveMetadataSafeEvent();
-          appendToConsoleEvent(buildBlindResultMessage(skillName ? `暗骰 ${skillName}` : `暗骰 ${expr}`));
+          appendToConsoleEvent("暗骰已记录，可在小工具栏的“暗骰列表”中查看。");
           if (settings.blindUiWarnInConsole) {
             appendToConsoleEvent("查看暗骰真实结果会破坏跑团体验哦。", "warn");
           }

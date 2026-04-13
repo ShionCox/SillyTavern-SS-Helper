@@ -1,6 +1,7 @@
-import type { DiceMeta, DiceResult } from "../types/diceEvent";
+import type { DiceResult } from "../types/diceEvent";
 import type {
   ActiveStatusEvent,
+  BlindHistoryItemEvent,
   DiceMetaEvent,
   DicePluginSettingsEvent,
   PendingRoundEvent,
@@ -48,6 +49,7 @@ import {
 } from "../core/runtimeContextEvent";
 // 旧 V2 persistence 已移除，迁移由 SDK/db 层一次性处理
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
+import { normalizeBlindHistoryItemEvent } from "../events/roundEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
   AI_SUPPORTED_DICE_SIDES_Event,
@@ -184,6 +186,7 @@ const RUNTIME_DICE_META_Event: DiceMetaEvent = {
   pendingResultGuidanceQueue: [],
   outboundResultGuidance: undefined,
   pendingBlindGuidanceQueue: [],
+  blindHistory: [],
   outboundBlindGuidance: undefined,
   pendingPassiveDiscoveries: [],
   outboundPassiveDiscovery: undefined,
@@ -193,7 +196,7 @@ const RUNTIME_DICE_META_Event: DiceMetaEvent = {
   lastPromptUserMsgId: undefined,
   lastProcessedAssistantMsgId: undefined,
 };
-const RUNTIME_DICE_META_LEGACY_Event: DiceMeta = {};
+const BLIND_RESULTS_COLLECTION_Event = "blind_results";
 
 /**
  * 功能：解析当前聊天的结构化主键。
@@ -238,8 +241,23 @@ function normalizeChatScopedStatePayloadEvent(
   };
 }
 
-function getChatStateStoreEvent() {
-  // 旧 localStorage 聊天状态链路已彻底移除；聊天状态仅使用 SDK/db。
+/**
+ * 功能：规范化聊天级暗骰历史列表，确保字段安全且不泄露真实结果。
+ * 参数：
+ *   source：原始暗骰历史列表。
+ * 返回：
+ *   BlindHistoryItemEvent[]：可用于运行时与持久化的暗骰历史列表。
+ */
+function normalizeBlindHistoryItemsEvent(source: unknown): BlindHistoryItemEvent[] {
+  if (!Array.isArray(source)) return [];
+  return source
+    .map((item): BlindHistoryItemEvent | null => {
+      if (!item || typeof item !== "object") return null;
+      const normalized = normalizeBlindHistoryItemEvent(item as BlindHistoryItemEvent);
+      return normalized.rollId ? normalized : null;
+    })
+    .filter((item): item is BlindHistoryItemEvent => Boolean(item))
+    .slice(-200);
 }
 
 async function readChatScopedStateByKeyEvent(chatKey: string): Promise<RollHelperChatScopedStateEvent> {
@@ -255,8 +273,7 @@ async function writeChatScopedStateByKeyEvent(
   chatKey: string,
   patchOrNext:
     | Partial<RollHelperChatScopedStateEvent>
-    | ((previous: RollHelperChatScopedStateEvent) => Partial<RollHelperChatScopedStateEvent>),
-  meta?: { displayName?: string; avatarUrl?: string; roleKey?: string; updatedAt?: number }
+    | ((previous: RollHelperChatScopedStateEvent) => Partial<RollHelperChatScopedStateEvent>)
 ): Promise<RollHelperChatScopedStateEvent> {
   const fallbackSkillTableText = getSettingsEvent().skillTableText;
   const previous = await readChatScopedStateByKeyEvent(chatKey);
@@ -269,11 +286,6 @@ async function writeChatScopedStateByKeyEvent(
     fallbackSkillTableText
   );
 
-  const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
-  const parsed = parseAnyTavernChatRefEvent(chatKey, {
-    tavernInstanceId: scope?.tavernInstanceId,
-  });
-  const fallbackDisplayName = String(parsed.chatId ?? "unknown_chat").trim();
   await writeSdkPluginChatStateAsync(SDK_SETTINGS_NAMESPACE_Event, chatKey, nextPayload as unknown as Record<string, unknown>, {
     summary: {
       activeStatusCount: nextPayload.activeStatuses.length,
@@ -301,13 +313,12 @@ function persistRuntimeStateToChatScopedEvent(): void {
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
   const meta = RUNTIME_DICE_META_Event;
-  const diceMeta = RUNTIME_DICE_META_LEGACY_Event;
   void (async () => {
     try {
       await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
         ...previous,
         activeStatuses: normalizeActiveStatusesFromEvent(meta.activeStatuses),
-        lastBaseRoll: diceMeta.last ?? null,
+        lastBaseRoll: meta.lastBaseRoll ?? null,
         pendingRound: meta.pendingRound ?? null,
         summaryHistory: Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [],
       }));
@@ -324,7 +335,7 @@ function persistRuntimeStateToChatScopedEvent(): void {
       await patchSdkChatShared(chatKey, {
         signals: {
           stx_rollhelper: {
-            lastRollSummary: diceMeta.last ? `${diceMeta.last.expr} = ${diceMeta.last.total}` : null,
+            lastRollSummary: meta.lastBaseRoll ? `${meta.lastBaseRoll.expr} = ${meta.lastBaseRoll.total}` : null,
             hasPendingRound: !!meta.pendingRound,
             activeStatusCount: meta.activeStatuses.length,
           },
@@ -496,6 +507,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
     meta.pendingBlindGuidanceQueue = [];
+    meta.blindHistory = await loadBlindHistoryForChatKeyEvent(chatKey);
     meta.outboundBlindGuidance = undefined;
     meta.pendingPassiveDiscoveries = [];
     meta.outboundPassiveDiscovery = undefined;
@@ -503,9 +515,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.lastPassiveContextHash = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
-    const diceMetaLegacy = getDiceMeta();
-    diceMetaLegacy.last = state.lastBaseRoll ?? undefined;
-    diceMetaLegacy.lastTotal = state.lastBaseRoll?.total;
+    meta.lastBaseRoll = state.lastBaseRoll ?? undefined;
     let wroteSettings = false;
     if (
       settings.skillPresetStoreText !== nextSkillPresetStoreText ||
@@ -537,6 +547,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
     meta.pendingBlindGuidanceQueue = [];
+    meta.blindHistory = [];
     meta.outboundBlindGuidance = undefined;
     meta.pendingPassiveDiscoveries = [];
     meta.outboundPassiveDiscovery = undefined;
@@ -544,9 +555,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.lastPassiveContextHash = undefined;
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = undefined;
-    const diceMetaLegacy = getDiceMeta();
-    diceMetaLegacy.last = undefined;
-    diceMetaLegacy.lastTotal = undefined;
+    meta.lastBaseRoll = undefined;
 
     let wroteSettings = false;
     if (
@@ -568,14 +577,18 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
   }
 }
 
-export function getDiceMeta(): DiceMeta {
-  return RUNTIME_DICE_META_LEGACY_Event;
+export function getLastBaseRollEvent(): DiceResult | undefined {
+  return getDiceMetaEvent().lastBaseRoll;
+}
+
+export function getLastBaseRollTotalEvent(): number | undefined {
+  const result = getDiceMetaEvent().lastBaseRoll;
+  return result?.total;
 }
 
 export function saveLastRoll(result: DiceResult): void {
-  const meta = getDiceMeta();
-  meta.last = result;
-  meta.lastTotal = result.total;
+  const meta = getDiceMetaEvent();
+  meta.lastBaseRoll = result;
   saveMetadataSafeEvent();
   // 追加到 chat_plugin_records
   const chatKey = getActiveChatKeyEvent();
@@ -600,11 +613,53 @@ export function getDiceMetaEvent(): DiceMetaEvent {
   if (!Array.isArray(RUNTIME_DICE_META_Event.activeStatuses)) {
     RUNTIME_DICE_META_Event.activeStatuses = [];
   }
+  if (!Array.isArray(RUNTIME_DICE_META_Event.blindHistory)) {
+    RUNTIME_DICE_META_Event.blindHistory = [];
+  }
   return RUNTIME_DICE_META_Event;
 }
 
 export function saveMetadataSafeEvent(): void {
   persistRuntimeStateToChatScopedEvent();
+}
+
+/**
+ * 功能：向聊天级记录表追加一条暗骰历史。
+ * 参数：
+ *   item：暗骰历史条目。
+ * 返回：
+ *   Promise<void>：写入完成后结束。
+ */
+export async function appendBlindHistoryRecordEvent(item: BlindHistoryItemEvent): Promise<void> {
+  const chatKey = getActiveChatKeyEvent();
+  const normalizedItems = normalizeBlindHistoryItemsEvent([item]);
+  const normalized = normalizedItems[0];
+  if (!chatKey || !normalized?.rollId) return;
+  await appendSdkPluginChatRecord(SDK_SETTINGS_NAMESPACE_Event, chatKey, BLIND_RESULTS_COLLECTION_Event, {
+    recordId: normalized.rollId,
+    ts: normalized.rolledAt,
+    payload: normalized as unknown as Record<string, unknown>,
+  });
+}
+
+/**
+ * 功能：从聊天级记录表加载当前聊天的暗骰历史。
+ * 参数：
+ *   chatKey：目标聊天主键。
+ * 返回：
+ *   Promise<BlindHistoryItemEvent[]>：规范化后的暗骰历史列表。
+ */
+async function loadBlindHistoryForChatKeyEvent(chatKey: string): Promise<BlindHistoryItemEvent[]> {
+  if (!chatKey) return [];
+  try {
+    const rows = await querySdkPluginChatRecords(SDK_SETTINGS_NAMESPACE_Event, chatKey, BLIND_RESULTS_COLLECTION_Event, {
+      order: "asc",
+    });
+    return normalizeBlindHistoryItemsEvent(rows.map((row) => row.payload));
+  } catch (error) {
+    logger.warn(`暗骰记录装载失败，chatKey=${chatKey}`, error);
+    return [];
+  }
 }
 
 function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThemeEvent {

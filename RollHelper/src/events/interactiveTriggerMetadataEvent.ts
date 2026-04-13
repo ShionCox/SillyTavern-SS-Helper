@@ -1,12 +1,14 @@
 import type {
   DicePluginSettingsEvent,
+  EventDifficultyLevelEvent,
   InteractiveTriggerEvent,
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
+import { normalizeDifficultyLevelEvent } from "./parserEvent";
 
 export const RH_TRIGGER_METADATA_KEY_Event = "rollhelper_interactive_triggers_v1";
 
-const RH_TRIGGER_REGEX_Event = /\[{1,2}rh-trigger([^\]]*)\]{1,2}([\s\S]*?)\[{1,2}\/rh-trigger\]{1,2}/gi;
+const RH_TRIGGER_REGEX_Event = /<rh-trigger\b([^>]*)>([\s\S]*?)<\/rh-trigger>/gi;
 
 function normalizeTextEvent(value: unknown): string {
   return String(value ?? "");
@@ -19,6 +21,37 @@ function normalizeInlineTextEvent(value: unknown): string {
 function parseBooleanTextEvent(value: string): boolean {
   const normalized = normalizeInlineTextEvent(value).toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "blind";
+}
+
+/**
+ * 功能：把交互触发难度转换为提示文案。
+ * @param difficulty 交互触发难度。
+ * @returns 适合 tooltip 显示的中文难度文本。
+ */
+function normalizeDifficultyTextForTooltipEvent(
+  difficulty: EventDifficultyLevelEvent | undefined
+): string {
+  if (difficulty === "easy") return "简单";
+  if (difficulty === "hard") return "困难";
+  if (difficulty === "extreme") return "极难";
+  if (difficulty === "normal") return "普通";
+  return "";
+}
+
+/**
+ * 功能：把交互触发的动作与技能整理成更自然的中文短语。
+ * @param trigger 当前交互触发配置。
+ * @returns 适合直接展示给玩家的检定名称。
+ */
+function formatTriggerCheckNameEvent(trigger: InteractiveTriggerEvent): string {
+  const action = normalizeInlineTextEvent(trigger.action || trigger.skill || "检定");
+  const skill = normalizeInlineTextEvent(trigger.skill || trigger.action || "检定");
+  if (!action && !skill) return "检定";
+  if (!action) return skill;
+  if (!skill) return action;
+  if (action === skill) return skill;
+  if (action === "回忆") return `回忆（${skill}）`;
+  return skill;
 }
 
 function parseDefaultBlindSkillsEvent(settings?: { defaultBlindSkillsText?: string } | null): Set<string> {
@@ -50,7 +83,7 @@ function getActiveSwipeRecordEvent(message: TavernMessageEvent): Record<string, 
   return activeSwipe && typeof activeSwipe === "object" ? activeSwipe as Record<string, unknown> : null;
 }
 
-function getActiveSwipeExtraContainerEvent(
+export function getActiveSwipeExtraContainerEvent(
   message: TavernMessageEvent,
   create = false
 ): Record<string, unknown> | null {
@@ -166,6 +199,7 @@ function normalizeInteractiveTriggerEvent(input: unknown): InteractiveTriggerEve
     sourceId: normalizeInlineTextEvent(record.sourceId) || label,
     textRange: null,
     dcHint: Number.isFinite(Number(record.dcHint)) ? Math.floor(Number(record.dcHint)) : null,
+    difficulty: normalizeDifficultyLevelEvent(record.difficulty) || "normal",
     loreType: normalizeInlineTextEvent(record.loreType),
     note: normalizeInlineTextEvent(record.note),
     diceExpr: normalizeInlineTextEvent(record.diceExpr) || "1d20",
@@ -207,6 +241,7 @@ export function setMessageInteractiveTriggersEvent(
     sourceMessageId: normalizeInlineTextEvent(trigger.sourceMessageId),
     sourceId: normalizeInlineTextEvent(trigger.sourceId),
     dcHint: Number.isFinite(Number(trigger.dcHint)) ? Math.floor(Number(trigger.dcHint)) : null,
+    difficulty: normalizeDifficultyLevelEvent(trigger.difficulty) || "normal",
     note: normalizeInlineTextEvent(trigger.note),
     loreType: normalizeInlineTextEvent(trigger.loreType),
     diceExpr: normalizeInlineTextEvent(trigger.diceExpr) || "1d20",
@@ -243,21 +278,22 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
 ): {
   cleanText: string;
   triggers: InteractiveTriggerEvent[];
-  foundLegacyMarkup: boolean;
+  foundTriggerMarkup: boolean;
 } {
   const sourceMessageId = normalizeInlineTextEvent(options?.sourceMessageId);
   const blindSkills = parseDefaultBlindSkillsEvent(options?.settings);
   const occurrences = new Map<string, number>();
   const triggers: InteractiveTriggerEvent[] = [];
-  let foundLegacyMarkup = false;
+  let foundTriggerMarkup = false;
 
   const cleanText = normalizeTextEvent(text).replace(RH_TRIGGER_REGEX_Event, (full, attrText, bodyText) => {
-    foundLegacyMarkup = true;
+    foundTriggerMarkup = true;
     const attrs = parseTriggerAttributesEvent(String(attrText ?? ""));
     const label = normalizeInlineTextEvent(bodyText || attrs.label || "");
     if (!label) return "";
     const skill = normalizeInlineTextEvent(attrs.skill || attrs.action || "调查");
     const action = normalizeInlineTextEvent(attrs.action || skill || "调查");
+    const difficulty = normalizeDifficultyLevelEvent(attrs.difficulty) || "normal";
     const labelKey = label.toLowerCase();
     const occurrenceIndex = occurrences.get(labelKey) ?? 0;
     occurrences.set(labelKey, occurrenceIndex + 1);
@@ -272,6 +308,7 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
       sourceId: normalizeInlineTextEvent(attrs.sourceid) || `${sourceMessageId || "msg"}:${labelKey}:${occurrenceIndex}`,
       textRange: null,
       dcHint: Number.isFinite(Number(attrs.dchint)) ? Math.floor(Number(attrs.dchint)) : null,
+      difficulty,
       loreType: normalizeInlineTextEvent(attrs.loretype),
       note: normalizeInlineTextEvent(attrs.note),
       diceExpr: normalizeInlineTextEvent(attrs.diceexpr) || "1d20",
@@ -285,7 +322,7 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
   return {
     cleanText,
     triggers,
-    foundLegacyMarkup,
+    foundTriggerMarkup,
   };
 }
 
@@ -300,21 +337,40 @@ export function sanitizeMessageInteractiveTriggersEvent(
   if (!rawText) return false;
 
   const parsed = parseInteractiveTriggerMetadataFromTextEvent(rawText, options);
-  if (!parsed.foundLegacyMarkup) return false;
+  if (!parsed.foundTriggerMarkup) return false;
 
   setActiveMessageTextEvent(message, parsed.cleanText);
   setMessageInteractiveTriggersEvent(message, parsed.triggers);
   return true;
 }
 
+/**
+ * 功能：生成交互触发的纯文本提示，优先用于不支持 HTML 的场景。
+ * @param trigger 当前交互触发配置。
+ * @returns 面向玩家的中文提示文本。
+ */
 export function buildInteractiveTriggerTooltipTextEvent(trigger: InteractiveTriggerEvent): string {
-  const action = normalizeInlineTextEvent(trigger.action || trigger.skill || "检定");
-  const skill = normalizeInlineTextEvent(trigger.skill || trigger.action || "检定");
-  const visibility = trigger.blind ? "手动暗骰" : "手动检定";
-  const head = action && skill && action !== skill ? `${action} · ${skill}` : (action || skill || "检定");
-  return `${head} · ${visibility}`;
+  const label = normalizeInlineTextEvent(trigger.label || "该线索");
+  const checkName = formatTriggerCheckNameEvent(trigger);
+  const difficulty = normalizeDifficultyTextForTooltipEvent(trigger.difficulty);
+  const visibility = trigger.blind
+    ? "点击后会进行暗骰检定，不直接公开点数，只告诉你是否通过。"
+    : "点击后会进行明骰检定，并直接显示结果。";
+  return `${label} · 可进行${checkName}${trigger.blind ? "暗骰" : "检定"}${difficulty ? ` · 难度：${difficulty}` : ""} · ${visibility}`;
 }
 
+/**
+ * 功能：生成交互触发的 HTML 提示内容。
+ * @param trigger 当前交互触发配置。
+ * @returns 可直接挂到 tooltip 的 HTML 字符串。
+ */
 export function buildInteractiveTriggerTooltipHtmlEvent(trigger: InteractiveTriggerEvent): string {
-  return `<span class="st-rh-trigger-tip">${buildInteractiveTriggerTooltipTextEvent(trigger)}</span>`;
+  const label = normalizeInlineTextEvent(trigger.label || "该线索");
+  const checkName = formatTriggerCheckNameEvent(trigger);
+  const difficulty = normalizeDifficultyTextForTooltipEvent(trigger.difficulty);
+  const visibilityTitle = trigger.blind ? "暗骰检定" : "明骰检定";
+  const visibilityDesc = trigger.blind
+    ? "不会公开显示点数，只提示是否通过。"
+    : "会公开显示点数与检定结果。";
+  return `<span class="st-rh-trigger-tip"><strong>${label}</strong><br>可进行${checkName}${trigger.blind ? "暗骰" : "检定"}<br>${visibilityTitle}：${visibilityDesc}${difficulty ? `<br>难度：${difficulty}` : ""}</span>`;
 }

@@ -875,13 +875,45 @@ export function isElementVisibleEvent(element: HTMLElement | null): boolean {
 }
 
 export function copyTextToClipboardEvent(text: string): Promise<boolean> {
-  if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+  const normalizedText = String(text ?? "");
+  if (!normalizedText) {
     return Promise.resolve(false);
   }
+  if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+    return Promise.resolve(copyTextToClipboardFallbackEvent(normalizedText));
+  }
   return navigator.clipboard
-    .writeText(text)
+    .writeText(normalizedText)
     .then(() => true)
-    .catch(() => false);
+    .catch(() => copyTextToClipboardFallbackEvent(normalizedText));
+}
+
+/**
+ * 功能：在浏览器剪贴板 API 不可用时，回退使用隐藏文本域执行复制。
+ * 参数：
+ *   text：需要复制的文本。
+ * 返回：
+ *   boolean：复制成功返回 true，否则返回 false。
+ */
+function copyTextToClipboardFallbackEvent(text: string): boolean {
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.left = "-1000px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  } catch {
+    return false;
+  }
 }
 
 export interface RenderSkillValidationErrorsDepsEvent {

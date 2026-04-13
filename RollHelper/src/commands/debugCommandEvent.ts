@@ -11,7 +11,8 @@ interface SlashCommandFactoryEvent {
 export interface DebugCommandDepsEvent {
   SlashCommandParser: SlashCommandParserEvent | null;
   SlashCommand: SlashCommandFactoryEvent | null;
-  getDiceMeta: () => unknown;
+  getLastBaseRollEvent: () => unknown;
+  getLastBaseRollTotalEvent: () => unknown;
   getDiceMetaEvent: () => unknown;
   escapeHtmlEvent: (input: string) => string;
   appendToConsoleEvent: (html: string, level?: "info" | "warn" | "error") => void;
@@ -26,7 +27,8 @@ export function registerDebugCommandEvent(deps: DebugCommandDepsEvent): void {
   const {
     SlashCommandParser,
     SlashCommand,
-    getDiceMeta,
+    getLastBaseRollEvent,
+    getLastBaseRollTotalEvent,
     getDiceMetaEvent,
     escapeHtmlEvent,
     appendToConsoleEvent,
@@ -43,9 +45,12 @@ export function registerDebugCommandEvent(deps: DebugCommandDepsEvent): void {
       namedArgumentList: [],
       unnamedArgumentList: [],
       callback: (): string => {
-        const legacy = getDiceMeta();
         const eventMeta = getDiceMetaEvent();
-        const text = JSON.stringify({ legacy, eventMeta }, null, 2);
+        const text = JSON.stringify({
+          lastBaseRoll: getLastBaseRollEvent(),
+          lastBaseRollTotal: getLastBaseRollTotalEvent(),
+          eventMeta,
+        }, null, 2);
         const msg = buildDebugTemplateEvent(escapeHtmlEvent(text));
         appendToConsoleEvent(msg);
         return "";

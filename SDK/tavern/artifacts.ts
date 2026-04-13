@@ -8,6 +8,50 @@ function isRollHelperDiceJsonEvent(body: string): boolean {
 }
 
 /**
+ * 功能：判断一段尾部文本是否像被模型打断的裸骰子事件控制块。
+ * @param body 原始尾部文本。
+ * @returns 是否命中裸控制块特征。
+ */
+function isLikelyBareDiceEventArtifactEvent(body: string): boolean {
+  const text = String(body ?? "");
+  const markers = [
+    /"type"\s*:\s*"dice_events"/i,
+    /"version"\s*:\s*"1"/i,
+    /"events"\s*:/i,
+    /"id"\s*:/i,
+    /"title"\s*:/i,
+    /"checkDice"\s*:/i,
+    /"difficulty"\s*:/i,
+    /"desc"\s*:/i,
+  ];
+  const hits = markers.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
+  return text.trim().startsWith("{") && hits >= 3;
+}
+
+/**
+ * 功能：清理正文尾部裸露的骰子事件控制块。
+ * @param raw 原始文本。
+ * @returns 清理后的文本。
+ */
+function stripBareTailDiceEventArtifactEvent(raw: string): string {
+  const text = String(raw ?? "");
+  const matches = Array.from(text.matchAll(/"type"\s*:\s*"dice_events"/gi));
+  if (matches.length <= 0) return text;
+
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const anchorIndex = Number(matches[index].index);
+    if (!Number.isFinite(anchorIndex) || anchorIndex < 0) continue;
+    const start = text.lastIndexOf("{", anchorIndex);
+    if (start < 0) continue;
+    const tail = text.slice(start);
+    if (!isLikelyBareDiceEventArtifactEvent(tail)) continue;
+    return `${text.slice(0, start).trimEnd()} `;
+  }
+
+  return text;
+}
+
+/**
  * 功能：移除 MVU 在运行期追加到正文尾部的变量更新控制块。
  * @param raw 原始文本。
  * @returns 清理后的文本。
@@ -80,7 +124,7 @@ export function stripRollHelperArtifactsEvent(raw: string): string {
     return keptLines.join("\n");
   };
 
-  return stripFencedRollJson(String(raw ?? ""))
+  return stripBareTailDiceEventArtifactEvent(stripFencedRollJson(String(raw ?? "")))
     .replace(/<pre[^>]*>[\s\S]*?"type"\s*:\s*"dice_events"[\s\S]*?<\/pre>/gi, " ")
     .replace(/<!--\s*ROLLHELPER_INTERNAL_START\s*-->[\s\S]*?<!--\s*ROLLHELPER_INTERNAL_END\s*-->/gi, " ")
     .replace(/<!--\s*ROLLHELPER_SUMMARY_START\s*-->[\s\S]*?<!--\s*ROLLHELPER_SUMMARY_END\s*-->/gi, " ");

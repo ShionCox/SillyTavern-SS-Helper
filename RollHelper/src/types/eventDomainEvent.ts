@@ -199,7 +199,13 @@ export interface PendingRoundEvent {
 export interface OutboundSummaryCacheEvent {
   userMsgId: string;
   roundId: string;
-  summaryText: string;
+  publicSummaryText: string;
+  blindSummaryText: string;
+}
+
+export interface BuiltSummaryBlocksEvent {
+  publicSummaryText: string;
+  blindSummaryText: string;
 }
 
 export interface PendingResultGuidanceEvent {
@@ -249,6 +255,21 @@ export interface BlindGuidanceEvent {
   dedupeKey?: string;
 }
 
+export interface BlindHistoryItemEvent {
+  rollId: string;
+  roundId?: string;
+  eventId: string;
+  eventTitle: string;
+  skill: string;
+  diceExpr: string;
+  targetLabel: string;
+  rolledAt: number;
+  source: EventRollSourceEvent;
+  origin?: "slash_broll" | "event_blind" | "interactive_blind";
+  sourceAssistantMsgId?: string;
+  note?: string;
+}
+
 export interface InteractiveTriggerEvent {
   triggerId: string;
   label: string;
@@ -260,6 +281,7 @@ export interface InteractiveTriggerEvent {
   occurrenceIndex?: number;
   textRange?: { start: number; end: number } | null;
   dcHint?: number | null;
+  difficulty?: EventDifficultyLevelEvent;
   loreType?: string;
   note?: string;
   diceExpr?: string;
@@ -354,11 +376,14 @@ export interface RoundSummarySnapshotEvent {
 export interface DiceMetaEvent {
   pendingRound?: PendingRoundEvent;
   activeStatuses?: ActiveStatusEvent[];
+  lastBaseRoll?: DiceResult;
   outboundSummary?: OutboundSummaryCacheEvent;
   pendingResultGuidanceQueue?: PendingResultGuidanceEvent[];
   outboundResultGuidance?: OutboundResultGuidanceCacheEvent;
   // 仅保留当前仍有效轮次/楼层可注入到下一次 prompt 的暗骰引导。
   pendingBlindGuidanceQueue?: BlindGuidanceEvent[];
+  // 当前聊天已发生过的暗骰历史，仅用于 UI 列表展示，不保存真实结果。
+  blindHistory?: BlindHistoryItemEvent[];
   // 当前 user prompt 已构造出的暗骰引导缓存，仅用于避免同一次 prompt 重复拼装。
   outboundBlindGuidance?: OutboundBlindGuidanceCacheEvent;
   pendingPassiveDiscoveries?: PassiveDiscoveryEvent[];
