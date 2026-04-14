@@ -119,7 +119,10 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
@@ -153,7 +156,12 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_SUMMARY_OUTCOME_ID_Event: string;
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event: string;
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
-  SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event: string;
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event: string;
+  SETTINGS_TIME_LIMIT_LOW_ID_Event: string;
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event: string;
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event: string;
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event: string;
   SETTINGS_TIME_LIMIT_ROW_ID_Event: string;
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
@@ -286,7 +294,10 @@ export function buildSettingsCardTemplateIdsEvent(
     selectionFallbackMaxPerFloorId: deps.SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
     selectionFallbackMinTextLengthId: deps.SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
     selectionFallbackMaxTextLengthId: deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
-    selectionFallbackMaxSentencesId: deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+    selectionFallbackMaxSegmentsId: deps.SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event,
+    selectionFallbackLongSentenceThresholdId: deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event,
+    selectionFallbackMaxTotalLengthId: deps.SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event,
+    selectionFallbackLongSentenceSplitPunctuationId: deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event,
     selectionFallbackSingleActionId: deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
     selectionFallbackSingleSkillId: deps.SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
     selectionFallbackDebugInfoId: deps.SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
@@ -320,7 +331,12 @@ export function buildSettingsCardTemplateIdsEvent(
     includeOutcomeSummaryId: deps.SETTINGS_SUMMARY_OUTCOME_ID_Event,
     listOutcomePreviewId: deps.SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event,
     timeLimitEnabledId: deps.SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
-    timeLimitMinId: deps.SETTINGS_TIME_LIMIT_MIN_ID_Event,
+    timeLimitAiUrgencyHintId: deps.SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event,
+    timeLimitDefaultUrgencyId: deps.SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event,
+    timeLimitLowSecondsId: deps.SETTINGS_TIME_LIMIT_LOW_ID_Event,
+    timeLimitNormalSecondsId: deps.SETTINGS_TIME_LIMIT_NORMAL_ID_Event,
+    timeLimitHighSecondsId: deps.SETTINGS_TIME_LIMIT_HIGH_ID_Event,
+    timeLimitCriticalSecondsId: deps.SETTINGS_TIME_LIMIT_CRITICAL_ID_Event,
     timeLimitRowId: deps.SETTINGS_TIME_LIMIT_ROW_ID_Event,
     skillEnabledId: deps.SETTINGS_SKILL_ENABLED_ID_Event,
     skillEditorWrapId: deps.SETTINGS_SKILL_EDITOR_WRAP_ID_Event,

@@ -32,14 +32,18 @@ type ResolvedTriggerStateEvent = {
   feedbackText?: string;
 };
 
-export type SelectionFallbackSentenceAnalysisEvent = {
-  completeSentences: number;
+export type SelectionFallbackSegmentAnalysisEvent = {
+  normalizedText: string;
+  totalLength: number;
+  mainSentenceCount: number;
+  splitLongSentenceCount: number;
   fragmentCount: number;
   totalSegments: number;
-  normalizedText: string;
+  exceededByLength: boolean;
   segments: Array<{
     text: string;
-    kind: "complete" | "fragment";
+    kind: "main_sentence" | "split_long_sentence" | "fragment";
+    length: number;
   }>;
 };
 
@@ -311,6 +315,74 @@ function resolveMessageRecordEvent(
   return (chat[messageIndex] as TavernMessageEvent) ?? null;
 }
 
+function isAssistantMessageLikeEvent(message: TavernMessageEvent | null | undefined): boolean {
+  if (!message || typeof message !== "object") return false;
+  if (message.is_user === true || message.is_system === true) return false;
+  const role = normalizeInlineTextEvent(message.role).toLowerCase();
+  if (role) return role === "assistant";
+  return true;
+}
+
+export function resolveSelectionFallbackScopeContextEvent(
+  node: HTMLElement,
+  getLiveContextEvent: (() => { chat?: TavernMessageEvent[] | unknown } | null) | undefined
+): {
+  message: TavernMessageEvent | null;
+  sourceMessageId: string;
+  floorKey: string;
+} {
+  const message = resolveMessageRecordEvent(node, getLiveContextEvent);
+  return {
+    message,
+    sourceMessageId: buildSelectionFallbackSourceMessageIdEvent(node, message),
+    floorKey: buildSelectionFallbackFloorKeyEvent(node, message),
+  };
+}
+
+export function resolveLatestAssistantSelectionFallbackFloorKeyEvent(
+  getLiveContextEvent: (() => { chat?: TavernMessageEvent[] | unknown } | null) | undefined
+): string | null {
+  const liveCtx = getLiveContextEvent?.();
+  const chat = liveCtx?.chat;
+  if (!Array.isArray(chat)) return null;
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    const message = (chat[index] as TavernMessageEvent) ?? null;
+    if (!isAssistantMessageLikeEvent(message)) continue;
+    const floorKey = buildSelectionFallbackFloorKeyFromMessageEvent(message, index);
+    if (floorKey) return floorKey;
+  }
+  return null;
+}
+
+export function isSelectionFallbackLatestAssistantFloorAllowedEvent(
+  node: HTMLElement,
+  getLiveContextEvent: (() => { chat?: TavernMessageEvent[] | unknown } | null) | undefined
+): {
+  ok: boolean;
+  sourceMessageId: string;
+  sourceFloorKey: string;
+  latestFloorKey: string | null;
+  reason?: string;
+} {
+  const scopeContext = resolveSelectionFallbackScopeContextEvent(node, getLiveContextEvent);
+  const latestFloorKey = resolveLatestAssistantSelectionFallbackFloorKeyEvent(getLiveContextEvent);
+  if (!latestFloorKey || !scopeContext.floorKey || scopeContext.floorKey !== latestFloorKey) {
+    return {
+      ok: false,
+      sourceMessageId: scopeContext.sourceMessageId,
+      sourceFloorKey: scopeContext.floorKey,
+      latestFloorKey,
+      reason: "自由划词仅允许在最新一条 AI 回复中操作。",
+    };
+  }
+  return {
+    ok: true,
+    sourceMessageId: scopeContext.sourceMessageId,
+    sourceFloorKey: scopeContext.floorKey,
+    latestFloorKey,
+  };
+}
+
 function normalizeSelectionFallbackTextEvent(text: string): string {
   return normalizeInlineTextEvent(text).replace(/\s+/g, "");
 }
@@ -332,31 +404,104 @@ export function isMeaningfulSelectionFallbackFragmentEvent(text: string): boolea
   return !SELECTION_FALLBACK_NOISE_ONLY_REGEX_Event.test(normalized);
 }
 
-export function analyzeSelectionFallbackSentencesEvent(
-  text: string
-): SelectionFallbackSentenceAnalysisEvent {
+function escapeRegexEvent(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildLongSentenceSplitTokensEvent(punctuationText: string): string[] {
+  let raw = normalizeInlineTextEvent(punctuationText);
+  const tokens: string[] = [];
+  if (raw.includes("——")) {
+    tokens.push("——");
+    raw = raw.replace(/——/g, "");
+  }
+  for (const char of raw) {
+    if (!char.trim()) continue;
+    tokens.push(char);
+  }
+  return Array.from(new Set(tokens));
+}
+
+function buildLongSentenceSplitRegexEvent(punctuationText: string): RegExp | null {
+  const tokens = buildLongSentenceSplitTokensEvent(punctuationText);
+  if (tokens.length <= 0) return null;
+  const pattern = tokens
+    .sort((left, right) => right.length - left.length)
+    .map((token) => escapeRegexEvent(token))
+    .join("|");
+  if (!pattern) return null;
+  return new RegExp(pattern, "g");
+}
+
+function shouldSplitLongSelectionFallbackSentenceEvent(text: string, threshold: number): boolean {
+  const length = normalizeSelectionFallbackTextEvent(text).length;
+  return Number.isFinite(threshold) && threshold > 0 && length > threshold;
+}
+
+function splitLongSelectionFallbackSentenceEvent(text: string, punctuationText: string): string[] {
+  const normalized = normalizeInlineTextEvent(text);
+  const regex = buildLongSentenceSplitRegexEvent(punctuationText);
+  if (!regex) return [normalized];
+  return normalized
+    .split(regex)
+    .map((item) => normalizeInlineTextEvent(item))
+    .filter(Boolean);
+}
+
+export function analyzeSelectionFallbackSegmentsEvent(
+  text: string,
+  settings: DicePluginSettingsEvent
+): SelectionFallbackSegmentAnalysisEvent {
   const normalizedText = normalizeInlineTextEvent(text);
-  const segments: SelectionFallbackSentenceAnalysisEvent["segments"] = [];
+  const totalLength = normalizeSelectionFallbackTextEvent(text).length;
+  const segments: SelectionFallbackSegmentAnalysisEvent["segments"] = [];
   if (!normalizedText) {
     return {
-      completeSentences: 0,
+      normalizedText: "",
+      totalLength,
+      mainSentenceCount: 0,
+      splitLongSentenceCount: 0,
       fragmentCount: 0,
       totalSegments: 0,
-      normalizedText: "",
+      exceededByLength: false,
       segments,
     };
   }
 
+  let mainSentenceCount = 0;
+  let splitLongSentenceCount = 0;
+  let fragmentCount = 0;
   let cursor = 0;
   let match: RegExpExecArray | null = null;
+  const longSentenceThreshold = Number(settings.selectionFallbackLongSentenceThreshold ?? 0);
+  const splitPunctuationText = String(settings.selectionFallbackLongSentenceSplitPunctuationText ?? "");
   SELECTION_FALLBACK_SENTENCE_END_REGEX_Event.lastIndex = 0;
   while ((match = SELECTION_FALLBACK_SENTENCE_END_REGEX_Event.exec(normalizedText)) !== null) {
     const end = match.index + match[0].length;
     const segmentText = normalizedText.slice(cursor, end);
     if (isMeaningfulSelectionFallbackFragmentEvent(segmentText)) {
+      const normalizedSegment = normalizeInlineTextEvent(segmentText);
+      mainSentenceCount += 1;
+      if (shouldSplitLongSelectionFallbackSentenceEvent(normalizedSegment, longSentenceThreshold)) {
+        const splitSegments = splitLongSelectionFallbackSentenceEvent(normalizedSegment, splitPunctuationText)
+          .filter((item) => isMeaningfulSelectionFallbackFragmentEvent(item));
+        if (splitSegments.length > 1) {
+          for (const splitText of splitSegments) {
+            segments.push({
+              text: splitText,
+              kind: "split_long_sentence",
+              length: normalizeSelectionFallbackTextEvent(splitText).length,
+            });
+            splitLongSentenceCount += 1;
+          }
+          cursor = end;
+          continue;
+        }
+      }
       segments.push({
-        text: normalizeInlineTextEvent(segmentText),
-        kind: "complete",
+        text: normalizedSegment,
+        kind: "main_sentence",
+        length: normalizeSelectionFallbackTextEvent(normalizedSegment).length,
       });
     }
     cursor = end;
@@ -364,19 +509,27 @@ export function analyzeSelectionFallbackSentencesEvent(
 
   const trailingText = normalizedText.slice(cursor);
   if (isMeaningfulSelectionFallbackFragmentEvent(trailingText)) {
+    const normalizedSegment = normalizeInlineTextEvent(trailingText);
     segments.push({
-      text: normalizeInlineTextEvent(trailingText),
+      text: normalizedSegment,
       kind: "fragment",
+      length: normalizeSelectionFallbackTextEvent(normalizedSegment).length,
     });
+    fragmentCount += 1;
   }
 
-  const completeSentences = segments.filter((item) => item.kind === "complete").length;
-  const fragmentCount = segments.filter((item) => item.kind === "fragment").length;
+  const maxTotalLength = Number(settings.selectionFallbackMaxTotalLength ?? 0);
+  const exceededByLength = Number.isFinite(maxTotalLength) && maxTotalLength > 0
+    ? totalLength > maxTotalLength
+    : false;
   return {
-    completeSentences,
-    fragmentCount,
-    totalSegments: completeSentences + fragmentCount,
     normalizedText,
+    totalLength,
+    mainSentenceCount,
+    splitLongSentenceCount,
+    fragmentCount,
+    totalSegments: segments.length,
+    exceededByLength,
     segments,
   };
 }
@@ -386,8 +539,11 @@ export function analyzeSelectionFallbackSentencesEvent(
  * @param text 原始划词文本。
  * @returns 归一化后的有效句段数量。
  */
-export function countSelectionFallbackSentencesEvent(text: string): number {
-  return analyzeSelectionFallbackSentencesEvent(text).totalSegments;
+export function countSelectionFallbackSmartSegmentsEvent(
+  text: string,
+  settings: DicePluginSettingsEvent
+): number {
+  return analyzeSelectionFallbackSegmentsEvent(text, settings).totalSegments;
 }
 
 /**
@@ -398,7 +554,7 @@ export function countSelectionFallbackSentencesEvent(text: string): number {
 function resolveSelectionFallbackLimitModeEvent(
   settings: DicePluginSettingsEvent
 ): SelectionFallbackLimitModeEvent {
-  return settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count";
+  return settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "smart_segment";
 }
 
 function buildSelectionFallbackFloorKeyEvent(node: HTMLElement, message: TavernMessageEvent | null): string {
@@ -415,6 +571,16 @@ function buildSelectionFallbackSourceMessageIdEvent(node: HTMLElement, message: 
   const explicitId = String(message?.id ?? message?.cid ?? message?.uid ?? "").trim();
   if (explicitId) return explicitId;
   return "";
+}
+
+function buildSelectionFallbackFloorKeyFromMessageEvent(
+  message: TavernMessageEvent | null,
+  index: number
+): string | null {
+  if (Number.isFinite(index) && index >= 0) return `floor:${Math.floor(index)}`;
+  const explicitId = String(message?.id ?? message?.cid ?? message?.uid ?? "").trim();
+  if (explicitId) return `floor_msg:${explicitId}`;
+  return null;
 }
 
 function buildSelectionFallbackKeyEvent(floorKey: string, text: string): string {
@@ -503,7 +669,7 @@ function buildSelectionFallbackStatusTextEvent(args: {
   const limitMode = resolveSelectionFallbackLimitModeEvent(args.settings);
   const limitText = limitMode === "char_count"
     ? `规则：按字数 ${args.settings.selectionFallbackMinTextLength}-${args.settings.selectionFallbackMaxTextLength} 字`
-    : `规则：按句数最多 ${args.settings.selectionFallbackMaxSentences} 句`;
+    : `规则：智能句段最多 ${args.settings.selectionFallbackMaxSegments} 段（单句超 ${args.settings.selectionFallbackLongSentenceThreshold} 字补切 / 总长 ${args.settings.selectionFallbackMaxTotalLength} 字）`;
   return [
     `自由划词检定`,
     limitText,
@@ -525,7 +691,7 @@ function resolveSelectionFallbackBlockEvent(node: Node | null, scope: HTMLElemen
 function isSelectionFallbackTextAllowedEvent(
   text: string,
   settings: DicePluginSettingsEvent
-): { ok: boolean; reason?: string } {
+): { ok: boolean; reason?: string; analysis?: SelectionFallbackSegmentAnalysisEvent } {
   const raw = String(text ?? "");
   const normalized = normalizeInlineTextEvent(raw);
   const compact = normalizeSelectionFallbackTextEvent(raw);
@@ -549,17 +715,25 @@ function isSelectionFallbackTextAllowedEvent(
     return { ok: true };
   }
 
-  const analysis = analyzeSelectionFallbackSentencesEvent(raw);
+  const analysis = analyzeSelectionFallbackSegmentsEvent(raw, settings);
   if (analysis.totalSegments <= 0) {
-    return { ok: false, reason: "当前选区没有可识别的有效句段。" };
+    return { ok: false, reason: "当前选区没有可识别的有效句段。", analysis };
   }
-  if (analysis.totalSegments > settings.selectionFallbackMaxSentences) {
+  if (analysis.totalSegments > settings.selectionFallbackMaxSegments) {
     return {
       ok: false,
-      reason: `当前为按句数限制，检测到 ${analysis.totalSegments} 个句段，最多允许 ${settings.selectionFallbackMaxSentences} 句。`,
+      reason: `当前为智能句段限制，检测到 ${analysis.totalSegments} 个句段，最多允许 ${settings.selectionFallbackMaxSegments} 段。`,
+      analysis,
     };
   }
-  return { ok: true };
+  if (analysis.totalLength > settings.selectionFallbackMaxTotalLength) {
+    return {
+      ok: false,
+      reason: `当前为智能句段限制，文本长度为 ${analysis.totalLength} 字，最多允许 ${settings.selectionFallbackMaxTotalLength} 字。`,
+      analysis,
+    };
+  }
+  return { ok: true, analysis };
 }
 
 function isSelectionFallbackRangeAllowedEvent(
@@ -1212,7 +1386,10 @@ export function getSelectionFallbackRemainingSummaryEvent(
   limitMode: SelectionFallbackLimitModeEvent;
   minTextLength: number;
   maxTextLength: number;
-  maxSentences: number;
+  maxSegments: number;
+  longSentenceThreshold: number;
+  maxTotalLength: number;
+  splitPunctuationText: string;
 } {
   const safeMeta = meta ?? {};
   const roundId = resolveSelectionFallbackRoundIdEvent(safeMeta as DiceMetaEvent);
@@ -1223,7 +1400,10 @@ export function getSelectionFallbackRemainingSummaryEvent(
     limitMode: resolveSelectionFallbackLimitModeEvent(settings),
     minTextLength: Number(settings.selectionFallbackMinTextLength ?? 1),
     maxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
-    maxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
+    maxSegments: Number(settings.selectionFallbackMaxSegments ?? 2),
+    longSentenceThreshold: Number(settings.selectionFallbackLongSentenceThreshold ?? 26),
+    maxTotalLength: Number(settings.selectionFallbackMaxTotalLength ?? 45),
+    splitPunctuationText: String(settings.selectionFallbackLongSentenceSplitPunctuationText ?? ""),
   };
 }
 
@@ -1316,12 +1496,19 @@ export function bindInteractiveTriggerDomEventsEvent(
       if (!settings.enableSelectionFallbackTriggers) return;
       const rangeCheck = isSelectionFallbackRangeAllowedEvent(selection);
       if (!rangeCheck.scopeNode) return;
+      const latestFloorCheck = isSelectionFallbackLatestAssistantFloorAllowedEvent(
+        rangeCheck.scopeNode,
+        deps.getLiveContextEvent
+      );
+      if (!latestFloorCheck.ok) {
+        deps.appendToConsoleEvent(latestFloorCheck.reason || "自由划词当前不可用。", "warn");
+        return;
+      }
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
       const rect = range?.getBoundingClientRect();
       if (!rect || (!rect.width && !rect.height)) return;
-      const message = resolveMessageRecordEvent(rangeCheck.scopeNode, deps.getLiveContextEvent);
-      const sourceMessageId = buildSelectionFallbackSourceMessageIdEvent(rangeCheck.scopeNode, message);
-      const sourceFloorKey = buildSelectionFallbackFloorKeyEvent(rangeCheck.scopeNode, message);
+      const sourceMessageId = latestFloorCheck.sourceMessageId;
+      const sourceFloorKey = latestFloorCheck.sourceFloorKey;
       const rawText = String(selection?.toString() ?? "");
       const text = normalizeInlineTextEvent(rawText);
       const meta = deps.getDiceMetaEvent?.() ?? {
@@ -1349,10 +1536,22 @@ export function bindInteractiveTriggerDomEventsEvent(
           sourceFloorKey,
           sourceMessageId,
           roundId,
+          limitMode: resolveSelectionFallbackLimitModeEvent(settings),
           rangeAllowed: rangeCheck.ok,
           textAllowed: textCheck.ok,
           canUse: canUseResult.ok,
           readonlyReasons,
+          segmentAnalysis: textCheck.analysis
+            ? {
+                totalLength: textCheck.analysis.totalLength,
+                mainSentenceCount: textCheck.analysis.mainSentenceCount,
+                splitLongSentenceCount: textCheck.analysis.splitLongSentenceCount,
+                fragmentCount: textCheck.analysis.fragmentCount,
+                totalSegments: textCheck.analysis.totalSegments,
+                exceededByLength: textCheck.analysis.exceededByLength,
+                segments: textCheck.analysis.segments,
+              }
+            : undefined,
         });
       }
       if (!text && readonlyReasons.length <= 0) return;

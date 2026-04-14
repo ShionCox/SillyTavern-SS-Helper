@@ -43,7 +43,10 @@ export const SETTINGS_SELECTION_FALLBACK_MAX_PER_ROUND_ID_Event = "st-roll-setti
 export const SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event = "st-roll-settings-Event-selection-fallback-max-per-floor";
 export const SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event = "st-roll-settings-Event-selection-fallback-min-text-length";
 export const SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event = "st-roll-settings-Event-selection-fallback-max-text-length";
-export const SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event = "st-roll-settings-Event-selection-fallback-max-sentences";
+export const SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event = "st-roll-settings-Event-selection-fallback-max-segments";
+export const SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event = "st-roll-settings-Event-selection-fallback-long-sentence-threshold";
+export const SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event = "st-roll-settings-Event-selection-fallback-max-total-length";
+export const SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event = "st-roll-settings-Event-selection-fallback-long-sentence-split-punctuation";
 export const SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event = "st-roll-settings-Event-selection-fallback-single-action";
 export const SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event = "st-roll-settings-Event-selection-fallback-single-skill";
 export const SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event = "st-roll-settings-Event-selection-fallback-debug-info";
@@ -77,7 +80,12 @@ export const SETTINGS_EXPLODE_OUTCOME_ID_Event = "st-roll-settings-Event-explode
 export const SETTINGS_SUMMARY_OUTCOME_ID_Event = "st-roll-settings-Event-summary-outcome";
 export const SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event = "st-roll-settings-Event-list-outcome-preview";
 export const SETTINGS_TIME_LIMIT_ENABLED_ID_Event = "st-roll-settings-Event-time-limit-enabled";
-export const SETTINGS_TIME_LIMIT_MIN_ID_Event = "st-roll-settings-Event-time-limit-min-seconds";
+export const SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event = "st-roll-settings-Event-time-limit-ai-urgency-hint";
+export const SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event = "st-roll-settings-Event-time-limit-default-urgency";
+export const SETTINGS_TIME_LIMIT_LOW_ID_Event = "st-roll-settings-Event-time-limit-low-seconds";
+export const SETTINGS_TIME_LIMIT_NORMAL_ID_Event = "st-roll-settings-Event-time-limit-normal-seconds";
+export const SETTINGS_TIME_LIMIT_HIGH_ID_Event = "st-roll-settings-Event-time-limit-high-seconds";
+export const SETTINGS_TIME_LIMIT_CRITICAL_ID_Event = "st-roll-settings-Event-time-limit-critical-seconds";
 export const SETTINGS_TIME_LIMIT_ROW_ID_Event = "st-roll-settings-Event-time-limit-row";
 export const SETTINGS_SKILL_ENABLED_ID_Event = "st-roll-settings-Event-skill-enabled";
 export const SETTINGS_SKILL_EDITOR_WRAP_ID_Event = "st-roll-settings-Event-skill-editor-wrap";
@@ -210,7 +218,10 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
@@ -244,7 +255,12 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_SUMMARY_OUTCOME_ID_Event,
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event,
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
-  SETTINGS_TIME_LIMIT_MIN_ID_Event,
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event,
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event,
+  SETTINGS_TIME_LIMIT_LOW_ID_Event,
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event,
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event,
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event,
   SETTINGS_TIME_LIMIT_ROW_ID_Event,
   SETTINGS_COMPATIBILITY_MODE_ID_Event,
   SETTINGS_REMOVE_ROLLJSON_ID_Event,
@@ -328,7 +344,10 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
@@ -362,7 +381,12 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_SUMMARY_OUTCOME_ID_Event,
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event,
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
-  SETTINGS_TIME_LIMIT_MIN_ID_Event,
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event,
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event,
+  SETTINGS_TIME_LIMIT_LOW_ID_Event,
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event,
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event,
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event,
   SETTINGS_COMPATIBILITY_MODE_ID_Event,
   SETTINGS_REMOVE_ROLLJSON_ID_Event,
   SETTINGS_STRIP_INTERNAL_ID_Event,
@@ -417,7 +441,10 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event,
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event,
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event,
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event,
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event,
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event,
@@ -450,7 +477,12 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_SUMMARY_OUTCOME_ID_Event,
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event,
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event,
-  SETTINGS_TIME_LIMIT_MIN_ID_Event,
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event,
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event,
+  SETTINGS_TIME_LIMIT_LOW_ID_Event,
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event,
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event,
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event,
   SETTINGS_TIME_LIMIT_ROW_ID_Event,
   SETTINGS_SKILL_ENABLED_ID_Event,
   SETTINGS_SKILL_MODAL_ID_Event,
@@ -504,8 +536,6 @@ export const DEFAULT_SKILL_PRESET_TABLE_Event: Record<string, number> = {
   "知识": 2,
 };
 export const DEFAULT_SKILL_PRESET_TABLE_TEXT_Event = JSON.stringify(DEFAULT_SKILL_PRESET_TABLE_Event, null, 2);
-export const ISO_8601_DURATION_REGEX_Event =
-  /^P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/i;
 export const RULE_TEXT_MODE_VERSION_Event = 2;
 export const DEFAULT_RULE_TEXT_Event = "";
 export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
@@ -530,16 +560,24 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   includeOutcomeInSummary: true,
   showOutcomePreviewInListCard: false,
   enableTimeLimit: true,
-  minTimeLimitSeconds: 10,
+  enableAiUrgencyHint: true,
+  timeLimitDefaultUrgency: "normal",
+  timeLimitUrgencyLowSeconds: 45,
+  timeLimitUrgencyNormalSeconds: 30,
+  timeLimitUrgencyHighSeconds: 15,
+  timeLimitUrgencyCriticalSeconds: 8,
   enableSkillSystem: true,
   enableInteractiveTriggers: true,
   enableSelectionFallbackTriggers: true,
-  selectionFallbackLimitMode: "sentence_count",
+  selectionFallbackLimitMode: "smart_segment",
   selectionFallbackMaxPerRound: 3,
   selectionFallbackMaxPerFloor: 2,
   selectionFallbackMinTextLength: 2,
   selectionFallbackMaxTextLength: 10,
-  selectionFallbackMaxSentences: 2,
+  selectionFallbackMaxSegments: 2,
+  selectionFallbackLongSentenceThreshold: 26,
+  selectionFallbackMaxTotalLength: 45,
+  selectionFallbackLongSentenceSplitPunctuationText: "，,、：",
   selectionFallbackSingleAction: "调查",
   selectionFallbackSingleSkill: "调查",
   enableSelectionFallbackDebugInfo: false,

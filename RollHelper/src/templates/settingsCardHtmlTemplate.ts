@@ -329,26 +329,99 @@ export function buildSettingsCardHtmlTemplateEvent(
           ${buildCheckboxItemEvent(
             ids.timeLimitEnabledId,
             "启用事件时限",
-            "事件有倒计时，超时按失败处理。",
+            "仅手动检定会显示倒计时；自动检定默认不限时。",
             "time limit timeout",
             "开启事件倒计时。",
             )}
 
-          <div id="${ids.timeLimitRowId}" class="st-roll-item st-roll-search-item" data-st-roll-search="minimum time limit seconds">
-            <div class="st-roll-item-main">
-              <div class="st-roll-item-title">最短时限（秒）</div>
-              <div class="st-roll-item-desc">AI 给的时限太短时，用这个最小值。</div>
+          ${buildCheckboxItemEvent(
+            ids.timeLimitAiUrgencyHintId,
+            "允许 AI 提示紧张程度",
+            "AI 只可提示 none/low/normal/high/critical，最终秒数仍由系统映射决定。",
+            "ai urgency hint time limit",
+            "开启后，AI 可为手动检定建议紧张程度。",
+            )}
+
+          <div id="${ids.timeLimitRowId}" class="st-roll-search-item" data-st-roll-search="time limit urgency mapping seconds">
+            <div class="st-roll-item">
+              <div class="st-roll-item-main">
+                <div class="st-roll-item-title">默认紧张程度</div>
+                <div class="st-roll-item-desc">当 AI 未给出可用紧张程度，或你关闭 AI 紧张提示时，手动检定会使用这个默认值。</div>
+              </div>
+              <div class="st-roll-row">
+                ${buildSharedSelectField({
+                  id: ids.timeLimitDefaultUrgencyId,
+                  value: "normal",
+                  containerClassName: "stx-shared-select-flex-220",
+                  options: [
+                    { value: "none", label: "无时限" },
+                    { value: "low", label: "低" },
+                    { value: "normal", label: "普通" },
+                    { value: "high", label: "高" },
+                    { value: "critical", label: "极高" },
+                  ],
+                })}
+              </div>
             </div>
-            <div class="st-roll-row">
-              ${buildSharedInputField({
-                id: ids.timeLimitMinId,
-                type: "number",
-                attributes: {
-                  min: 1,
-                  step: 1,
-                  "data-tip": "设置最短倒计时秒数。",
-                },
-              })}
+
+            <div class="st-roll-item st-roll-search-item" data-st-roll-search="time limit urgency seconds low normal high critical">
+              <div class="st-roll-item-main">
+                <div class="st-roll-item-title">紧张程度秒数映射</div>
+                <div class="st-roll-item-desc">系统会把手动检定的紧张程度映射成固定秒数，AI 不再直接决定具体几秒。</div>
+              </div>
+              <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+                ${buildSharedInputField({
+                  id: ids.timeLimitLowSecondsId,
+                  type: "number",
+                  className: "stx-shared-input-flex-120",
+                  attributes: {
+                    min: 1,
+                    step: 1,
+                    "data-tip": "设置 low 紧张程度对应的秒数。",
+                    placeholder: "低",
+                  },
+                })}
+                ${buildSharedInputField({
+                  id: ids.timeLimitNormalSecondsId,
+                  type: "number",
+                  className: "stx-shared-input-flex-120",
+                  attributes: {
+                    min: 1,
+                    step: 1,
+                    "data-tip": "设置 normal 紧张程度对应的秒数。",
+                    placeholder: "普通",
+                  },
+                })}
+                ${buildSharedInputField({
+                  id: ids.timeLimitHighSecondsId,
+                  type: "number",
+                  className: "stx-shared-input-flex-120",
+                  attributes: {
+                    min: 1,
+                    step: 1,
+                    "data-tip": "设置 high 紧张程度对应的秒数。",
+                    placeholder: "高",
+                  },
+                })}
+                ${buildSharedInputField({
+                  id: ids.timeLimitCriticalSecondsId,
+                  type: "number",
+                  className: "stx-shared-input-flex-120",
+                  attributes: {
+                    min: 1,
+                    step: 1,
+                    "data-tip": "设置 critical 紧张程度对应的秒数。",
+                    placeholder: "极高",
+                  },
+                })}
+              </div>
+            </div>
+
+            <div class="st-roll-item">
+              <div class="st-roll-item-main">
+                <div class="st-roll-item-title">说明</div>
+                <div class="st-roll-item-desc">auto 事件始终不限时；manual 事件仅在启用时限系统且紧张程度不为 none 时显示倒计时。</div>
+              </div>
             </div>
           </div>
 
@@ -713,23 +786,23 @@ export function buildSettingsCardHtmlTemplateEvent(
           ${buildCheckboxItemEvent(
             ids.selectionFallbackEnabledId,
             "启用自由划词兜底检定",
-            "允许玩家对未被 AI 标记为 rh-trigger 的正文片段发起有限次数的兜底调查。默认开启，且默认按句数限制；句数会统计完整句和有意义残片。",
+            "允许玩家对未被 AI 标记为 rh-trigger 的正文片段发起有限次数的兜底调查。默认开启，且默认按智能句段限制；会统计完整句、长句补切与残片。",
             "selection fallback trigger short phrase sentence limit",
             "开启后，自由划词仅作为有限次数的兜底调查入口。"
             )}
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback limit mode sentence char count">
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback limit mode smart segment char count">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">自由划词限制模式</div>
-              <div class="st-roll-item-desc">二选一生效。按字数限制时使用整段长度；按句数限制时会统计完整句和有意义残片，默认最多两句。</div>
+              <div class="st-roll-item-desc">二选一生效。按字数限制时使用整段长度；智能句段会优先按完整句统计，长句按逗号补切，并叠加总长度上限。</div>
             </div>
             <div class="st-roll-row">
               ${buildSharedSelectField({
                 id: ids.selectionFallbackLimitModeId,
-                value: "sentence_count",
+                value: "smart_segment",
                 containerClassName: "stx-shared-select-flex-220",
                 options: [
-                  { value: "sentence_count", label: "按句数限制" },
+                  { value: "smart_segment", label: "智能句段" },
                   { value: "char_count", label: "按字数限制" },
                 ],
               })}
@@ -803,19 +876,72 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max sentences sentence count punctuation">
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max segments smart segment">
             <div class="st-roll-item-main">
-              <div class="st-roll-item-title">自由划词最多句数</div>
-              <div class="st-roll-item-desc">仅在“按句数限制”模式下生效，会按完整句与有意义残片统计有效句段数量。</div>
+              <div class="st-roll-item-title">自由划词最大句段数</div>
+              <div class="st-roll-item-desc">仅在“智能句段”模式下生效，限制完整句 + 长句补切 + 残片的总句段数量。</div>
             </div>
             <div class="st-roll-row">
               ${buildSharedInputField({
-                id: ids.selectionFallbackMaxSentencesId,
+                id: ids.selectionFallbackMaxSegmentsId,
                 type: "number",
                 attributes: {
                   min: 1,
                   step: 1,
-                  "data-tip": "设置按句数限制时允许的最大句数。",
+                  "data-tip": "设置智能句段模式下允许的最大句段数。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback long sentence threshold smart segment">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">长句补切阈值</div>
+              <div class="st-roll-item-desc">仅在“智能句段”模式下生效，单句超过该长度后会按逗号等标点补切。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackLongSentenceThresholdId,
+                type: "number",
+                attributes: {
+                  min: 6,
+                  step: 1,
+                  "data-tip": "设置单句超过多少字后启用逗号补切。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max total length smart segment">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">自由划词最大总长度</div>
+              <div class="st-roll-item-desc">仅在“智能句段”模式下生效，用于拦截少句数但过长的叙事段。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackMaxTotalLengthId,
+                type: "number",
+                attributes: {
+                  min: 10,
+                  step: 1,
+                  "data-tip": "设置智能句段模式下允许的最大总长度。",
+                },
+              })}
+            </div>
+          </div>
+
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback long sentence split punctuation smart segment">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">长句补切标点</div>
+              <div class="st-roll-item-desc">仅在“智能句段”模式下生效，用于配置长句补切的标点列表。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedInputField({
+                id: ids.selectionFallbackLongSentenceSplitPunctuationId,
+                type: "text",
+                attributes: {
+                  "data-tip": "设置长句补切标点，例如：，,、：",
+                  placeholder: "，,、：",
                 },
               })}
             </div>

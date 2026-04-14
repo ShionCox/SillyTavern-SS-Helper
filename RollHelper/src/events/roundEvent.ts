@@ -31,7 +31,7 @@ import {
   normalizeBlindGuidanceEvent,
   resolveNatStateEvent,
 } from "./passiveBlindEvent";
-import { resolveEventThresholdEvent } from "./parserEvent";
+import { resolveEventThresholdEvent, resolveEventTimeLimitByUrgencyEvent } from "./parserEvent";
 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
@@ -1258,8 +1258,7 @@ export interface EnsureRoundEventTimersSyncedDepsEvent {
     raw: any,
     scope?: DiceEventSpecEvent["scope"]
   ) => { targetType: DiceEventSpecEvent["targetType"]; targetName?: string; targetLabel: string };
-  parseIsoDurationToMsEvent: (raw: string) => number | null;
-  applyTimeLimitPolicyMsEvent: (durationMs: number | null, settings: DicePluginSettingsEvent) => number | null;
+  resolveEventTimeLimitByUrgencyEvent: typeof resolveEventTimeLimitByUrgencyEvent;
 }
 
 export function ensureRoundEventTimersSyncedEvent(
@@ -1282,25 +1281,27 @@ export function ensureRoundEventTimersSyncedEvent(
       event.targetName = resolvedTarget.targetName;
       event.targetLabel = resolvedTarget.targetLabel;
     }
-    const parsedDurationMs =
-      typeof event.timeLimitMs === "number" && Number.isFinite(event.timeLimitMs)
-        ? Math.max(0, event.timeLimitMs)
-        : deps.parseIsoDurationToMsEvent(event.timeLimit || "");
-    const durationMs = deps.applyTimeLimitPolicyMsEvent(parsedDurationMs, settings);
-    event.timeLimitMs = durationMs;
+    const resolvedTimeLimit = deps.resolveEventTimeLimitByUrgencyEvent({
+      rollMode: event.rollMode,
+      urgency: event.urgency,
+      settings,
+    });
+    event.urgency = resolvedTimeLimit.urgency;
+    event.timeLimitMs = resolvedTimeLimit.timeLimitMs;
+    event.timeLimit = resolvedTimeLimit.timeLimit;
 
     let timer = timers[event.id];
     const existingRecord = getLatestRollRecordForEvent(round, event.id);
     if (!timer) {
       const offeredAt =
         typeof event.offeredAt === "number" && Number.isFinite(event.offeredAt) ? event.offeredAt : now;
-      const deadlineAt = durationMs == null ? null : offeredAt + durationMs;
+      const deadlineAt = resolvedTimeLimit.timeLimitMs == null ? null : offeredAt + resolvedTimeLimit.timeLimitMs;
       timer = { offeredAt, deadlineAt };
       timers[event.id] = timer;
     }
 
     if (!existingRecord) {
-      timer.deadlineAt = durationMs == null ? null : timer.offeredAt + durationMs;
+      timer.deadlineAt = resolvedTimeLimit.timeLimitMs == null ? null : timer.offeredAt + resolvedTimeLimit.timeLimitMs;
       if (timer.deadlineAt == null) delete timer.expiredAt;
     } else if (existingRecord.source === "timeout_auto_fail") {
       timer.expiredAt = existingRecord.timeoutAt ?? existingRecord.rolledAt;
@@ -1370,8 +1371,7 @@ export interface MergeEventsIntoPendingRoundDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
   getDiceMetaEvent: () => DiceMetaEvent;
   createIdEvent: (prefix: string) => string;
-  parseIsoDurationToMsEvent: (raw: string) => number | null;
-  applyTimeLimitPolicyMsEvent: (durationMs: number | null, settings: DicePluginSettingsEvent) => number | null;
+  resolveEventTimeLimitByUrgencyEvent: typeof resolveEventTimeLimitByUrgencyEvent;
   resolveEventTargetEvent: (
     raw: any,
     scope?: DiceEventSpecEvent["scope"]
@@ -1403,14 +1403,16 @@ export function mergeEventsIntoPendingRoundEvent(
     const next: DiceEventSpecEvent = { ...(previous || {}), ...incoming };
 
     if (!existingRecord) {
-      const parsedDurationMs =
-        typeof next.timeLimitMs === "number" && Number.isFinite(next.timeLimitMs)
-          ? Math.max(0, next.timeLimitMs)
-          : deps.parseIsoDurationToMsEvent(next.timeLimit || "");
-      const durationMs = deps.applyTimeLimitPolicyMsEvent(parsedDurationMs, settings);
-      next.timeLimitMs = durationMs;
+      const resolvedTimeLimit = deps.resolveEventTimeLimitByUrgencyEvent({
+        rollMode: next.rollMode,
+        urgency: next.urgency,
+        settings,
+      });
+      next.urgency = resolvedTimeLimit.urgency;
+      next.timeLimitMs = resolvedTimeLimit.timeLimitMs;
+      next.timeLimit = resolvedTimeLimit.timeLimit;
       next.offeredAt = now;
-      next.deadlineAt = durationMs == null ? null : now + durationMs;
+      next.deadlineAt = resolvedTimeLimit.timeLimitMs == null ? null : now + resolvedTimeLimit.timeLimitMs;
       timers[next.id] = { offeredAt: next.offeredAt, deadlineAt: next.deadlineAt };
     } else {
       const timer = timers[next.id];
@@ -1438,8 +1440,7 @@ export function mergeEventsIntoPendingRoundEvent(
   ensureRoundEventTimersSyncedEvent(round, {
     getSettingsEvent: deps.getSettingsEvent,
     resolveEventTargetEvent: deps.resolveEventTargetEvent,
-    parseIsoDurationToMsEvent: deps.parseIsoDurationToMsEvent,
-    applyTimeLimitPolicyMsEvent: deps.applyTimeLimitPolicyMsEvent,
+    resolveEventTimeLimitByUrgencyEvent: deps.resolveEventTimeLimitByUrgencyEvent,
   });
   if (!round.sourceAssistantMsgIds.includes(assistantMsgId)) round.sourceAssistantMsgIds.push(assistantMsgId);
   deps.saveMetadataSafeEvent();

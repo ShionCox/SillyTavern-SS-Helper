@@ -206,6 +206,7 @@ function rebuildEventAndRecordFromSnapshotEvent(
     dcReason: item.dcReason,
     rollMode: item.rollMode,
     advantageState: item.advantageState,
+    urgency: item.urgency,
     timeLimit: item.timeLimit,
     outcomes: item.outcomeKind !== "none" ? { [item.outcomeKind]: item.outcomeText } : undefined,
     sourceAssistantMsgId: item.sourceAssistantMsgId,
@@ -458,4 +459,3 @@ export function refreshAllWidgetsFromStateEvent(
 
   return result;
 }
-

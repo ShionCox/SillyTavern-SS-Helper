@@ -394,8 +394,8 @@ function buildCoreDiceProtocolBlockEvent(settings: DicePluginSettingsEvent): str
   if (settings.enableDynamicDcReason) {
     lines.push('    ,"dc_reason":"str"');
   }
-  if (settings.enableTimeLimit) {
-    lines.push('    ,"timeLimit":"PT30S"');
+  if (settings.enableTimeLimit && settings.enableAiUrgencyHint) {
+    lines.push('    ,"urgency":"none|low|normal|high|critical"');
   }
   if (settings.enableOutcomeBranches) {
     lines.push(
@@ -499,11 +499,22 @@ function buildAdvantageProtocolBlockEvent(settings: DicePluginSettingsEvent): st
   return normalizeBlockTextEvent(lines.join("\n"));
 }
 
-function buildTimeLimitProtocolBlockEvent(): string {
-  return normalizeBlockTextEvent([
+function buildTimeLimitProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const lines = [
     "【时间限制】",
-    "可填写 timeLimit，且必须不小于 <dice_runtime_policy> 给出的最小时限。",
-  ].join("\n"));
+    "不要写 timeLimit 秒数。",
+  ];
+  if (settings.enableAiUrgencyHint) {
+    lines.push("若需要时限只写 urgency。");
+    lines.push("urgency 仅允许 none|low|normal|high|critical。");
+  } else {
+    lines.push("当前不允许 AI 指定 urgency，系统会使用默认紧张程度。");
+  }
+  lines.push(
+    "auto 事件不要写 urgency，且默认不限时。",
+    "manual 事件的最终秒数由系统按 <dice_runtime_policy> 映射决定。"
+  );
+  return normalizeBlockTextEvent(lines.join("\n"));
 }
 
 function buildDcReasonProtocolBlockEvent(): string {
@@ -532,7 +543,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     settings.enableStatusSystem && settings.enableOutcomeBranches ? buildStatusProtocolBlockEvent(settings) : "",
     settings.enableExplodingDice ? buildExplodeProtocolBlockEvent(settings) : "",
     settings.enableAdvantageSystem ? buildAdvantageProtocolBlockEvent(settings) : "",
-    settings.enableTimeLimit ? buildTimeLimitProtocolBlockEvent() : "",
+    settings.enableTimeLimit ? buildTimeLimitProtocolBlockEvent(settings) : "",
     settings.enableDynamicDcReason ? buildDcReasonProtocolBlockEvent() : "",
     settings.enableNarrativeCostEnforcement ? buildNarrativeConstraintProtocolBlockEvent(settings) : "",
   ].filter(Boolean);
@@ -597,7 +608,13 @@ export function buildCompactDiceRuntimePolicyBlockEvent(
   lines.push(`outcome_branches_enabled=${settings.enableOutcomeBranches ? 1 : 0}`);
   lines.push(`explode_outcome_enabled=${settings.enableExplodeOutcomeBranch ? 1 : 0}`);
   lines.push(`time_limit_enabled=${settings.enableTimeLimit ? 1 : 0}`);
-  lines.push(`min_time_limit_seconds=${Math.max(1, Math.floor(Number(settings.minTimeLimitSeconds) || 1))}`);
+  lines.push(`ai_urgency_hint_enabled=${settings.enableAiUrgencyHint ? 1 : 0}`);
+  lines.push(`time_limit_default_urgency=${settings.timeLimitDefaultUrgency}`);
+  lines.push(`time_limit_low_seconds=${Math.max(1, Math.floor(Number(settings.timeLimitUrgencyLowSeconds) || 45))}`);
+  lines.push(`time_limit_normal_seconds=${Math.max(1, Math.floor(Number(settings.timeLimitUrgencyNormalSeconds) || 30))}`);
+  lines.push(`time_limit_high_seconds=${Math.max(1, Math.floor(Number(settings.timeLimitUrgencyHighSeconds) || 15))}`);
+  lines.push(`time_limit_critical_seconds=${Math.max(1, Math.floor(Number(settings.timeLimitUrgencyCriticalSeconds) || 8))}`);
+  lines.push("time_limit_auto_mode=none");
   lines.push(`enabled_dice=${enabledDice}`);
   lines.push(`skill_system_enabled=${settings.enableSkillSystem ? 1 : 0}`);
   lines.push(endTag);

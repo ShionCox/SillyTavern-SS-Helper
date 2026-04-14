@@ -1140,12 +1140,15 @@ export interface BindEventButtonsDepsEvent {
     blindHistoryShowFloorKey?: boolean;
     blindHistoryShowOrigin?: boolean;
     enableSelectionFallbackTriggers?: boolean;
-    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackLimitMode?: "char_count" | "smart_segment";
     selectionFallbackMaxPerRound?: number;
     selectionFallbackMaxPerFloor?: number;
     selectionFallbackMinTextLength?: number;
     selectionFallbackMaxTextLength?: number;
-    selectionFallbackMaxSentences?: number;
+    selectionFallbackMaxSegments?: number;
+    selectionFallbackLongSentenceThreshold?: number;
+    selectionFallbackMaxTotalLength?: number;
+    selectionFallbackLongSentenceSplitPunctuationText?: string;
     enableSelectionFallbackDebugInfo?: boolean;
   };
   getDiceMetaEvent: () => DiceMetaEvent;
@@ -1562,12 +1565,15 @@ function buildSelectionFallbackPreviewHtmlEvent(
   meta: DiceMetaEvent,
   settings: {
     enableSelectionFallbackTriggers?: boolean;
-    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackLimitMode?: "char_count" | "smart_segment";
     selectionFallbackMaxPerRound?: number;
     selectionFallbackMaxPerFloor?: number;
     selectionFallbackMinTextLength?: number;
     selectionFallbackMaxTextLength?: number;
-    selectionFallbackMaxSentences?: number;
+    selectionFallbackMaxSegments?: number;
+    selectionFallbackLongSentenceThreshold?: number;
+    selectionFallbackMaxTotalLength?: number;
+    selectionFallbackLongSentenceSplitPunctuationText?: string;
   }
 ): string {
   if (!settings.enableSelectionFallbackTriggers) {
@@ -1575,22 +1581,25 @@ function buildSelectionFallbackPreviewHtmlEvent(
   }
   const summary = getSelectionFallbackRemainingSummaryEvent({
     ...settings,
-    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count",
+    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "smart_segment",
     selectionFallbackMaxPerRound: Number(settings.selectionFallbackMaxPerRound ?? 3),
     selectionFallbackMaxPerFloor: Number(settings.selectionFallbackMaxPerFloor ?? 2),
     selectionFallbackMinTextLength: Number(settings.selectionFallbackMinTextLength ?? 2),
     selectionFallbackMaxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
-    selectionFallbackMaxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
+    selectionFallbackMaxSegments: Number(settings.selectionFallbackMaxSegments ?? 2),
+    selectionFallbackLongSentenceThreshold: Number(settings.selectionFallbackLongSentenceThreshold ?? 26),
+    selectionFallbackMaxTotalLength: Number(settings.selectionFallbackMaxTotalLength ?? 45),
+    selectionFallbackLongSentenceSplitPunctuationText: String(settings.selectionFallbackLongSentenceSplitPunctuationText ?? ""),
   } as any, meta);
   const limitLabel = summary.limitMode === "char_count"
     ? `按字数限制（${summary.minTextLength}-${summary.maxTextLength} 字）`
-    : `按句数限制（最多 ${summary.maxSentences} 句）`;
+    : `智能句段（最多 ${summary.maxSegments} 段 / 单句超 ${summary.longSentenceThreshold} 字补切 / 总长 ${summary.maxTotalLength} 字）`;
   return `
     <ul class="st-rh-preview-list">
       <li class="st-rh-preview-item"><strong>当前模式</strong><div>${limitLabel}</div></li>
       <li class="st-rh-preview-item"><strong>本轮剩余</strong><div>${summary.roundRemaining} / ${Number(settings.selectionFallbackMaxPerRound ?? 3)}</div></li>
       <li class="st-rh-preview-item"><strong>每楼层上限</strong><div>${Number(settings.selectionFallbackMaxPerFloor ?? 2)} 次</div></li>
-      <li class="st-rh-preview-item"><strong>说明</strong><div>自由划词仅作为 AI 漏标时的兜底入口，同一楼层同一文本只允许尝试一次。</div></li>
+      <li class="st-rh-preview-item"><strong>说明</strong><div>自由划词仅作为 AI 漏标时的兜底入口，同一楼层同一文本只允许尝试一次，且仅最新一条 AI 回复支持自由划词兜底。</div></li>
     </ul>
   `;
 }
@@ -1603,12 +1612,15 @@ function syncSelectionFallbackToolbarEvent(deps: BindEventButtonsDepsEvent): voi
   const enabled = Boolean(settings.enableSelectionFallbackTriggers);
   const summary = getSelectionFallbackRemainingSummaryEvent({
     ...settings,
-    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "sentence_count",
+    selectionFallbackLimitMode: settings.selectionFallbackLimitMode === "char_count" ? "char_count" : "smart_segment",
     selectionFallbackMaxPerRound: Number(settings.selectionFallbackMaxPerRound ?? 3),
     selectionFallbackMaxPerFloor: Number(settings.selectionFallbackMaxPerFloor ?? 2),
     selectionFallbackMinTextLength: Number(settings.selectionFallbackMinTextLength ?? 2),
     selectionFallbackMaxTextLength: Number(settings.selectionFallbackMaxTextLength ?? 10),
-    selectionFallbackMaxSentences: Number(settings.selectionFallbackMaxSentences ?? 2),
+    selectionFallbackMaxSegments: Number(settings.selectionFallbackMaxSegments ?? 2),
+    selectionFallbackLongSentenceThreshold: Number(settings.selectionFallbackLongSentenceThreshold ?? 26),
+    selectionFallbackMaxTotalLength: Number(settings.selectionFallbackMaxTotalLength ?? 45),
+    selectionFallbackLongSentenceSplitPunctuationText: String(settings.selectionFallbackLongSentenceSplitPunctuationText ?? ""),
   } as any, deps.getDiceMetaEvent());
   const label = enabled
     ? `自由划词 ${summary.roundRemaining}/${Number(settings.selectionFallbackMaxPerRound ?? 3)}`
@@ -1618,7 +1630,7 @@ function syncSelectionFallbackToolbarEvent(deps: BindEventButtonsDepsEvent): voi
     labelNode.textContent = label;
   }
   const tip = enabled
-    ? `自由划词剩余：${summary.roundRemaining}/${Number(settings.selectionFallbackMaxPerRound ?? 3)}`
+    ? `自由划词剩余：${summary.roundRemaining}/${Number(settings.selectionFallbackMaxPerRound ?? 3)}（仅最新 AI 回复可用）`
     : "自由划词兜底检定已关闭";
   button.setAttribute("data-tip", tip);
   button.setAttribute("aria-label", tip);

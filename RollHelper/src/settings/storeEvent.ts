@@ -797,9 +797,31 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   );
   bucket.eventApplyScope = bucket.eventApplyScope === "all" ? "all" : "protagonist_only";
   bucket.enableTimeLimit = bucket.enableTimeLimit !== false;
-  const minSecondsRaw = Number(bucket.minTimeLimitSeconds);
-  const minSeconds = Number.isFinite(minSecondsRaw) ? Math.floor(minSecondsRaw) : 10;
-  bucket.minTimeLimitSeconds = Math.max(1, minSeconds);
+  bucket.enableAiUrgencyHint = (source as any)?.enableAiUrgencyHint !== false;
+  const defaultUrgencyRaw = String((source as any)?.timeLimitDefaultUrgency ?? "").trim().toLowerCase();
+  bucket.timeLimitDefaultUrgency =
+    defaultUrgencyRaw === "none" ||
+    defaultUrgencyRaw === "low" ||
+    defaultUrgencyRaw === "high" ||
+    defaultUrgencyRaw === "critical"
+      ? (defaultUrgencyRaw as DicePluginSettingsEvent["timeLimitDefaultUrgency"])
+      : "normal";
+  const timeLimitUrgencyLowSecondsRaw = Number((source as any)?.timeLimitUrgencyLowSeconds);
+  bucket.timeLimitUrgencyLowSeconds = Number.isFinite(timeLimitUrgencyLowSecondsRaw)
+    ? Math.max(1, Math.floor(timeLimitUrgencyLowSecondsRaw))
+    : DEFAULT_SETTINGS_Event.timeLimitUrgencyLowSeconds;
+  const timeLimitUrgencyNormalSecondsRaw = Number((source as any)?.timeLimitUrgencyNormalSeconds);
+  bucket.timeLimitUrgencyNormalSeconds = Number.isFinite(timeLimitUrgencyNormalSecondsRaw)
+    ? Math.max(1, Math.floor(timeLimitUrgencyNormalSecondsRaw))
+    : DEFAULT_SETTINGS_Event.timeLimitUrgencyNormalSeconds;
+  const timeLimitUrgencyHighSecondsRaw = Number((source as any)?.timeLimitUrgencyHighSeconds);
+  bucket.timeLimitUrgencyHighSeconds = Number.isFinite(timeLimitUrgencyHighSecondsRaw)
+    ? Math.max(1, Math.floor(timeLimitUrgencyHighSecondsRaw))
+    : DEFAULT_SETTINGS_Event.timeLimitUrgencyHighSeconds;
+  const timeLimitUrgencyCriticalSecondsRaw = Number((source as any)?.timeLimitUrgencyCriticalSeconds);
+  bucket.timeLimitUrgencyCriticalSeconds = Number.isFinite(timeLimitUrgencyCriticalSecondsRaw)
+    ? Math.max(1, Math.floor(timeLimitUrgencyCriticalSecondsRaw))
+    : DEFAULT_SETTINGS_Event.timeLimitUrgencyCriticalSeconds;
   bucket.enableSkillSystem = bucket.enableSkillSystem !== false;
   bucket.enableInteractiveTriggers = bucket.enableInteractiveTriggers !== false;
   bucket.enableSelectionFallbackTriggers = (source as any)?.enableSelectionFallbackTriggers === true;
@@ -822,11 +844,27 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
   bucket.selectionFallbackLimitMode =
     (source as any)?.selectionFallbackLimitMode === "char_count"
       ? "char_count"
-      : "sentence_count";
-  const selectionFallbackMaxSentencesRaw = Number((source as any)?.selectionFallbackMaxSentences);
-  bucket.selectionFallbackMaxSentences = Number.isFinite(selectionFallbackMaxSentencesRaw)
-    ? Math.max(1, Math.floor(selectionFallbackMaxSentencesRaw))
-    : DEFAULT_SETTINGS_Event.selectionFallbackMaxSentences;
+      : "smart_segment";
+  const selectionFallbackMaxSegmentsRaw = Number((source as any)?.selectionFallbackMaxSegments);
+  bucket.selectionFallbackMaxSegments = Number.isFinite(selectionFallbackMaxSegmentsRaw)
+    ? Math.max(1, Math.floor(selectionFallbackMaxSegmentsRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxSegments;
+  const longSentenceThresholdRaw = Number((source as any)?.selectionFallbackLongSentenceThreshold);
+  bucket.selectionFallbackLongSentenceThreshold = Number.isFinite(longSentenceThresholdRaw)
+    ? Math.max(6, Math.floor(longSentenceThresholdRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackLongSentenceThreshold;
+  const maxTotalLengthRaw = Number((source as any)?.selectionFallbackMaxTotalLength);
+  bucket.selectionFallbackMaxTotalLength = Number.isFinite(maxTotalLengthRaw)
+    ? Math.max(10, Math.floor(maxTotalLengthRaw))
+    : DEFAULT_SETTINGS_Event.selectionFallbackMaxTotalLength;
+  const splitPunctuationText =
+    typeof (source as any)?.selectionFallbackLongSentenceSplitPunctuationText === "string"
+      ? String((source as any).selectionFallbackLongSentenceSplitPunctuationText)
+      : "";
+  bucket.selectionFallbackLongSentenceSplitPunctuationText =
+    splitPunctuationText.trim().length > 0
+      ? splitPunctuationText
+      : DEFAULT_SETTINGS_Event.selectionFallbackLongSentenceSplitPunctuationText;
   bucket.selectionFallbackSingleAction =
     typeof (source as any)?.selectionFallbackSingleAction === "string"
       && String((source as any).selectionFallbackSingleAction).trim().length > 0

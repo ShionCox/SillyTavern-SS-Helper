@@ -598,7 +598,10 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
@@ -632,7 +635,12 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_SUMMARY_OUTCOME_ID_Event: string;
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event: string;
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
-  SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event: string;
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event: string;
+  SETTINGS_TIME_LIMIT_LOW_ID_Event: string;
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event: string;
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event: string;
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event: string;
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
   SETTINGS_STRIP_INTERNAL_ID_Event: string;
@@ -656,12 +664,15 @@ export interface BindBasicSettingsInputsDepsEvent {
     aiAllowedDiceSidesText?: string;
     enableInteractiveTriggers?: boolean;
     enableSelectionFallbackTriggers?: boolean;
-    selectionFallbackLimitMode?: "char_count" | "sentence_count";
+    selectionFallbackLimitMode?: "char_count" | "smart_segment";
     selectionFallbackMaxPerRound?: number;
     selectionFallbackMaxPerFloor?: number;
     selectionFallbackMinTextLength?: number;
     selectionFallbackMaxTextLength?: number;
-    selectionFallbackMaxSentences?: number;
+    selectionFallbackMaxSegments?: number;
+    selectionFallbackLongSentenceThreshold?: number;
+    selectionFallbackMaxTotalLength?: number;
+    selectionFallbackLongSentenceSplitPunctuationText?: string;
     selectionFallbackSingleAction?: string;
     selectionFallbackSingleSkill?: string;
     enableSelectionFallbackDebugInfo?: boolean;
@@ -693,7 +704,12 @@ export interface BindBasicSettingsInputsDepsEvent {
     includeOutcomeInSummary?: boolean;
     showOutcomePreviewInListCard?: boolean;
     enableTimeLimit?: boolean;
-    minTimeLimitSeconds?: number;
+    enableAiUrgencyHint?: boolean;
+    timeLimitDefaultUrgency?: "none" | "low" | "normal" | "high" | "critical";
+    timeLimitUrgencyLowSeconds?: number;
+    timeLimitUrgencyNormalSeconds?: number;
+    timeLimitUrgencyHighSeconds?: number;
+    timeLimitUrgencyCriticalSeconds?: number;
     enableSkillSystem?: boolean;
   }) => void;
 }
@@ -756,8 +772,17 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const selectionFallbackMaxTextLengthInput = document.getElementById(
     deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event
   ) as HTMLInputElement | null;
-  const selectionFallbackMaxSentencesInput = document.getElementById(
-    deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event
+  const selectionFallbackMaxSegmentsInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLongSentenceThresholdInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxTotalLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLongSentenceSplitPunctuationInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event
   ) as HTMLInputElement | null;
   const selectionFallbackSingleActionInput = document.getElementById(
     deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event
@@ -853,8 +878,23 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const timeLimitEnabledInput = document.getElementById(
     deps.SETTINGS_TIME_LIMIT_ENABLED_ID_Event
   ) as HTMLInputElement | null;
-  const minTimeLimitInput = document.getElementById(
-    deps.SETTINGS_TIME_LIMIT_MIN_ID_Event
+  const timeLimitAiUrgencyHintInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitDefaultUrgencyInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event
+  ) as HTMLSelectElement | null;
+  const timeLimitLowSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_LOW_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitNormalSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_NORMAL_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitHighSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_HIGH_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitCriticalSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_CRITICAL_ID_Event
   ) as HTMLInputElement | null;
   const compatibilityModeInput = document.getElementById(
     deps.SETTINGS_COMPATIBILITY_MODE_ID_Event
@@ -964,7 +1004,7 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   selectionFallbackLimitModeInput?.addEventListener("change", (event) => {
     const value = String((event.target as HTMLSelectElement).value ?? "").trim() === "char_count"
       ? "char_count"
-      : "sentence_count";
+      : "smart_segment";
     deps.updateSettingsEvent({ selectionFallbackLimitMode: value });
   });
   selectionFallbackMaxPerRoundInput?.addEventListener("change", (event) => {
@@ -983,9 +1023,22 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
     deps.updateSettingsEvent({ selectionFallbackMaxTextLength: value });
   });
-  selectionFallbackMaxSentencesInput?.addEventListener("change", (event) => {
+  selectionFallbackMaxSegmentsInput?.addEventListener("change", (event) => {
     const value = Math.max(1, Math.floor(Number((event.target as HTMLInputElement).value) || 1));
-    deps.updateSettingsEvent({ selectionFallbackMaxSentences: value });
+    deps.updateSettingsEvent({ selectionFallbackMaxSegments: value });
+  });
+  selectionFallbackLongSentenceThresholdInput?.addEventListener("change", (event) => {
+    const value = Math.max(6, Math.floor(Number((event.target as HTMLInputElement).value) || 6));
+    deps.updateSettingsEvent({ selectionFallbackLongSentenceThreshold: value });
+  });
+  selectionFallbackMaxTotalLengthInput?.addEventListener("change", (event) => {
+    const value = Math.max(10, Math.floor(Number((event.target as HTMLInputElement).value) || 10));
+    deps.updateSettingsEvent({ selectionFallbackMaxTotalLength: value });
+  });
+  selectionFallbackLongSentenceSplitPunctuationInput?.addEventListener("change", (event) => {
+    deps.updateSettingsEvent({
+      selectionFallbackLongSentenceSplitPunctuationText: String((event.target as HTMLInputElement).value ?? ""),
+    });
   });
   selectionFallbackSingleActionInput?.addEventListener("change", (event) => {
     deps.updateSettingsEvent({ selectionFallbackSingleAction: String((event.target as HTMLInputElement).value ?? "") });
@@ -1148,10 +1201,42 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
     deps.updateSettingsEvent({ enableTimeLimit: value });
   });
 
-  minTimeLimitInput?.addEventListener("change", (event) => {
+  timeLimitAiUrgencyHintInput?.addEventListener("input", (event) => {
+    const value = Boolean((event.target as HTMLInputElement).checked);
+    deps.updateSettingsEvent({ enableAiUrgencyHint: value });
+  });
+
+  timeLimitDefaultUrgencyInput?.addEventListener("change", (event) => {
+    const raw = String((event.target as HTMLSelectElement).value ?? "").trim().toLowerCase();
+    const value =
+      raw === "none" || raw === "low" || raw === "high" || raw === "critical"
+        ? raw as "none" | "low" | "high" | "critical"
+        : "normal";
+    deps.updateSettingsEvent({ timeLimitDefaultUrgency: value });
+  });
+
+  timeLimitLowSecondsInput?.addEventListener("change", (event) => {
     const raw = Number((event.target as HTMLInputElement).value);
-    const value = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 10;
-    deps.updateSettingsEvent({ minTimeLimitSeconds: value });
+    const value = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 45;
+    deps.updateSettingsEvent({ timeLimitUrgencyLowSeconds: value });
+  });
+
+  timeLimitNormalSecondsInput?.addEventListener("change", (event) => {
+    const raw = Number((event.target as HTMLInputElement).value);
+    const value = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 30;
+    deps.updateSettingsEvent({ timeLimitUrgencyNormalSeconds: value });
+  });
+
+  timeLimitHighSecondsInput?.addEventListener("change", (event) => {
+    const raw = Number((event.target as HTMLInputElement).value);
+    const value = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 15;
+    deps.updateSettingsEvent({ timeLimitUrgencyHighSeconds: value });
+  });
+
+  timeLimitCriticalSecondsInput?.addEventListener("change", (event) => {
+    const raw = Number((event.target as HTMLInputElement).value);
+    const value = Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 8;
+    deps.updateSettingsEvent({ timeLimitUrgencyCriticalSeconds: value });
   });
 
   skillEnabledInput?.addEventListener("input", (event) => {
@@ -1245,12 +1330,15 @@ export interface SyncSettingsUiDepsEvent {
     aiAllowedDiceSidesText: string;
     enableInteractiveTriggers: boolean;
     enableSelectionFallbackTriggers: boolean;
-    selectionFallbackLimitMode: "char_count" | "sentence_count";
+    selectionFallbackLimitMode: "char_count" | "smart_segment";
     selectionFallbackMaxPerRound: number;
     selectionFallbackMaxPerFloor: number;
     selectionFallbackMinTextLength: number;
     selectionFallbackMaxTextLength: number;
-    selectionFallbackMaxSentences: number;
+    selectionFallbackMaxSegments: number;
+    selectionFallbackLongSentenceThreshold: number;
+    selectionFallbackMaxTotalLength: number;
+    selectionFallbackLongSentenceSplitPunctuationText: string;
     selectionFallbackSingleAction: string;
     selectionFallbackSingleSkill: string;
     enableSelectionFallbackDebugInfo: boolean;
@@ -1282,7 +1370,12 @@ export interface SyncSettingsUiDepsEvent {
     includeOutcomeInSummary: boolean;
     showOutcomePreviewInListCard: boolean;
     enableTimeLimit: boolean;
-    minTimeLimitSeconds: number;
+    enableAiUrgencyHint: boolean;
+    timeLimitDefaultUrgency: "none" | "low" | "normal" | "high" | "critical";
+    timeLimitUrgencyLowSeconds: number;
+    timeLimitUrgencyNormalSeconds: number;
+    timeLimitUrgencyHighSeconds: number;
+    timeLimitUrgencyCriticalSeconds: number;
     enableSkillSystem: boolean;
     skillTableText: string;
     skillPresetStoreText: string;
@@ -1309,7 +1402,10 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_SELECTION_FALLBACK_MAX_PER_FLOOR_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MIN_TEXT_LENGTH_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event: string;
-  SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event: string;
+  SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_SINGLE_SKILL_ID_Event: string;
   SETTINGS_SELECTION_FALLBACK_DEBUG_INFO_ID_Event: string;
@@ -1342,7 +1438,12 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_SUMMARY_OUTCOME_ID_Event: string;
   SETTINGS_LIST_OUTCOME_PREVIEW_ID_Event: string;
   SETTINGS_TIME_LIMIT_ENABLED_ID_Event: string;
-  SETTINGS_TIME_LIMIT_MIN_ID_Event: string;
+  SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event: string;
+  SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event: string;
+  SETTINGS_TIME_LIMIT_LOW_ID_Event: string;
+  SETTINGS_TIME_LIMIT_NORMAL_ID_Event: string;
+  SETTINGS_TIME_LIMIT_HIGH_ID_Event: string;
+  SETTINGS_TIME_LIMIT_CRITICAL_ID_Event: string;
   SETTINGS_TIME_LIMIT_ROW_ID_Event: string;
   SETTINGS_COMPATIBILITY_MODE_ID_Event: string;
   SETTINGS_REMOVE_ROLLJSON_ID_Event: string;
@@ -1422,8 +1523,17 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const selectionFallbackMaxTextLengthInput = document.getElementById(
     deps.SETTINGS_SELECTION_FALLBACK_MAX_TEXT_LENGTH_ID_Event
   ) as HTMLInputElement | null;
-  const selectionFallbackMaxSentencesInput = document.getElementById(
-    deps.SETTINGS_SELECTION_FALLBACK_MAX_SENTENCES_ID_Event
+  const selectionFallbackMaxSegmentsInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_SEGMENTS_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLongSentenceThresholdInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_THRESHOLD_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackMaxTotalLengthInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_MAX_TOTAL_LENGTH_ID_Event
+  ) as HTMLInputElement | null;
+  const selectionFallbackLongSentenceSplitPunctuationInput = document.getElementById(
+    deps.SETTINGS_SELECTION_FALLBACK_LONG_SENTENCE_SPLIT_PUNCTUATION_ID_Event
   ) as HTMLInputElement | null;
   const selectionFallbackSingleActionInput = document.getElementById(
     deps.SETTINGS_SELECTION_FALLBACK_SINGLE_ACTION_ID_Event
@@ -1516,8 +1626,23 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const timeLimitEnabledInput = document.getElementById(
     deps.SETTINGS_TIME_LIMIT_ENABLED_ID_Event
   ) as HTMLInputElement | null;
-  const minTimeLimitInput = document.getElementById(
-    deps.SETTINGS_TIME_LIMIT_MIN_ID_Event
+  const timeLimitAiUrgencyHintInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_AI_URGENCY_HINT_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitDefaultUrgencyInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_DEFAULT_URGENCY_ID_Event
+  ) as HTMLSelectElement | null;
+  const timeLimitLowSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_LOW_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitNormalSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_NORMAL_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitHighSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_HIGH_ID_Event
+  ) as HTMLInputElement | null;
+  const timeLimitCriticalSecondsInput = document.getElementById(
+    deps.SETTINGS_TIME_LIMIT_CRITICAL_ID_Event
   ) as HTMLInputElement | null;
   const minTimeLimitRow = document.getElementById(deps.SETTINGS_TIME_LIMIT_ROW_ID_Event) as HTMLElement | null;
   const compatibilityModeInput = document.getElementById(
@@ -1577,7 +1702,7 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (selectionFallbackLimitModeInput) {
     selectionFallbackLimitModeInput.value = settings.selectionFallbackLimitMode === "char_count"
       ? "char_count"
-      : "sentence_count";
+      : "smart_segment";
   }
   if (selectionFallbackMaxPerRoundInput) {
     selectionFallbackMaxPerRoundInput.value = String(settings.selectionFallbackMaxPerRound);
@@ -1591,8 +1716,17 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (selectionFallbackMaxTextLengthInput) {
     selectionFallbackMaxTextLengthInput.value = String(settings.selectionFallbackMaxTextLength);
   }
-  if (selectionFallbackMaxSentencesInput) {
-    selectionFallbackMaxSentencesInput.value = String(settings.selectionFallbackMaxSentences);
+  if (selectionFallbackMaxSegmentsInput) {
+    selectionFallbackMaxSegmentsInput.value = String(settings.selectionFallbackMaxSegments);
+  }
+  if (selectionFallbackLongSentenceThresholdInput) {
+    selectionFallbackLongSentenceThresholdInput.value = String(settings.selectionFallbackLongSentenceThreshold);
+  }
+  if (selectionFallbackMaxTotalLengthInput) {
+    selectionFallbackMaxTotalLengthInput.value = String(settings.selectionFallbackMaxTotalLength);
+  }
+  if (selectionFallbackLongSentenceSplitPunctuationInput) {
+    selectionFallbackLongSentenceSplitPunctuationInput.value = String(settings.selectionFallbackLongSentenceSplitPunctuationText ?? "");
   }
   if (selectionFallbackSingleActionInput) {
     selectionFallbackSingleActionInput.value = String(settings.selectionFallbackSingleAction ?? "");
@@ -1701,10 +1835,35 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     listOutcomePreviewInput.style.opacity = settings.enableOutcomeBranches ? "1" : "0.5";
   }
   if (timeLimitEnabledInput) timeLimitEnabledInput.checked = Boolean(settings.enableTimeLimit);
-  if (minTimeLimitInput) {
-    minTimeLimitInput.value = String(settings.minTimeLimitSeconds);
-    minTimeLimitInput.disabled = !settings.enableTimeLimit;
-    minTimeLimitInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  if (timeLimitAiUrgencyHintInput) {
+    timeLimitAiUrgencyHintInput.checked = Boolean(settings.enableAiUrgencyHint);
+    timeLimitAiUrgencyHintInput.disabled = !settings.enableTimeLimit;
+    timeLimitAiUrgencyHintInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  }
+  if (timeLimitDefaultUrgencyInput) {
+    timeLimitDefaultUrgencyInput.value = settings.timeLimitDefaultUrgency;
+    timeLimitDefaultUrgencyInput.disabled = !settings.enableTimeLimit;
+    timeLimitDefaultUrgencyInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  }
+  if (timeLimitLowSecondsInput) {
+    timeLimitLowSecondsInput.value = String(settings.timeLimitUrgencyLowSeconds);
+    timeLimitLowSecondsInput.disabled = !settings.enableTimeLimit;
+    timeLimitLowSecondsInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  }
+  if (timeLimitNormalSecondsInput) {
+    timeLimitNormalSecondsInput.value = String(settings.timeLimitUrgencyNormalSeconds);
+    timeLimitNormalSecondsInput.disabled = !settings.enableTimeLimit;
+    timeLimitNormalSecondsInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  }
+  if (timeLimitHighSecondsInput) {
+    timeLimitHighSecondsInput.value = String(settings.timeLimitUrgencyHighSeconds);
+    timeLimitHighSecondsInput.disabled = !settings.enableTimeLimit;
+    timeLimitHighSecondsInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+  }
+  if (timeLimitCriticalSecondsInput) {
+    timeLimitCriticalSecondsInput.value = String(settings.timeLimitUrgencyCriticalSeconds);
+    timeLimitCriticalSecondsInput.disabled = !settings.enableTimeLimit;
+    timeLimitCriticalSecondsInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
   }
   minTimeLimitRow?.classList.toggle("is-disabled", !settings.enableTimeLimit);
   if (skillEnabledInput) {

@@ -555,6 +555,7 @@ function parseTriggerPackMetadataFromTextEvent(text: string): {
   const items = new Map<string, TriggerPackItemEvent>();
   let foundTriggerPack = false;
   let match: RegExpExecArray | null = null;
+  TRIGGER_PACK_BLOCK_REGEX_Event.lastIndex = 0;
 
   while ((match = TRIGGER_PACK_BLOCK_REGEX_Event.exec(text)) !== null) {
     const raw = normalizeTextEvent(match[1]);

@@ -60,7 +60,10 @@ export interface SettingsCardTemplateIdsEvent {
   selectionFallbackMaxPerFloorId: string;
   selectionFallbackMinTextLengthId: string;
   selectionFallbackMaxTextLengthId: string;
-  selectionFallbackMaxSentencesId: string;
+  selectionFallbackMaxSegmentsId: string;
+  selectionFallbackLongSentenceThresholdId: string;
+  selectionFallbackMaxTotalLengthId: string;
+  selectionFallbackLongSentenceSplitPunctuationId: string;
   selectionFallbackSingleActionId: string;
   selectionFallbackSingleSkillId: string;
   selectionFallbackDebugInfoId: string;
@@ -94,7 +97,12 @@ export interface SettingsCardTemplateIdsEvent {
   includeOutcomeSummaryId: string;
   listOutcomePreviewId: string;
   timeLimitEnabledId: string;
-  timeLimitMinId: string;
+  timeLimitAiUrgencyHintId: string;
+  timeLimitDefaultUrgencyId: string;
+  timeLimitLowSecondsId: string;
+  timeLimitNormalSecondsId: string;
+  timeLimitHighSecondsId: string;
+  timeLimitCriticalSecondsId: string;
   timeLimitRowId: string;
   skillEnabledId: string;
   skillEditorWrapId: string;

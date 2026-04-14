@@ -34,6 +34,19 @@ type ResolvedOutcomeEvent = {
   explosionTriggered: boolean;
 };
 
+function formatUrgencyLabelEvent(urgency: DiceEventSpecEvent["urgency"]): string {
+  if (urgency === "low") return "低紧张";
+  if (urgency === "high") return "高紧张";
+  if (urgency === "critical") return "极高紧张";
+  if (urgency === "none") return "无时限";
+  return "普通紧张";
+}
+
+function formatTimeLimitSourceLabelEvent(event: DiceEventSpecEvent): string {
+  if (event.rollMode === "auto") return "来源：自动不限时";
+  return "来源：系统映射";
+}
+
 /**
  * 功能：判断某条检定记录是否属于暗骰结果。
  * @param record 检定记录。
@@ -80,6 +93,10 @@ export function getEventRuntimeViewStateEvent(
       return { text: "已结算(失败)", tone: "danger", locked: true };
     }
     return { text: "已结算", tone: "success", locked: true };
+  }
+
+  if (event.rollMode === "auto") {
+    return { text: "自动判定", tone: "neutral", locked: false };
   }
 
   if (!settings.enableTimeLimit) {
@@ -698,10 +715,14 @@ export function buildEventListCardEvent(
         ? "opacity:0.4;cursor:not-allowed;filter:grayscale(1);"
         : "cursor:pointer;";
       const showRollButton = !runtime.locked && !lastRecord && !isBlindRecord;
-      const timeLimitLabel = settings.enableTimeLimit ? (event.timeLimit ? event.timeLimit : "无") : "关闭";
-      const timeLimitLabelDisplay = settings.enableTimeLimit
-        ? formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无")
-        : "关闭";
+      const timeLimitLabelDisplay = (() => {
+        if (event.rollMode === "auto") return "自动判定 · 来源：自动不限时";
+        if (!settings.enableTimeLimit) return "关闭";
+        if (!event.timeLimit || event.timeLimit === "none") {
+          return `${formatUrgencyLabelEvent(event.urgency)} · ${formatTimeLimitSourceLabelEvent(event)}`;
+        }
+        return `${formatIsoDurationNaturalLanguageEvent(event.timeLimit)} · ${formatUrgencyLabelEvent(event.urgency)} · ${formatTimeLimitSourceLabelEvent(event)}`;
+      })();
       const statusResolved = settings.enableStatusSystem
         ? resolveStatusModifiersForSkillEvent(activeStatuses, event.skill)
         : { modifier: 0, matched: [] as Array<{ name: string; modifier: number }> };
@@ -1499,7 +1520,12 @@ export function buildEventRollResultCardEvent(
         statusColor,
         48
       );
-  const timeLimitLabel = formatIsoDurationNaturalLanguageEvent(event.timeLimit ?? "无");
+  const timeLimitLabel =
+    event.rollMode === "auto"
+      ? "自动判定 · 来源：自动不限时"
+      : !event.timeLimit || event.timeLimit === "none"
+        ? `${formatUrgencyLabelEvent(event.urgency)} · ${formatTimeLimitSourceLabelEvent(event)}`
+        : `${formatIsoDurationNaturalLanguageEvent(event.timeLimit)} · ${formatUrgencyLabelEvent(event.urgency)} · ${formatTimeLimitSourceLabelEvent(event)}`;
   const selectionSummaryText = buildSelectionSummaryTextEvent(record.result);
   const difficultyText = formatDifficultyForCardEvent(event.difficulty);
   const difficultyTitleAttr = buildDifficultyTitleTextEvent(

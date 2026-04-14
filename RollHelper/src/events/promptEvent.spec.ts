@@ -41,16 +41,24 @@ function createSettings(overrides: Partial<DicePluginSettingsEvent> = {}): DiceP
     includeOutcomeInSummary: true,
     showOutcomePreviewInListCard: false,
     enableTimeLimit: true,
-    minTimeLimitSeconds: 10,
+    enableAiUrgencyHint: true,
+    timeLimitDefaultUrgency: "normal",
+    timeLimitUrgencyLowSeconds: 45,
+    timeLimitUrgencyNormalSeconds: 30,
+    timeLimitUrgencyHighSeconds: 15,
+    timeLimitUrgencyCriticalSeconds: 8,
     enableSkillSystem: true,
     enableInteractiveTriggers: true,
     enableSelectionFallbackTriggers: false,
-    selectionFallbackLimitMode: "sentence_count",
+    selectionFallbackLimitMode: "smart_segment",
     selectionFallbackMaxPerRound: 3,
     selectionFallbackMaxPerFloor: 2,
     selectionFallbackMinTextLength: 2,
     selectionFallbackMaxTextLength: 10,
-    selectionFallbackMaxSentences: 2,
+    selectionFallbackMaxSegments: 2,
+    selectionFallbackLongSentenceThreshold: 26,
+    selectionFallbackMaxTotalLength: 45,
+    selectionFallbackLongSentenceSplitPunctuationText: "，,、：",
     selectionFallbackSingleAction: "调查",
     selectionFallbackSingleSkill: "调查",
     enableSelectionFallbackDebugInfo: false,
@@ -103,6 +111,28 @@ describe("prompt 协议分层", () => {
     expect(enabledText).toContain('"type":"trigger_pack"');
   });
 
+  it("时限协议不再要求 AI 直接填写 timeLimit，而是改为 urgency", () => {
+    const text = buildDynamicSystemRuleTextEvent(createSettings({
+      enableTimeLimit: true,
+      enableAiUrgencyHint: true,
+    }));
+
+    expect(text).not.toContain('"timeLimit":"PT30S"');
+    expect(text).toContain('"urgency":"none|low|normal|high|critical"');
+    expect(text).toContain("不要写 timeLimit 秒数");
+    expect(text).toContain("auto 事件不要写 urgency");
+  });
+
+  it("关闭 AI 紧张提示后不再要求输出 urgency 字段", () => {
+    const text = buildDynamicSystemRuleTextEvent(createSettings({
+      enableTimeLimit: true,
+      enableAiUrgencyHint: false,
+    }));
+
+    expect(text).not.toContain('"urgency":"none|low|normal|high|critical"');
+    expect(text).toContain("当前不允许 AI 指定 urgency");
+  });
+
   it("compact runtime policy 会移除摘要和技能预览类低价值字段", () => {
     const text = buildCompactDiceRuntimePolicyBlockEvent(
       createSettings(),
@@ -112,6 +142,8 @@ describe("prompt 协议分层", () => {
 
     expect(text).toContain("apply_scope=protagonist_only");
     expect(text).toContain("enabled_dice=d20");
+    expect(text).toContain("time_limit_default_urgency=normal");
+    expect(text).toContain("time_limit_auto_mode=none");
     expect(text).not.toContain("summary_detail=");
     expect(text).not.toContain("summary_rounds=");
     expect(text).not.toContain("summary_include_outcome=");

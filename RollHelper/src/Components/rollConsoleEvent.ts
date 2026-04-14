@@ -330,6 +330,21 @@ function applyTemporaryHighlightEvent(node: HTMLElement, className: string, dura
   }, duration);
 }
 
+function applyTemporaryTriggerFocusEvent(node: HTMLElement, duration = 1500): void {
+  document.querySelectorAll(".st-rh-inline-trigger.is-active").forEach((item) => {
+    if (item instanceof HTMLElement && item !== node) {
+      item.classList.remove("is-active");
+    }
+  });
+  node.classList.add("is-active");
+  applyTemporaryHighlightEvent(node, CONSOLE_JUMP_HIGHLIGHT_CLASS_Event, duration);
+  window.setTimeout(() => {
+    if (node.isConnected) {
+      node.classList.remove("is-active");
+    }
+  }, duration);
+}
+
 function resolveTriggerNodeEvent(
   messageNode: HTMLElement,
   sourceId: string,
@@ -371,7 +386,7 @@ export function jumpToTriggerFromDatasetEvent(node: HTMLElement): boolean {
   const triggerNode = resolveTriggerNodeEvent(messageNode, sourceId, occurrenceIndex);
   if (triggerNode) {
     triggerNode.scrollIntoView({ block: "center", behavior: "smooth" });
-    applyTemporaryHighlightEvent(triggerNode, CONSOLE_JUMP_HIGHLIGHT_CLASS_Event, 1500);
+    applyTemporaryTriggerFocusEvent(triggerNode, 1500);
     return true;
   }
 

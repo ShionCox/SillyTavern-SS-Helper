@@ -54,16 +54,24 @@ function createSettings(overrides: Partial<DicePluginSettingsEvent> = {}): DiceP
     includeOutcomeInSummary: true,
     showOutcomePreviewInListCard: true,
     enableTimeLimit: false,
-    minTimeLimitSeconds: 30,
+    enableAiUrgencyHint: true,
+    timeLimitDefaultUrgency: "normal",
+    timeLimitUrgencyLowSeconds: 45,
+    timeLimitUrgencyNormalSeconds: 30,
+    timeLimitUrgencyHighSeconds: 15,
+    timeLimitUrgencyCriticalSeconds: 8,
     enableSkillSystem: true,
     enableInteractiveTriggers: true,
     enableSelectionFallbackTriggers: true,
-    selectionFallbackLimitMode: "sentence_count",
+    selectionFallbackLimitMode: "smart_segment",
     selectionFallbackMaxPerRound: 3,
     selectionFallbackMaxPerFloor: 2,
     selectionFallbackMinTextLength: 2,
     selectionFallbackMaxTextLength: 24,
-    selectionFallbackMaxSentences: 1,
+    selectionFallbackMaxSegments: 1,
+    selectionFallbackLongSentenceThreshold: 26,
+    selectionFallbackMaxTotalLength: 45,
+    selectionFallbackLongSentenceSplitPunctuationText: "，,、：",
     selectionFallbackSingleAction: "调查",
     selectionFallbackSingleSkill: "调查",
     enableSelectionFallbackDebugInfo: false,
@@ -308,6 +316,46 @@ describe("trigger_pack 元数据", () => {
     expect(getMessageTriggerPackEvent(message as any)?.items).toHaveLength(1);
     expect(getMessageTriggerPackEvent(message as any)?.items[0].sid).toBe("weird_sound");
     expect(getMessageInteractiveTriggersEvent(message as any)?.[0]?.triggerPackSuccessText).toContain("抓挠声");
+  });
+
+  it("连续解析时也会稳定清理 triggerjson 代码块", () => {
+    const firstMessage = {
+      mes: `甲。\n\n\`\`\`triggerjson
+{
+  "type": "trigger_pack",
+  "version": "1",
+  "items": [{"sid":"a","skill":"调查","reveal":"instant"}]
+}
+\`\`\``,
+      extra: {},
+    };
+    const secondMessage = {
+      mes: `乙。\n\n\`\`\`triggerjson
+{
+  "type": "trigger_pack",
+  "version": "1",
+  "items": [{"sid":"b","skill":"调查","reveal":"instant"}]
+}
+\`\`\``,
+      extra: {},
+    };
+
+    const firstChanged = sanitizeMessageInteractiveTriggersEvent(firstMessage as any, {
+      settings: createSettings(),
+      sourceMessageId: "assistant:first",
+      sourceState: "display_text",
+    });
+    const secondChanged = sanitizeMessageInteractiveTriggersEvent(secondMessage as any, {
+      settings: createSettings(),
+      sourceMessageId: "assistant:second",
+      sourceState: "display_text",
+    });
+
+    expect(firstChanged).toBe(true);
+    expect(secondChanged).toBe(true);
+    expect(String(firstMessage.mes)).not.toContain("triggerjson");
+    expect(String(secondMessage.mes)).not.toContain("triggerjson");
+    expect(getMessageTriggerPackEvent(secondMessage as any)?.items[0].sid).toBe("b");
   });
 
   it("metadata 缺失时可从稳定原文重建 trigger / trigger_pack", () => {

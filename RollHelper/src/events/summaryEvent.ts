@@ -74,6 +74,7 @@ export function createRoundSummarySnapshotEvent(
       advantageState: normalizeAdvantageStateForSummaryEvent(
         record?.advantageStateApplied ?? event.advantageState
       ),
+      urgency: event.urgency,
       timeLimit: event.timeLimit ?? "none",
       status,
       resultSource: record?.source ?? null,

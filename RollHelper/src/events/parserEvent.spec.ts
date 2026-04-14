@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const { loggerMock } = vi.hoisted(() => ({
-  loggerMock: {
+vi.mock("../../index", () => ({
+  logger: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -9,30 +9,55 @@ const { loggerMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../index", () => ({
-  logger: loggerMock,
-}));
+import { resolveEventTimeLimitByUrgencyEvent } from "./parserEvent";
 
-import { parseIsoDurationToMsEvent } from "./parserEvent";
+describe("resolveEventTimeLimitByUrgencyEvent", () => {
+  const settings = {
+    enableTimeLimit: true,
+    enableAiUrgencyHint: true,
+    timeLimitDefaultUrgency: "normal",
+    timeLimitUrgencyLowSeconds: 45,
+    timeLimitUrgencyNormalSeconds: 30,
+    timeLimitUrgencyHighSeconds: 15,
+    timeLimitUrgencyCriticalSeconds: 8,
+  } as any;
 
-describe("parseIsoDurationToMsEvent", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it("manual 事件会按 urgency 映射秒数", () => {
+    const result = resolveEventTimeLimitByUrgencyEvent({
+      rollMode: "manual",
+      urgency: "high",
+      settings,
+    });
+
+    expect(result.urgency).toBe("high");
+    expect(result.timeLimitMs).toBe(15_000);
+    expect(result.timeLimit).toBe("PT15S");
   });
 
-  it("把 none 视为不限时哨兵值，不重复打印警告", () => {
-    const regex = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i;
+  it("auto 事件始终无时限", () => {
+    const result = resolveEventTimeLimitByUrgencyEvent({
+      rollMode: "auto",
+      urgency: "critical",
+      settings,
+    });
 
-    expect(parseIsoDurationToMsEvent("none", regex)).toBeNull();
-    expect(parseIsoDurationToMsEvent("无", regex)).toBeNull();
-    expect(parseIsoDurationToMsEvent("关闭", regex)).toBeNull();
-    expect(loggerMock.warn).not.toHaveBeenCalled();
+    expect(result.urgency).toBe("none");
+    expect(result.timeLimitMs).toBeNull();
+    expect(result.timeLimit).toBe("none");
   });
 
-  it("非法值仍然只按非法 timeLimit 处理", () => {
-    const regex = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i;
+  it("关闭 AI 紧张提示后会回退到默认紧张程度", () => {
+    const result = resolveEventTimeLimitByUrgencyEvent({
+      rollMode: "manual",
+      urgency: "critical",
+      settings: {
+        ...settings,
+        enableAiUrgencyHint: false,
+      },
+    });
 
-    expect(parseIsoDurationToMsEvent("abc", regex)).toBeNull();
-    expect(loggerMock.warn).toHaveBeenCalledWith("非法 timeLimit，按不限时处理:", "abc");
+    expect(result.urgency).toBe("normal");
+    expect(result.timeLimitMs).toBe(30_000);
+    expect(result.timeLimit).toBe("PT30S");
   });
 });

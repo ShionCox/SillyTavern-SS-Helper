@@ -20,7 +20,8 @@ export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
 export type RollVisibilityEvent = "public" | "blind" | "passive";
-export type SelectionFallbackLimitModeEvent = "char_count" | "sentence_count";
+export type SelectionFallbackLimitModeEvent = "char_count" | "smart_segment";
+export type EventUrgencyLevelEvent = "none" | "low" | "normal" | "high" | "critical";
 export type TriggerPackRevealModeEvent = "instant" | "delayed";
 export type BlindGuidanceStateEvent =
   | "queued"
@@ -93,7 +94,12 @@ export interface DicePluginSettingsEvent {
   includeOutcomeInSummary: boolean;
   showOutcomePreviewInListCard: boolean;
   enableTimeLimit: boolean;
-  minTimeLimitSeconds: number;
+  enableAiUrgencyHint: boolean;
+  timeLimitDefaultUrgency: EventUrgencyLevelEvent;
+  timeLimitUrgencyLowSeconds: number;
+  timeLimitUrgencyNormalSeconds: number;
+  timeLimitUrgencyHighSeconds: number;
+  timeLimitUrgencyCriticalSeconds: number;
   enableSkillSystem: boolean;
   enableInteractiveTriggers: boolean;
   enableSelectionFallbackTriggers: boolean;
@@ -102,7 +108,10 @@ export interface DicePluginSettingsEvent {
   selectionFallbackMaxPerFloor: number;
   selectionFallbackMinTextLength: number;
   selectionFallbackMaxTextLength: number;
-  selectionFallbackMaxSentences: number;
+  selectionFallbackMaxSegments: number;
+  selectionFallbackLongSentenceThreshold: number;
+  selectionFallbackMaxTotalLength: number;
+  selectionFallbackLongSentenceSplitPunctuationText: string;
   selectionFallbackSingleAction: string;
   selectionFallbackSingleSkill: string;
   enableSelectionFallbackDebugInfo: boolean;
@@ -194,6 +203,7 @@ export interface DiceEventSpecEvent {
   targetType: EventTargetTypeEvent;
   targetName?: string;
   targetLabel: string;
+  urgency?: EventUrgencyLevelEvent;
   timeLimit?: string;
   offeredAt?: number;
   deadlineAt?: number | null;
@@ -405,6 +415,7 @@ export interface RoundSummaryEventItemEvent {
   dcReason: string;
   rollMode: EventRollModeEvent;
   advantageState: AdvantageStateEvent;
+  urgency?: EventUrgencyLevelEvent;
   timeLimit: string;
   status: SummaryEventStatusEvent;
   resultSource: EventRollSourceEvent | null;

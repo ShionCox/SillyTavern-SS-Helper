@@ -20,7 +20,6 @@ import {
   DICE_BLIND_SUMMARY_BLOCK_START_Event,
   DICE_SUMMARY_BLOCK_END_Event,
   DICE_SUMMARY_BLOCK_START_Event,
-  ISO_8601_DURATION_REGEX_Event,
   OUTCOME_TEXT_MAX_LEN_Event,
   SUMMARY_HISTORY_MAX_STORED_Event,
   SUMMARY_HISTORY_ROUNDS_MAX_Event,
@@ -35,12 +34,11 @@ import {
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
 } from "../settings/storeEvent";
 import {
-  applyTimeLimitPolicyMsEvent as applyTimeLimitPolicyMsModuleEvent,
   filterEventsByApplyScopeEvent as filterEventsByApplyScopeModuleEvent,
   normalizeCompareOperatorEvent as normalizeCompareOperatorModuleEvent,
   parseEventEnvelopesEvent as parseEventEnvelopesModuleEvent,
-  parseIsoDurationToMsEvent as parseIsoDurationToMsModuleEvent,
   removeRangesEvent as removeRangesModuleEvent,
+  resolveEventTimeLimitByUrgencyEvent as resolveEventTimeLimitByUrgencyModuleEvent,
   resolveEventTargetEvent as resolveEventTargetModuleEvent,
 } from "../events/parserEvent";
 import {
@@ -83,16 +81,11 @@ import type { DiceResult } from "../types/diceEvent";
 
 export type RemovalRangeEvent = { start: number; end: number };
 
-export function parseIsoDurationToMsEvent(raw: string): number | null {
-  return parseIsoDurationToMsModuleEvent(raw, ISO_8601_DURATION_REGEX_Event);
-}
-
 export function ensureRoundEventTimersSyncedEvent(round: PendingRoundEvent): void {
   ensureRoundEventTimersSyncedModuleEvent(round, {
     getSettingsEvent: getSettingsStoreEvent,
     resolveEventTargetEvent: resolveEventTargetModuleEvent,
-    parseIsoDurationToMsEvent,
-    applyTimeLimitPolicyMsEvent: applyTimeLimitPolicyMsModuleEvent,
+    resolveEventTimeLimitByUrgencyEvent: resolveEventTimeLimitByUrgencyModuleEvent,
   });
 }
 
@@ -104,7 +97,6 @@ export function parseEventEnvelopesEvent(text: string): {
   return parseEventEnvelopesModuleEvent(text, {
     getSettingsEvent: getSettingsStoreEvent,
     OUTCOME_TEXT_MAX_LEN_Event,
-    ISO_8601_DURATION_REGEX_Event,
   });
 }
 
@@ -166,8 +158,7 @@ export function mergeEventsIntoPendingRoundEvent(events: DiceEventSpecEvent[], a
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     createIdEvent: createIdCoreEvent,
-    parseIsoDurationToMsEvent,
-    applyTimeLimitPolicyMsEvent: applyTimeLimitPolicyMsModuleEvent,
+    resolveEventTimeLimitByUrgencyEvent: resolveEventTimeLimitByUrgencyModuleEvent,
     resolveEventTargetEvent: resolveEventTargetModuleEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
   });

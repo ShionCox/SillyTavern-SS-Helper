@@ -11,6 +11,7 @@ import type {
   EventRollModeEvent,
   EventScopeTagEvent,
   EventTargetTypeEvent,
+  EventUrgencyLevelEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
 
@@ -386,49 +387,69 @@ function warnIfEventCheckImpossibleEvent(
   );
 }
 
-export function parseIsoDurationToMsEvent(raw: string, ISO_8601_DURATION_REGEX_Event: RegExp): number | null {
-  const value = normalizeStringFieldEvent(raw);
-  if (!value) return null;
-  if (/^(?:none|无|关闭|off)$/i.test(value)) {
-    return null;
-  }
-  if (!ISO_8601_DURATION_REGEX_Event.test(value)) {
-    logger.warn("非法 timeLimit，按不限时处理:", value);
-    return null;
-  }
-  const match = value.match(/^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i);
-  if (!match) {
-    logger.warn("不支持的 timeLimit 组合，按不限时处理:", value);
-    return null;
-  }
-
-  const weeks = Number(match[1] || 0);
-  const days = Number(match[2] || 0);
-  const hours = Number(match[3] || 0);
-  const minutes = Number(match[4] || 0);
-  const seconds = Number(match[5] || 0);
-  const totalSeconds = (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds;
-  const totalMs = totalSeconds * 1000;
-  if (!Number.isFinite(totalMs) || totalMs < 0) {
-    logger.warn("timeLimit 解析失败，按不限时处理:", value);
-    return null;
-  }
-  return totalMs;
+export function normalizeEventUrgencyLevelEvent(raw: any): EventUrgencyLevelEvent | undefined {
+  const value = normalizeStringFieldEvent(raw).toLowerCase();
+  if (!value) return undefined;
+  if (value === "none" || value === "off" || value === "无" || value === "关闭") return "none";
+  if (value === "low" || value === "lo" || value === "低") return "low";
+  if (value === "normal" || value === "medium" || value === "standard" || value === "普通") return "normal";
+  if (value === "high" || value === "urgent" || value === "高") return "high";
+  if (value === "critical" || value === "extreme" || value === "紧急" || value === "极高") return "critical";
+  return undefined;
 }
 
-export function applyTimeLimitPolicyMsEvent(
-  durationMs: number | null,
-  settings: DicePluginSettingsEvent
-): number | null {
-  if (!settings.enableTimeLimit) return null;
-  if (durationMs == null) return null;
-  const minSeconds = Math.max(1, Math.floor(Number(settings.minTimeLimitSeconds) || 1));
-  const minMs = minSeconds * 1000;
-  if (durationMs < minMs) {
-    logger.info(`timeLimit 低于最短时限，提升到 ${minSeconds}s（原始 ${durationMs}ms）`);
-    return minMs;
+function normalizeUrgencySecondsEvent(raw: unknown, fallback: number): number {
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return Math.max(1, Math.floor(fallback));
+  return Math.max(1, Math.floor(numeric));
+}
+
+export function buildIsoDurationFromSecondsEvent(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return "none";
+  return `PT${Math.max(1, Math.floor(seconds))}S`;
+}
+
+export function resolveEventTimeLimitByUrgencyEvent(args: {
+  rollMode?: EventRollModeEvent;
+  urgency?: unknown;
+  settings: DicePluginSettingsEvent;
+}): {
+  urgency: EventUrgencyLevelEvent;
+  timeLimitMs: number | null;
+  timeLimit: string;
+} {
+  const { rollMode, settings } = args;
+  if (!settings.enableTimeLimit || rollMode === "auto") {
+    return {
+      urgency: "none",
+      timeLimitMs: null,
+      timeLimit: "none",
+    };
   }
-  return durationMs;
+
+  const defaultUrgency = normalizeEventUrgencyLevelEvent(settings.timeLimitDefaultUrgency) ?? "normal";
+  const aiUrgency = settings.enableAiUrgencyHint ? normalizeEventUrgencyLevelEvent(args.urgency) : undefined;
+  const urgency = aiUrgency ?? defaultUrgency;
+  if (urgency === "none") {
+    return {
+      urgency,
+      timeLimitMs: null,
+      timeLimit: "none",
+    };
+  }
+
+  const secondsByUrgency: Record<Exclude<EventUrgencyLevelEvent, "none">, number> = {
+    low: normalizeUrgencySecondsEvent(settings.timeLimitUrgencyLowSeconds, 45),
+    normal: normalizeUrgencySecondsEvent(settings.timeLimitUrgencyNormalSeconds, 30),
+    high: normalizeUrgencySecondsEvent(settings.timeLimitUrgencyHighSeconds, 15),
+    critical: normalizeUrgencySecondsEvent(settings.timeLimitUrgencyCriticalSeconds, 8),
+  };
+  const seconds = secondsByUrgency[urgency];
+  return {
+    urgency,
+    timeLimitMs: seconds * 1000,
+    timeLimit: buildIsoDurationFromSecondsEvent(seconds),
+  };
 }
 
 export function normalizeEventScopeTagEvent(raw: any): EventScopeTagEvent | undefined {
@@ -572,7 +593,6 @@ export function filterEventsByApplyScopeEvent(
 export interface NormalizeEventSpecDepsEvent {
   getSettingsEvent: () => DicePluginSettingsEvent;
   OUTCOME_TEXT_MAX_LEN_Event: number;
-  ISO_8601_DURATION_REGEX_Event: RegExp;
 }
 
 export function parseAllowedDiceSidesSetEvent(raw: string): Set<number> | null {
@@ -654,7 +674,6 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
   const title = normalizeStringFieldEvent(raw.title);
   let checkDice = normalizeStringFieldEvent(raw.checkDice);
   const skill = normalizeStringFieldEvent(raw.skill);
-  const timeLimitRaw = normalizeStringFieldEvent(raw.timeLimit);
   const desc = normalizeStringFieldEvent(raw.desc);
   const compare = normalizeCompareOperatorEvent(raw.compare);
   const scope = normalizeEventScopeTagEvent(raw.scope ?? raw.eventScope ?? raw.applyTo);
@@ -682,10 +701,7 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
       ? { ...aliasOutcomes, ...(raw.outcomes as Record<string, any>) }
       : aliasOutcomes;
   const outcomes = normalizeOutcomesEvent(outcomesRaw, id || "unknown_event", deps.OUTCOME_TEXT_MAX_LEN_Event);
-  const rawTimeLimitMs = parseIsoDurationToMsEvent(timeLimitRaw, deps.ISO_8601_DURATION_REGEX_Event);
   const settings = deps.getSettingsEvent();
-  const timeLimitMs = applyTimeLimitPolicyMsEvent(rawTimeLimitMs, settings);
-  const timeLimit = timeLimitRaw && rawTimeLimitMs != null ? timeLimitRaw : undefined;
 
   if (!id || !title || !checkDice || !skill || !desc) return null;
   if (compare == null) return null;
@@ -733,6 +749,11 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
   })();
 
   warnIfEventCheckImpossibleEvent(id, checkDice, compare, finalDc, advantageState);
+  const resolvedTimeLimit = resolveEventTimeLimitByUrgencyEvent({
+    rollMode,
+    urgency: raw.urgency,
+    settings,
+  });
 
   return {
     id,
@@ -749,8 +770,9 @@ export function normalizeEventSpecEvent(raw: any, deps: NormalizeEventSpecDepsEv
     targetType: resolvedTarget.targetType,
     targetName: resolvedTarget.targetName,
     targetLabel: resolvedTarget.targetLabel,
-    timeLimitMs,
-    timeLimit,
+    urgency: resolvedTimeLimit.urgency,
+    timeLimitMs: resolvedTimeLimit.timeLimitMs,
+    timeLimit: resolvedTimeLimit.timeLimit,
     desc,
     dcReason: mergedDcReason,
     outcomes,
