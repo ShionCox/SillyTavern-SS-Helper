@@ -1,14 +1,21 @@
 import type {
+  CompareOperatorEvent,
   DicePluginSettingsEvent,
   EventDifficultyLevelEvent,
   InteractiveTriggerEvent,
   TavernMessageEvent,
+  TriggerPackDefaultsEvent,
+  TriggerPackEvent,
+  TriggerPackItemEvent,
+  TriggerPackRevealModeEvent,
 } from "../types/eventDomainEvent";
 import { normalizeDifficultyLevelEvent } from "./parserEvent";
 
 export const RH_TRIGGER_METADATA_KEY_Event = "rollhelper_interactive_triggers_v1";
+export const RH_TRIGGER_PACK_METADATA_KEY_Event = "rollhelper_trigger_pack_v1";
 
 const RH_TRIGGER_REGEX_Event = /<rh-trigger\b([^>]*)>([\s\S]*?)<\/rh-trigger>/gi;
+const TRIGGER_PACK_BLOCK_REGEX_Event = /```(?:triggerpack|json|rolljson)?\s*([\s\S]*?)```/gi;
 
 function normalizeTextEvent(value: unknown): string {
   return String(value ?? "");
@@ -21,6 +28,22 @@ function normalizeInlineTextEvent(value: unknown): string {
 function parseBooleanTextEvent(value: string): boolean {
   const normalized = normalizeInlineTextEvent(value).toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "blind";
+}
+
+function normalizeCompareOperatorTextEvent(raw: unknown): CompareOperatorEvent | undefined {
+  const value = normalizeInlineTextEvent(raw);
+  if (value === ">=" || value === ">" || value === "<=" || value === "<") return value;
+  return undefined;
+}
+
+function normalizeRevealModeEvent(raw: unknown): TriggerPackRevealModeEvent {
+  return normalizeInlineTextEvent(raw).toLowerCase() === "instant" ? "instant" : "delayed";
+}
+
+function normalizeShortFeedbackTextEvent(value: unknown): string | undefined {
+  const text = normalizeInlineTextEvent(value);
+  if (!text) return undefined;
+  return text.slice(0, 120);
 }
 
 /**
@@ -203,12 +226,89 @@ function normalizeInteractiveTriggerEvent(input: unknown): InteractiveTriggerEve
     loreType: normalizeInlineTextEvent(record.loreType),
     note: normalizeInlineTextEvent(record.note),
     diceExpr: normalizeInlineTextEvent(record.diceExpr) || "1d20",
+    compare: normalizeCompareOperatorTextEvent(record.compare),
+    revealMode: normalizeRevealModeEvent(record.revealMode),
+    triggerPackSourceId: normalizeInlineTextEvent(record.triggerPackSourceId) || normalizeInlineTextEvent(record.sourceId) || label,
+    triggerPackSuccessText: normalizeShortFeedbackTextEvent(record.triggerPackSuccessText),
+    triggerPackFailureText: normalizeShortFeedbackTextEvent(record.triggerPackFailureText),
+    triggerPackExplodeText: normalizeShortFeedbackTextEvent(record.triggerPackExplodeText),
     occurrenceIndex: Number.isFinite(occurrenceIndexRaw) && occurrenceIndexRaw >= 0 ? Math.floor(occurrenceIndexRaw) : 0,
+  };
+}
+
+function normalizeTriggerPackDefaultsEvent(input: unknown): TriggerPackDefaultsEvent | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  const dice = normalizeInlineTextEvent(record.dice);
+  const compare = normalizeCompareOperatorTextEvent(record.compare);
+  if (!dice && !compare) return undefined;
+  return {
+    dice: dice || undefined,
+    compare,
+  };
+}
+
+function normalizeTriggerPackItemEvent(input: unknown, defaults?: TriggerPackDefaultsEvent): TriggerPackItemEvent | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  const sid = normalizeInlineTextEvent(record.sid || record.sourceId);
+  const skill = normalizeInlineTextEvent(record.skill);
+  if (!sid || !skill) return null;
+  return {
+    sid,
+    skill,
+    difficulty: normalizeDifficultyLevelEvent(record.difficulty) || "normal",
+    reveal: normalizeRevealModeEvent(record.reveal),
+    success: normalizeShortFeedbackTextEvent(record.success),
+    failure: normalizeShortFeedbackTextEvent(record.failure),
+    explode: normalizeShortFeedbackTextEvent(record.explode),
+    dice: normalizeInlineTextEvent(record.dice) || defaults?.dice,
+    compare: normalizeCompareOperatorTextEvent(record.compare) || defaults?.compare,
+  };
+}
+
+function normalizeTriggerPackEvent(input: unknown): TriggerPackEvent | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  if (record.type !== "trigger_pack" || String(record.version) !== "1" || !Array.isArray(record.items)) {
+    return null;
+  }
+  const defaults = normalizeTriggerPackDefaultsEvent(record.defaults);
+  const items = record.items
+    .map((item) => normalizeTriggerPackItemEvent(item, defaults))
+    .filter((item): item is TriggerPackItemEvent => Boolean(item));
+  if (items.length <= 0) return null;
+  return {
+    type: "trigger_pack",
+    version: "1",
+    defaults,
+    items,
+  };
+}
+
+function mergeTriggerWithPackItemEvent(
+  trigger: InteractiveTriggerEvent,
+  packItem: TriggerPackItemEvent | undefined
+): InteractiveTriggerEvent {
+  if (!packItem) return trigger;
+  return {
+    ...trigger,
+    skill: packItem.skill || trigger.skill,
+    difficulty: packItem.difficulty || trigger.difficulty,
+    diceExpr: packItem.dice || trigger.diceExpr || "1d20",
+    compare: packItem.compare || trigger.compare,
+    revealMode: packItem.reveal,
+    triggerPackSourceId: packItem.sid,
+    triggerPackSuccessText: packItem.success,
+    triggerPackFailureText: packItem.failure,
+    triggerPackExplodeText: packItem.explode,
   };
 }
 
 export function getMessageInteractiveTriggersEvent(message: TavernMessageEvent | undefined): InteractiveTriggerEvent[] {
   if (!message || typeof message !== "object") return [];
+  const pack = getMessageTriggerPackEvent(message);
+  const packItems = new Map((pack?.items || []).map((item) => [item.sid, item]));
   const containers: Array<Record<string, unknown> | null> = [
     getActiveSwipeExtraContainerEvent(message, false),
     (() => {
@@ -223,9 +323,32 @@ export function getMessageInteractiveTriggersEvent(message: TavernMessageEvent |
     if (!Array.isArray(raw)) continue;
     return raw
       .map((item) => normalizeInteractiveTriggerEvent(item))
+      .map((item) => {
+        if (!item) return null;
+        const sourceId = normalizeInlineTextEvent(item.triggerPackSourceId || item.sourceId || item.label);
+        return mergeTriggerWithPackItemEvent(item, packItems.get(sourceId));
+      })
       .filter((item): item is InteractiveTriggerEvent => Boolean(item));
   }
   return [];
+}
+
+export function getMessageTriggerPackEvent(message: TavernMessageEvent | undefined): TriggerPackEvent | null {
+  if (!message || typeof message !== "object") return null;
+  const containers: Array<Record<string, unknown> | null> = [
+    getActiveSwipeExtraContainerEvent(message, false),
+    (() => {
+      const record = message as Record<string, unknown>;
+      return record.extra && typeof record.extra === "object"
+        ? record.extra as Record<string, unknown>
+        : null;
+    })(),
+  ];
+  for (const container of containers) {
+    const normalized = normalizeTriggerPackEvent(container?.[RH_TRIGGER_PACK_METADATA_KEY_Event]);
+    if (normalized) return normalized;
+  }
+  return null;
 }
 
 export function setMessageInteractiveTriggersEvent(
@@ -245,6 +368,12 @@ export function setMessageInteractiveTriggersEvent(
     note: normalizeInlineTextEvent(trigger.note),
     loreType: normalizeInlineTextEvent(trigger.loreType),
     diceExpr: normalizeInlineTextEvent(trigger.diceExpr) || "1d20",
+    compare: normalizeCompareOperatorTextEvent(trigger.compare),
+    revealMode: normalizeRevealModeEvent(trigger.revealMode),
+    triggerPackSourceId: normalizeInlineTextEvent(trigger.triggerPackSourceId),
+    triggerPackSuccessText: normalizeShortFeedbackTextEvent(trigger.triggerPackSuccessText),
+    triggerPackFailureText: normalizeShortFeedbackTextEvent(trigger.triggerPackFailureText),
+    triggerPackExplodeText: normalizeShortFeedbackTextEvent(trigger.triggerPackExplodeText),
     occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
   }));
 
@@ -254,12 +383,140 @@ export function setMessageInteractiveTriggersEvent(
     messageExtra = {};
     record.extra = messageExtra;
   }
-  (messageExtra as Record<string, unknown>)[RH_TRIGGER_METADATA_KEY_Event] = serialized;
+  if (serialized.length > 0) {
+    (messageExtra as Record<string, unknown>)[RH_TRIGGER_METADATA_KEY_Event] = serialized;
+  } else {
+    delete (messageExtra as Record<string, unknown>)[RH_TRIGGER_METADATA_KEY_Event];
+  }
 
   const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
   if (swipeExtra) {
-    swipeExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
+    if (serialized.length > 0) {
+      swipeExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
+    } else {
+      delete swipeExtra[RH_TRIGGER_METADATA_KEY_Event];
+    }
   }
+}
+
+export function setMessageTriggerPackEvent(
+  message: TavernMessageEvent,
+  triggerPack: TriggerPackEvent | null
+): void {
+  const serialized = triggerPack
+    ? {
+        type: "trigger_pack" as const,
+        version: "1" as const,
+        defaults: triggerPack.defaults
+          ? {
+              dice: normalizeInlineTextEvent(triggerPack.defaults.dice) || undefined,
+              compare: normalizeCompareOperatorTextEvent(triggerPack.defaults.compare),
+            }
+          : undefined,
+        items: triggerPack.items.map((item) => ({
+          sid: normalizeInlineTextEvent(item.sid),
+          skill: normalizeInlineTextEvent(item.skill),
+          difficulty: normalizeDifficultyLevelEvent(item.difficulty) || "normal",
+          reveal: normalizeRevealModeEvent(item.reveal),
+          success: normalizeShortFeedbackTextEvent(item.success),
+          failure: normalizeShortFeedbackTextEvent(item.failure),
+          explode: normalizeShortFeedbackTextEvent(item.explode),
+          dice: normalizeInlineTextEvent(item.dice) || undefined,
+          compare: normalizeCompareOperatorTextEvent(item.compare),
+        })),
+      }
+    : null;
+
+  const containers = [
+    (() => {
+      const record = message as Record<string, unknown>;
+      let extra = record.extra;
+      if (!extra || typeof extra !== "object") {
+        extra = {};
+        record.extra = extra;
+      }
+      return extra as Record<string, unknown>;
+    })(),
+    getActiveSwipeExtraContainerEvent(message, true),
+  ].filter((container): container is Record<string, unknown> => Boolean(container));
+
+  for (const container of containers) {
+    if (serialized) {
+      container[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
+    } else {
+      delete container[RH_TRIGGER_PACK_METADATA_KEY_Event];
+    }
+  }
+}
+
+function parseTriggerPackMetadataFromTextEvent(text: string): {
+  cleanText: string;
+  triggerPack: TriggerPackEvent | null;
+  foundTriggerPack: boolean;
+} {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let mergedDefaults: TriggerPackDefaultsEvent | undefined;
+  const items = new Map<string, TriggerPackItemEvent>();
+  let foundTriggerPack = false;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = TRIGGER_PACK_BLOCK_REGEX_Event.exec(text)) !== null) {
+    const raw = normalizeTextEvent(match[1]);
+    if (!/"type"\s*:\s*"trigger_pack"/i.test(raw)) continue;
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(raw.trim());
+    } catch {
+      continue;
+    }
+    const normalized = normalizeTriggerPackEvent(parsed);
+    if (!normalized) continue;
+    foundTriggerPack = true;
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+    if (normalized.defaults) {
+      mergedDefaults = {
+        ...mergedDefaults,
+        ...normalized.defaults,
+      };
+    }
+    for (const item of normalized.items) {
+      items.set(item.sid, item);
+    }
+  }
+
+  if (!foundTriggerPack) {
+    return {
+      cleanText: text,
+      triggerPack: null,
+      foundTriggerPack: false,
+    };
+  }
+
+  const sortedRanges = [...ranges].sort((left, right) => left.start - right.start);
+  let cursor = 0;
+  let output = "";
+  for (const range of sortedRanges) {
+    if (range.start > cursor) {
+      output += text.slice(cursor, range.start);
+    }
+    cursor = Math.max(cursor, range.end);
+  }
+  if (cursor < text.length) {
+    output += text.slice(cursor);
+  }
+
+  return {
+    cleanText: normalizeTextEvent(output).replace(/\n{3,}/g, "\n\n").trim(),
+    triggerPack: items.size > 0
+      ? {
+          type: "trigger_pack",
+          version: "1",
+          defaults: mergedDefaults,
+          items: Array.from(items.values()),
+        }
+      : null,
+    foundTriggerPack: true,
+  };
 }
 
 export function stripInteractiveTriggerMarkupFromTextEvent(text: string): string {
@@ -279,14 +536,18 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
   cleanText: string;
   triggers: InteractiveTriggerEvent[];
   foundTriggerMarkup: boolean;
+  triggerPack: TriggerPackEvent | null;
+  foundTriggerPack: boolean;
 } {
   const sourceMessageId = normalizeInlineTextEvent(options?.sourceMessageId);
   const blindSkills = parseDefaultBlindSkillsEvent(options?.settings);
+  const triggerPackParsed = parseTriggerPackMetadataFromTextEvent(text);
   const occurrences = new Map<string, number>();
   const triggers: InteractiveTriggerEvent[] = [];
   let foundTriggerMarkup = false;
+  const packItems = new Map((triggerPackParsed.triggerPack?.items || []).map((item) => [item.sid, item]));
 
-  const cleanText = normalizeTextEvent(text).replace(RH_TRIGGER_REGEX_Event, (full, attrText, bodyText) => {
+  const cleanText = normalizeTextEvent(triggerPackParsed.cleanText).replace(RH_TRIGGER_REGEX_Event, (full, attrText, bodyText) => {
     foundTriggerMarkup = true;
     const attrs = parseTriggerAttributesEvent(String(attrText ?? ""));
     const label = normalizeInlineTextEvent(bodyText || attrs.label || "");
@@ -298,22 +559,27 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
     const occurrenceIndex = occurrences.get(labelKey) ?? 0;
     occurrences.set(labelKey, occurrenceIndex + 1);
 
-    triggers.push({
+    const sourceId = normalizeInlineTextEvent(attrs.sourceid) || `${sourceMessageId || "msg"}:${labelKey}:${occurrenceIndex}`;
+    const packItem = packItems.get(sourceId);
+    triggers.push(mergeTriggerWithPackItemEvent({
       triggerId: normalizeInlineTextEvent(attrs.triggerid) || `${sourceMessageId || "msg"}:${labelKey}:${occurrenceIndex}`,
       label,
       action,
       skill,
       blind: attrs.blind ? parseBooleanTextEvent(attrs.blind) : blindSkills.has(skill.toLowerCase()),
       sourceMessageId,
-      sourceId: normalizeInlineTextEvent(attrs.sourceid) || `${sourceMessageId || "msg"}:${labelKey}:${occurrenceIndex}`,
+      sourceId,
       textRange: null,
       dcHint: Number.isFinite(Number(attrs.dchint)) ? Math.floor(Number(attrs.dchint)) : null,
       difficulty,
       loreType: normalizeInlineTextEvent(attrs.loretype),
       note: normalizeInlineTextEvent(attrs.note),
       diceExpr: normalizeInlineTextEvent(attrs.diceexpr) || "1d20",
+      compare: normalizeCompareOperatorTextEvent(attrs.compare),
+      revealMode: "delayed",
+      triggerPackSourceId: sourceId,
       occurrenceIndex,
-    });
+    }, packItem));
 
     void full;
     return label;
@@ -323,6 +589,8 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
     cleanText,
     triggers,
     foundTriggerMarkup,
+    triggerPack: triggerPackParsed.triggerPack,
+    foundTriggerPack: triggerPackParsed.foundTriggerPack,
   };
 }
 
@@ -337,10 +605,24 @@ export function sanitizeMessageInteractiveTriggersEvent(
   if (!rawText) return false;
 
   const parsed = parseInteractiveTriggerMetadataFromTextEvent(rawText, options);
-  if (!parsed.foundTriggerMarkup) return false;
+  const previousTriggers = getMessageInteractiveTriggersEvent(message);
+  const previousTriggerPack = getMessageTriggerPackEvent(message);
+  if (!parsed.foundTriggerMarkup && !parsed.foundTriggerPack) {
+    let cleared = false;
+    if (previousTriggers.length > 0) {
+      setMessageInteractiveTriggersEvent(message, []);
+      cleared = true;
+    }
+    if (previousTriggerPack) {
+      setMessageTriggerPackEvent(message, null);
+      cleared = true;
+    }
+    return cleared;
+  }
 
   setActiveMessageTextEvent(message, parsed.cleanText);
-  setMessageInteractiveTriggersEvent(message, parsed.triggers);
+  setMessageInteractiveTriggersEvent(message, parsed.foundTriggerMarkup ? parsed.triggers : []);
+  setMessageTriggerPackEvent(message, parsed.foundTriggerPack ? parsed.triggerPack : null);
   return true;
 }
 
@@ -353,10 +635,13 @@ export function buildInteractiveTriggerTooltipTextEvent(trigger: InteractiveTrig
   const label = normalizeInlineTextEvent(trigger.label || "该线索");
   const checkName = formatTriggerCheckNameEvent(trigger);
   const difficulty = normalizeDifficultyTextForTooltipEvent(trigger.difficulty);
+  const revealText = trigger.revealMode === "instant"
+    ? "命中后会立刻给出一条简短反馈。"
+    : "命中后若为暗骰，会先记录状态，再通过后续叙事体现。";
   const visibility = trigger.blind
     ? "点击后会进行暗骰检定，不直接公开点数，只告诉你是否通过。"
     : "点击后会进行明骰检定，并直接显示结果。";
-  return `${label} · 可进行${checkName}${trigger.blind ? "暗骰" : "检定"}${difficulty ? ` · 难度：${difficulty}` : ""} · ${visibility}`;
+  return `${label} · 可进行${checkName}${trigger.blind ? "暗骰" : "检定"}${difficulty ? ` · 难度：${difficulty}` : ""} · ${visibility} · ${revealText}`;
 }
 
 /**
@@ -372,5 +657,8 @@ export function buildInteractiveTriggerTooltipHtmlEvent(trigger: InteractiveTrig
   const visibilityDesc = trigger.blind
     ? "不会公开显示点数，只提示是否通过。"
     : "会公开显示点数与检定结果。";
-  return `<span class="st-rh-trigger-tip"><strong>${label}</strong><br>可进行${checkName}${trigger.blind ? "暗骰" : "检定"}<br>${visibilityTitle}：${visibilityDesc}${difficulty ? `<br>难度：${difficulty}` : ""}</span>`;
+  const revealDesc = trigger.revealMode === "instant"
+    ? "体现方式：命中后立即返回短反馈。"
+    : "体现方式：默认走后续叙事体现。";
+  return `<span class="st-rh-trigger-tip"><strong>${label}</strong><br>可进行${checkName}${trigger.blind ? "暗骰" : "检定"}<br>${visibilityTitle}：${visibilityDesc}${difficulty ? `<br>难度：${difficulty}` : ""}<br>${revealDesc}</span>`;
 }

@@ -56,13 +56,14 @@ import {
   startCountdownTickerEvent as startCountdownTickerModuleEvent,
 } from "../events/hooksEvent";
 import {
-  getAssistantOriginalSourceTextFromHostEvent as getAssistantOriginalSourceTextFromHostModuleEvent,
+  getAssistantOriginalSourceCandidateFromHostEvent as getAssistantOriginalSourceCandidateFromHostModuleEvent,
   extractPromptChatFromPayloadEvent as extractPromptChatFromPayloadModuleEvent,
   getMessageTextEvent as getMessageTextModuleEvent,
   getPreferredAssistantSourceTextEvent as getPreferredAssistantSourceTextModuleEvent,
   isAssistantMessageEvent as isAssistantMessageModuleEvent,
   setMessageTextEvent as setMessageTextModuleEvent,
 } from "../events/promptEvent";
+import { getStableAssistantOriginalSourceTextEvent as getStableAssistantOriginalSourceTextModuleEvent } from "../events/messageSanitizerEvent";
 import { hideEventCodeBlocksInDomEvent as hideEventCodeBlocksInDomModuleEvent } from "../events/renderEvent";
 import { registerEventRollCommandEvent as registerEventRollCommandModuleEvent } from "../commands/eventRollCommandEvent";
 import { registerDebugCommandEvent as registerDebugCommandModuleEvent } from "../commands/debugCommandEvent";
@@ -100,10 +101,20 @@ function findLatestAssistantEvent(chat: TavernMessageEvent[]): { msg: TavernMess
   });
 }
 
+function getStableAssistantOriginalSourceTextWiredEvent(message: TavernMessageEvent | undefined): string {
+  return getStableAssistantOriginalSourceTextModuleEvent(message, {
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
+    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
+    getMessageTextEvent: getMessageTextModuleEvent,
+    parseEventEnvelopesEvent,
+  });
+}
+
 function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number): string {
   return buildAssistantMessageIdModuleEvent(message, index, {
     simpleHashEvent: simpleHashCoreEvent,
-    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -114,7 +125,7 @@ function buildAssistantMessageIdEvent(message: TavernMessageEvent, index: number
 function sanitizeAssistantMessageEventBlocksEvent(message: TavernMessageEvent, index?: number): boolean {
   return sanitizeAssistantMessageEventBlocksModuleEvent(message, index, {
     getSettingsEvent: getSettingsStoreEvent,
-    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -144,6 +155,7 @@ export function sanitizeCurrentChatEventBlocksEvent(): void {
 function enhanceAssistantRawSourceButtonsEvent(): void {
   enhanceAssistantRawSourceButtonsModuleEvent({
     getLiveContextEvent: getLiveContextCoreEvent,
+    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
   });
 }
@@ -299,7 +311,8 @@ function handleGenerationEndedEvent(): void {
     findLatestAssistantEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     buildAssistantMessageIdEvent,
-    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -332,7 +345,8 @@ function reconcilePendingRoundWithCurrentChatEvent(reason = "chat_mutated"): boo
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
     buildAssistantMessageIdEvent,
     buildAssistantFloorKeyEvent,
-    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
@@ -423,7 +437,8 @@ export function registerEventHooksEvent(): void {
     eventSource: getTavernEventSourceEvent() ?? undefined,
     event_types: getTavernEventTypesEvent() ?? undefined,
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
-    getAssistantOriginalSourceTextEvent: getAssistantOriginalSourceTextFromHostModuleEvent,
+    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
+    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
     getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,

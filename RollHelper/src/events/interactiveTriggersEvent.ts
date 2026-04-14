@@ -28,6 +28,8 @@ type ResolvedTriggerStateEvent = {
   resolved: boolean;
   statusLabel: string;
   visibility: RollVisibilityEvent | "public";
+  resultGrade?: EventRollRecordEvent["resultGrade"];
+  feedbackText?: string;
 };
 
 function normalizeTextEvent(value: unknown): string {
@@ -76,6 +78,22 @@ function formatTriggerCheckNameEvent(trigger: InteractiveTriggerEvent): string {
   return skill;
 }
 
+function buildResolvedTriggerEventIdEvent(trigger: InteractiveTriggerEvent): string {
+  const sourceMessageId = String(trigger.sourceMessageId || "msg").trim() || "msg";
+  const sourceId = String(trigger.sourceId || trigger.label || "trigger").trim() || "trigger";
+  const skill = String(trigger.skill || trigger.action || "check").trim() || "check";
+  const occurrenceIndex = Number.isFinite(Number(trigger.occurrenceIndex))
+    ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex)))
+    : 0;
+  const raw = `${sourceMessageId}:${sourceId}:${skill}:${occurrenceIndex}`;
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 160);
+  return `itr:${normalized}`;
+}
+
 /**
  * 功能：根据已结算记录生成交互触发的状态标签。
  * @param record 已命中的检定记录。
@@ -89,6 +107,40 @@ function buildResolvedTriggerStatusLabelEvent(record: EventRollRecordEvent): str
   return formatResultGradeLabelEvent(record.resultGrade, "public");
 }
 
+function resolveResolvedTriggerFeedbackTextEvent(
+  trigger: InteractiveTriggerEvent,
+  resultGrade: EventRollRecordEvent["resultGrade"]
+): string {
+  const grade = resultGrade || "failure";
+  if (grade === "critical_success") {
+    return normalizeInlineTextEvent(
+      trigger.triggerPackExplodeText || trigger.triggerPackSuccessText || ""
+    );
+  }
+  if (grade === "partial_success" || grade === "success") {
+    return normalizeInlineTextEvent(trigger.triggerPackSuccessText || "");
+  }
+  if (grade === "critical_failure" || grade === "failure") {
+    return normalizeInlineTextEvent(trigger.triggerPackFailureText || "");
+  }
+  return "";
+}
+
+function matchesResolvedTriggerEvent(args: {
+  trigger: InteractiveTriggerEvent;
+  eventId?: string;
+  sourceAssistantMsgId?: string;
+  targetName?: string;
+  skill?: string;
+}): boolean {
+  if (String(args.eventId || "").trim() === buildResolvedTriggerEventIdEvent(args.trigger)) {
+    return true;
+  }
+  return String(args.sourceAssistantMsgId || "").trim() === String(args.trigger.sourceMessageId || "").trim()
+    && String(args.targetName || "").trim() === String(args.trigger.sourceId || args.trigger.label || "").trim()
+    && String(args.skill || "").trim() === String(args.trigger.skill || "").trim();
+}
+
 /**
  * 功能：查找交互触发对应的最新检定记录。
  * @param trigger 当前交互触发。
@@ -100,33 +152,59 @@ function findResolvedTriggerStateEvent(
   meta: DiceMetaEvent | null | undefined
 ): ResolvedTriggerStateEvent {
   const round = meta?.pendingRound;
-  if (!round) {
-    return {
-      resolved: false,
-      statusLabel: "",
-      visibility: "public",
-    };
+  if (round) {
+    for (let index = round.rolls.length - 1; index >= 0; index -= 1) {
+      const record = round.rolls[index];
+      const event = round.events.find((item) => item.id === record?.eventId);
+      if (!event) continue;
+      const matched = matchesResolvedTriggerEvent({
+        trigger,
+        eventId: event.id,
+        sourceAssistantMsgId: event.sourceAssistantMsgId,
+        targetName: event.targetName,
+        skill: event.skill,
+      });
+      if (!matched) continue;
+      return {
+        resolved: true,
+        statusLabel: buildResolvedTriggerStatusLabelEvent(record),
+        visibility: record.visibility || "public",
+        resultGrade: record.resultGrade,
+        feedbackText: resolveResolvedTriggerFeedbackTextEvent(trigger, record.resultGrade),
+      };
+    }
   }
 
-  for (let index = round.rolls.length - 1; index >= 0; index -= 1) {
-    const record = round.rolls[index];
-    const event = round.events.find((item) => item.id === record?.eventId);
-    if (!event) continue;
-    const matched = String(event.sourceAssistantMsgId || "").trim() === String(trigger.sourceMessageId || "").trim()
-      && String(event.targetName || "").trim() === String(trigger.sourceId || trigger.label || "").trim()
-      && String(event.skill || "").trim() === String(trigger.skill || "").trim();
-    if (!matched) continue;
-    return {
-      resolved: true,
-      statusLabel: buildResolvedTriggerStatusLabelEvent(record),
-      visibility: record.visibility || "public",
-    };
+  const summaryHistory = Array.isArray(meta?.summaryHistory) ? meta.summaryHistory : [];
+  for (let snapshotIndex = summaryHistory.length - 1; snapshotIndex >= 0; snapshotIndex -= 1) {
+    const snapshot = summaryHistory[snapshotIndex];
+    const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
+    for (let eventIndex = events.length - 1; eventIndex >= 0; eventIndex -= 1) {
+      const item = events[eventIndex];
+      const matched = matchesResolvedTriggerEvent({
+        trigger,
+        eventId: item?.id,
+        sourceAssistantMsgId: item?.sourceAssistantMsgId,
+        targetName: item?.targetLabel,
+        skill: item?.skill,
+      });
+      if (!matched) continue;
+      return {
+        resolved: true,
+        statusLabel: formatResultGradeLabelEvent(item?.resultGrade, item?.visibility || "public"),
+        visibility: item?.visibility === "blind" ? "blind" : "public",
+        resultGrade: item?.resultGrade,
+        feedbackText: resolveResolvedTriggerFeedbackTextEvent(trigger, item?.resultGrade),
+      };
+    }
   }
 
   return {
     resolved: false,
     statusLabel: "",
     visibility: "public",
+    resultGrade: undefined,
+    feedbackText: "",
   };
 }
 
@@ -140,14 +218,21 @@ function buildTriggerTooltipHtmlEvent(
   payload: InteractiveTriggerEvent,
   resolvedState: ResolvedTriggerStateEvent
 ): string {
-  const baseTooltip = buildInteractiveTriggerTooltipHtmlEvent(payload);
   if (!resolvedState.resolved) {
-    return baseTooltip;
+    return buildInteractiveTriggerTooltipHtmlEvent(payload);
   }
-  const resolvedDesc = resolvedState.visibility === "blind"
-    ? `结果等级：${resolvedState.statusLabel}。真实点数、DC 与修正不会公开。`
-    : "这条线索已经完成检定，可点击查看状态。";
-  return `${baseTooltip}<br><span class="st-rh-trigger-tip-state">${escapeHtmlEvent(resolvedState.statusLabel)}｜${resolvedDesc}</span>`;
+  const directText = normalizeInlineTextEvent(resolvedState.feedbackText || "");
+  if (directText) {
+    return `<span class="st-rh-trigger-tip"><strong>${escapeHtmlEvent(payload.label || "该线索")}</strong><br>${escapeHtmlEvent(directText)}</span>`;
+  }
+  if (payload.blind && payload.revealMode !== "instant") {
+    return `<span class="st-rh-trigger-tip"><strong>${escapeHtmlEvent(payload.label || "该线索")}</strong><br>待体现｜${escapeHtmlEvent(
+      resolvedState.statusLabel || "暗骰已处理"
+    )}</span>`;
+  }
+  return `<span class="st-rh-trigger-tip"><strong>${escapeHtmlEvent(payload.label || "该线索")}</strong><br>${escapeHtmlEvent(
+    resolvedState.statusLabel || "已完成"
+  )}</span>`;
 }
 
 /**
@@ -175,7 +260,13 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolvedState
     Number(payload.dcHint)
   )
     ? String(Math.floor(Number(payload.dcHint)))
-    : ""}" data-difficulty="${escapeHtmlEvent(payload.difficulty || "normal")}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}" data-occurrence-index="${Number.isFinite(
+    : ""}" data-difficulty="${escapeHtmlEvent(payload.difficulty || "normal")}" data-dice-expr="${escapeHtmlEvent(payload.diceExpr || "")}" data-compare="${escapeHtmlEvent(
+    payload.compare || ">="
+  )}" data-reveal-mode="${escapeHtmlEvent(payload.revealMode || "delayed")}" data-trigger-pack-source-id="${escapeHtmlEvent(
+    payload.triggerPackSourceId || payload.sourceId || ""
+  )}" data-trigger-pack-success="${escapeHtmlEvent(payload.triggerPackSuccessText || "")}" data-trigger-pack-failure="${escapeHtmlEvent(
+    payload.triggerPackFailureText || ""
+  )}" data-trigger-pack-explode="${escapeHtmlEvent(payload.triggerPackExplodeText || "")}" data-occurrence-index="${Number.isFinite(
     Number(payload.occurrenceIndex)
   )
     ? String(Math.max(0, Math.floor(Number(payload.occurrenceIndex))))
@@ -550,6 +641,12 @@ function buildTriggerSignatureEvent(
       sourceId: normalizeInlineTextEvent(trigger.sourceId),
       sourceFloorKey: normalizeInlineTextEvent(trigger.sourceFloorKey),
       sourceMessageId: normalizeInlineTextEvent(trigger.sourceMessageId),
+      compare: normalizeInlineTextEvent(trigger.compare),
+      revealMode: normalizeInlineTextEvent(trigger.revealMode),
+      triggerPackSourceId: normalizeInlineTextEvent(trigger.triggerPackSourceId),
+      triggerPackSuccessText: normalizeInlineTextEvent(trigger.triggerPackSuccessText),
+      triggerPackFailureText: normalizeInlineTextEvent(trigger.triggerPackFailureText),
+      triggerPackExplodeText: normalizeInlineTextEvent(trigger.triggerPackExplodeText),
       occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
       resolvedState: findResolvedTriggerStateEvent(trigger, meta),
     })),
@@ -665,7 +762,30 @@ export interface ExecuteInteractiveTriggerDepsEvent {
     event: {
       title: string;
     };
+    feedback: {
+      revealMode: "instant" | "delayed";
+      visibility: "public" | "blind";
+      title: string;
+      resultGrade: string;
+      stateLabel: string;
+      feedbackText: string;
+    };
   }>;
+}
+
+function buildInteractiveTriggerFeedbackCardHtmlEvent(result: Awaited<ReturnType<ExecuteInteractiveTriggerDepsEvent["performInteractiveTriggerRollEvent"]>>): string {
+  const feedback = result.feedback;
+  const gradeLabel = formatResultGradeLabelEvent(
+    feedback.resultGrade as EventRollRecordEvent["resultGrade"],
+    feedback.visibility === "blind" ? "blind" : "public"
+  );
+  return `<div class="st-rh-trigger-feedback-card"><strong>${escapeHtmlEvent(
+    feedback.title || result.event?.title || "线索检定"
+  )}</strong><div>模式：${escapeHtmlEvent(feedback.revealMode === "instant" ? "即时反馈" : "延迟体现")}</div><div>状态：${escapeHtmlEvent(
+    feedback.stateLabel || "已完成"
+  )}</div><div>结果等级：${escapeHtmlEvent(gradeLabel)}</div><div>${escapeHtmlEvent(
+    feedback.feedbackText || "检定已完成。"
+  )}</div></div>`;
 }
 
 export async function executeInteractiveTriggerEvent(
@@ -673,7 +793,8 @@ export async function executeInteractiveTriggerEvent(
   deps: ExecuteInteractiveTriggerDepsEvent
 ): Promise<void> {
   try {
-    await deps.performInteractiveTriggerRollEvent(trigger);
+    const result = await deps.performInteractiveTriggerRollEvent(trigger);
+    deps.appendToConsoleEvent(buildInteractiveTriggerFeedbackCardHtmlEvent(result), "card");
     deps.persistChatSafeEvent?.();
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
@@ -713,11 +834,12 @@ function buildResolvedTriggerMenuItemsEvent(
 ) {
   const statusLabel = normalizeInlineTextEvent(triggerNode.dataset.resolvedLabel || "已检定完成");
   const visibility = normalizeInlineTextEvent(triggerNode.dataset.resolvedVisibility || (trigger.blind ? "blind" : "public"));
+  const revealMode = normalizeInlineTextEvent(triggerNode.dataset.revealMode || trigger.revealMode || "delayed");
   if (visibility === "blind") {
     return [
       {
         id: `${trigger.triggerId}:resolved-blind`,
-        label: "已暗骰处理",
+        label: revealMode === "instant" ? "已即时体现" : "已暗骰处理",
         iconClassName: "fa-solid fa-eye-slash",
         disabled: true,
         onSelect: () => undefined,
@@ -731,7 +853,9 @@ function buildResolvedTriggerMenuItemsEvent(
       },
       {
         id: `${trigger.triggerId}:resolved-detail`,
-        label: "真实点数、阈值与修正不会公开显示。",
+        label: revealMode === "instant"
+          ? "已给出即时反馈，真实点数、阈值与修正不会公开显示。"
+          : "真实点数、阈值与修正不会公开显示。",
         iconClassName: "fa-solid fa-circle-info",
         disabled: true,
         onSelect: () => undefined,
@@ -781,6 +905,8 @@ function buildSelectionFallbackTriggersEvent(args: {
     textRange: null,
     dcHint: null,
     difficulty: "normal" as const,
+    compare: ">=" as const,
+    revealMode: "delayed" as const,
     loreType: "",
     note: "来自玩家划词触发",
     diceExpr: "1d20",
@@ -960,6 +1086,18 @@ function buildTriggerFromNodeEvent(triggerNode: HTMLElement): InteractiveTrigger
     loreType: normalizeInlineTextEvent(triggerNode.dataset.loreType),
     note: normalizeInlineTextEvent(triggerNode.dataset.note),
     diceExpr: normalizeInlineTextEvent(triggerNode.dataset.diceExpr) || "1d20",
+    compare:
+      triggerNode.dataset.compare === ">="
+      || triggerNode.dataset.compare === ">"
+      || triggerNode.dataset.compare === "<="
+      || triggerNode.dataset.compare === "<"
+        ? triggerNode.dataset.compare
+        : ">=",
+    revealMode: triggerNode.dataset.revealMode === "instant" ? "instant" : "delayed",
+    triggerPackSourceId: normalizeInlineTextEvent(triggerNode.dataset.triggerPackSourceId),
+    triggerPackSuccessText: normalizeInlineTextEvent(triggerNode.dataset.triggerPackSuccess),
+    triggerPackFailureText: normalizeInlineTextEvent(triggerNode.dataset.triggerPackFailure),
+    triggerPackExplodeText: normalizeInlineTextEvent(triggerNode.dataset.triggerPackExplode),
   };
 }
 

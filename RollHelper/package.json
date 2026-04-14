@@ -3,7 +3,8 @@
     "build": "esbuild index.ts --bundle --format=iife --platform=browser --target=es2020 --loader:.html=text --loader:.css=text --outfile=dist/index.js --minify",
     "watch": "esbuild index.ts --bundle --format=iife --platform=browser --target=es2020 --loader:.html=text --loader:.css=text --outfile=dist/index.js --watch",
     "typecheck": "node ../node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/lib/tsc.js --noEmit",
-    "test": "vite serve test"
+    "test": "vite serve test",
+    "test:unit": "../MemoryOS/node_modules/.bin/vitest run --config vitest.config.ts"
   },
   "devDependencies": {
     "esbuild": "^0.27.3",

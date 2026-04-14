@@ -218,26 +218,15 @@ export function getMessageTextEvent(message: TavernMessageEvent | undefined): st
 }
 
 /**
- * 功能：读取适合“复制原格式”的助手原文，保留正文与 ROLLJSON，但不拼入宿主单独保存的思维链。
+ * 功能：从宿主读取助手原文候选，仅供快照捕获阶段作为输入使用。
  * @param message 待读取的助手消息。
- * @returns 复制用原始文本；不存在时返回空字符串。
+ * @returns 宿主提供的原始候选文本；不存在时返回空字符串。
  */
-export function getAssistantOriginalSourceTextFromHostEvent(
+export function getAssistantOriginalSourceCandidateFromHostEvent(
   message: TavernMessageEvent | undefined
 ): string {
-  const preferredText = getPreferredAssistantSourceTextEvent(message);
   const result = extractSdkTavernMessageOriginalTextEvent(message);
-  const originalText = String(result.text ?? "");
-  if (!preferredText.trim()) {
-    return originalText;
-  }
-  if (originalText === preferredText) {
-    return originalText;
-  }
-  if (originalText.endsWith(`\n${preferredText}`) || originalText.endsWith(preferredText)) {
-    return preferredText;
-  }
-  return originalText;
+  return String(result.text ?? "");
 }
 
 export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent | undefined): string {
@@ -381,6 +370,7 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
   const lines: string[] = [];
   lines.push("【事件骰子协议（系统动态）】");
   lines.push("1. 仅在文末输出 ```rolljson 代码块（严禁 ```json）。");
+  lines.push("   - 若本轮存在必须立刻反馈的关键情报线索，可在 rolljson 后额外追加 1 个 ```triggerpack 代码块；没有这类线索就不要输出。");
   lines.push("2. 叙事正文禁止直接给出判定结果，先给事件，再由系统结算并推进剧情。");
   lines.push("3. rolljson 基本格式：");
   lines.push("{");
@@ -416,6 +406,12 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push('  ,"round_control": "continue|end_round",');
     lines.push('  "end_round": bool');
   }
+  lines.push("}");
+  lines.push("3.1 triggerpack 仅用于少量关键情报 trigger 的即时反馈：");
+  lines.push("{");
+  lines.push('  "type": "trigger_pack", "version": "1",');
+  lines.push('  "defaults": { "dice": "1d20", "compare": ">=" },');
+  lines.push('  "items": [{ "sid": "str", "skill": "str", "difficulty": "easy|normal|hard|extreme", "reveal": "instant|delayed", "success": "str", "failure": "str", "explode": "str(可选)" }]');
   lines.push("}");
 
   lines.push("4. 可用能力说明：");
@@ -498,10 +494,15 @@ export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEven
     lines.push('   - 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" blind="1" sourceId="bookshelf_scratches">异常的刮痕</rh-trigger>');
     lines.push("   - 只标剧情正文中的关键线索短词或短语，不要放在 rolljson、outcomes、desc、dc_reason、状态标签、规则块或摘要块里。");
     lines.push("   - 不要把 rh-trigger 写成骰子走向的一部分；走向只负责叙事结果，交互标记只负责正文中的下一步调查入口。");
+    lines.push("   - triggerpack 只能通过 rh-trigger 的 sourceId / sid 关联，绝不能把 success / failure 文本塞进 rh-trigger 属性里。");
     lines.push("   - 如果本次暗骰后果、被动发现或剧情推进里出现了新的可继续调查线索，就必须在最终剧情正文对应的关键短词上补一个 rh-trigger，不能只写线索却不给点击入口。");
     lines.push("   - 只有当该线索明确不适合继续互动、不可进一步检定，或只是纯氛围描写时，才允许不写 rh-trigger。");
     lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
     lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
+    lines.push("   - 每次回复最多只给 1~2 个 trigger 配 triggerpack，而且优先用于异响、痕迹、气味、可疑停顿、异常刮痕等必须立刻影响决策的关键情报。");
+    lines.push("   - 普通 trigger 不要硬配 triggerpack；只写正文入口即可。");
+    lines.push("   - triggerpack 的 success / failure / explode 都必须是短句，尽量控制在 25~45 字内。");
+    lines.push("   - 情报型检定优先使用 reveal=\"instant\"；潜行、欺骗、伏击、藏匿、是否暴露等状态型检定优先使用 reveal=\"delayed\"。");
     lines.push("   - difficulty 仅允许 easy / normal / hard / extreme，由系统自动换算阈值；不要手写成功点数。");
     lines.push(`   - 下列技能通常应默认暗骰：${blindSkillText}。适用时请写 blind="1"。`);
     lines.push("   - 如果你在正文里给某个 rh-trigger 标成暗骰，请确保对应的剧情后果已经在结构化 outcomes 中写全，不要把暗骰成功/失败走向塞进 trigger 文案。");

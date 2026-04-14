@@ -10,11 +10,9 @@ import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
 import { ensureSdkFloatingToolbar, SDK_FLOATING_TOOLBAR_ID } from "../../../SDK/toolbar";
 import {
-  collectAssistantSourceCandidatesEvent,
-  getAssistantOriginalSourceTextEvent,
+  buildAssistantOriginalSourceMetaEvent,
+  ensureAssistantOriginalSnapshotPersistedEvent,
   getMessageTextSafe,
-  hasAssistantOriginalSourceTextEvent,
-  rememberAssistantOriginalSnapshotEvent,
   rememberAssistantOriginalSourceTextEvent,
   resetAssistantSwipeRuntimeStateEvent,
   sanitizeAssistantMessageArtifactsEvent,
@@ -26,12 +24,31 @@ import { getSelectionFallbackRemainingSummaryEvent } from "./interactiveTriggers
 const RH_COPY_SOURCE_BUTTON_ATTR_Event = "data-rh-copy-source";
 const RH_COPY_SOURCE_BUTTON_STYLE_ID_Event = "st-rh-copy-source-style";
 
+function collectAssistantSourceCandidatesForHooksEvent(
+  message: TavernMessageEvent,
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "getStableAssistantOriginalSourceTextEvent"
+    | "getHostOriginalSourceTextEvent"
+    | "getPreferredAssistantSourceTextEvent"
+    | "getMessageTextEvent"
+  >
+): string[] {
+  return [
+    deps.getStableAssistantOriginalSourceTextEvent(message),
+    deps.getHostOriginalSourceTextEvent(message),
+    deps.getPreferredAssistantSourceTextEvent(message),
+    deps.getMessageTextEvent(message),
+  ].filter((item, index, array) => item && array.indexOf(item) === index);
+}
+
 export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
   eventSource: any;
   event_types: Record<string, string> | undefined;
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
-  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -68,7 +85,8 @@ export interface HandleGenerationEndedDepsEvent {
   ) => { msg: TavernMessageEvent; index: number } | null;
   getDiceMetaEvent: () => DiceMetaEvent;
   buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
-  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -107,7 +125,8 @@ export interface ReconcilePendingRoundWithCurrentChatDepsEvent {
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
   buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
   buildAssistantFloorKeyEvent: (assistantMsgId: string) => string | null;
-  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -160,14 +179,15 @@ function resolveAssistantEnvelopeEvent(
   applyScope: "protagonist_only" | "all",
   deps: Pick<
     HandleGenerationEndedDepsEvent,
-    | "getAssistantOriginalSourceTextEvent"
+    | "getStableAssistantOriginalSourceTextEvent"
+    | "getHostOriginalSourceTextEvent"
     | "getPreferredAssistantSourceTextEvent"
     | "getMessageTextEvent"
     | "parseEventEnvelopesEvent"
     | "filterEventsByApplyScopeEvent"
   >
 ): ResolvedAssistantEnvelopeEvent {
-  const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
+  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(message, deps);
 
   let chosenText = "";
   let chosenEvents: DiceEventSpecEvent[] = [];
@@ -407,7 +427,7 @@ function captureLatestAssistantOriginalSnapshotEvent(
     EventHooksDepsEvent,
     | "getLiveContextEvent"
     | "isAssistantMessageEvent"
-    | "getAssistantOriginalSourceTextEvent"
+    | "getHostOriginalSourceTextEvent"
     | "getPreferredAssistantSourceTextEvent"
     | "getMessageTextEvent"
     | "parseEventEnvelopesEvent"
@@ -418,8 +438,8 @@ function captureLatestAssistantOriginalSnapshotEvent(
   const target = resolveAssistantEventTargetEvent(eventArgs, deps);
   if (!target) return;
   const sessionKey = beginAssistantGenerationSessionEvent(target, reason, deps);
-  const changed = rememberAssistantOriginalSnapshotEvent(target.msg, {
-    getAssistantOriginalSourceTextEvent: deps.getAssistantOriginalSourceTextEvent,
+  const changed = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
+    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
     getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
     getMessageTextEvent: deps.getMessageTextEvent,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
@@ -465,7 +485,7 @@ function setAssistantRawSourceButtonStateEvent(
 }
 
 export function enhanceAssistantRawSourceButtonsEvent(
-  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent"> & {
+  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent" | "getStableAssistantOriginalSourceTextEvent"> & {
     isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
   }
 ): void {
@@ -484,7 +504,7 @@ export function enhanceAssistantRawSourceButtonsEvent(
     const message = resolveMessageRecordByMesIdEvent(mesElement, chat as TavernMessageEvent[]);
     const shouldShow =
       deps.isAssistantMessageEvent(message ?? undefined)
-      && hasAssistantOriginalSourceTextEvent(message ?? undefined);
+      && Boolean(deps.getStableAssistantOriginalSourceTextEvent(message ?? undefined).trim());
     const existed = buttonWrap.querySelector(
       `[${RH_COPY_SOURCE_BUTTON_ATTR_Event}="1"]`
     ) as HTMLElement | null;
@@ -583,6 +603,12 @@ export function handleGenerationEndedEvent(
   if (!latestAssistant) return;
 
   const meta = deps.getDiceMetaEvent();
+  const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(latestAssistant.msg, {
+    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
+    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+    getMessageTextEvent: deps.getMessageTextEvent,
+    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+  });
   const assistantMsgId = deps.buildAssistantMessageIdEvent(
     latestAssistant.msg,
     latestAssistant.index
@@ -598,7 +624,7 @@ export function handleGenerationEndedEvent(
   const chosenEvents = resolvedEnvelope.chosenEvents;
   const chosenRanges = resolvedEnvelope.chosenRanges;
   const chosenShouldEndRound = resolvedEnvelope.chosenShouldEndRound;
-  const sourceCandidates = collectAssistantSourceCandidatesEvent(latestAssistant.msg, deps);
+  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(latestAssistant.msg, deps);
   const fallbackSnapshotText = sourceCandidates.find((item) => String(item ?? "").trim()) || "";
 
   if (!chosenText.trim()) {
@@ -613,14 +639,21 @@ export function handleGenerationEndedEvent(
 
   meta.lastProcessedAssistantMsgId = assistantMsgId;
   const snapshotText = chosenText.trim() || fallbackSnapshotText.trim();
-  const originalSnapshotChanged = snapshotText
-    ? rememberAssistantOriginalSourceTextEvent(latestAssistant.msg, snapshotText, true)
+  const latestSnapshotChanged = snapshotText
+    ? rememberAssistantOriginalSourceTextEvent(
+      latestAssistant.msg,
+      snapshotText,
+      true,
+      buildAssistantOriginalSourceMetaEvent(snapshotText, "plugin_snapshot", {
+        parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+      })
+    )
     : false;
   const cleaned = deps.removeRangesEvent(chosenText, ranges);
   deps.setMessageTextEvent(latestAssistant.msg, cleaned);
 
   deps.hideEventCodeBlocksInDomEvent();
-  if (ranges.length > 0 || originalSnapshotChanged) {
+  if (ranges.length > 0 || originalSnapshotChanged || latestSnapshotChanged) {
     deps.persistChatSafeEvent();
   }
 
@@ -666,7 +699,8 @@ export function findLatestAssistantEvent(
 
 export interface BuildAssistantMessageIdDepsEvent {
   simpleHashEvent: (input: string) => string;
-  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -687,11 +721,7 @@ function buildAssistantMessageVersionTextEvent(
   message: TavernMessageEvent,
   deps: BuildAssistantMessageIdDepsEvent
 ): string {
-  const sourceCandidates = [
-    deps.getAssistantOriginalSourceTextEvent(message),
-    deps.getPreferredAssistantSourceTextEvent(message),
-    deps.getMessageTextEvent(message),
-  ].filter((item, index, array) => item && array.indexOf(item) === index);
+  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(message, deps);
   if (sourceCandidates.length <= 0) {
     return "";
   }
@@ -758,7 +788,7 @@ export interface SanitizeAssistantMessageDepsEvent {
   getSettingsEvent: () => {
     defaultBlindSkillsText?: string;
   };
-  getAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
+  getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getMessageTextEvent: (message: TavernMessageEvent | undefined) => string;
   parseEventEnvelopesEvent: (text: string) => {
@@ -777,7 +807,7 @@ export function sanitizeAssistantMessageEventBlocksEvent(
 ): boolean {
   return sanitizeAssistantMessageArtifactsEvent(message, index, {
     getSettingsEvent: deps.getSettingsEvent,
-    getAssistantOriginalSourceTextEvent: deps.getAssistantOriginalSourceTextEvent,
+    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
     getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
     getMessageTextEvent: deps.getMessageTextEvent,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
@@ -1226,7 +1256,8 @@ function buildBlindHistoryPreviewHtmlEvent(
       const stateText = escapePreviewHtmlEvent(
         formatBlindHistoryDisplayStateEvent(
           resolveBlindGuidanceStateEvent(item),
-          settings.blindHistoryDisplayConsumedAsNarrativeApplied !== false
+          settings.blindHistoryDisplayConsumedAsNarrativeApplied !== false,
+          item.revealMode === "instant" ? "instant" : "delayed"
         )
       );
       const gradeHtml = item.resultGrade
@@ -1683,7 +1714,7 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     const chat = liveCtx?.chat;
     if (!Array.isArray(chat)) return;
     const message = resolveMessageRecordByMesIdEvent(mesElement, chat as TavernMessageEvent[]);
-    const originalSourceText = getAssistantOriginalSourceTextEvent(message ?? undefined);
+    const originalSourceText = deps.getStableAssistantOriginalSourceTextEvent(message ?? undefined);
     const fallbackText = getMessageTextSafe(message ?? undefined);
     const copyText = originalSourceText.trim() || fallbackText.trim();
     if (!copyText) {

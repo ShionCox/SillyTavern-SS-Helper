@@ -80,6 +80,7 @@ export function createRoundSummarySnapshotEvent(
       status,
       resultSource: record?.source ?? null,
       visibility: record?.visibility,
+      revealMode: record?.revealMode === "instant" ? "instant" : "delayed",
       total,
       skillModifierApplied: Number(record?.skillModifierApplied ?? 0),
       statusModifierApplied: Number(record?.statusModifierApplied ?? 0),
@@ -203,7 +204,9 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
     return "超时未操作，系统判定失败";
   }
   if (item.visibility === "blind" || item.resultSource === "blind_manual_roll") {
-    return "暗骰检定已结算（结果隐藏，将通过叙事体现）";
+    return item.revealMode === "instant"
+      ? "暗骰检定已结算（结果隐藏，已即时反馈）"
+      : "暗骰检定已结算（结果隐藏，将通过叙事体现）";
   }
 
   const totalText = item.total == null ? "-" : String(item.total);
@@ -236,6 +239,14 @@ function toBlindSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): st
   }
   if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
     return "暗骰失败";
+  }
+  if (item.revealMode === "instant") {
+    if (item.resultGrade === "critical_success") return "暗骰已即时反馈（大成功）";
+    if (item.resultGrade === "critical_failure") return "暗骰已即时反馈（大失败）";
+    if (item.resultGrade === "partial_success") return "暗骰已即时反馈（勉强成功）";
+    if (item.resultGrade === "success") return "暗骰已即时反馈（成功）";
+    if (item.resultGrade === "failure") return "暗骰已即时反馈（失败）";
+    return "暗骰已即时反馈";
   }
   if (item.resultGrade === "critical_success") return "暗骰大成功";
   if (item.resultGrade === "critical_failure") return "暗骰大失败";

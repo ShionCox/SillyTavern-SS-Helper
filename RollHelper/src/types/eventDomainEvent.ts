@@ -20,6 +20,7 @@ export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
 export type RollVisibilityEvent = "public" | "blind" | "passive";
 export type SelectionFallbackLimitModeEvent = "char_count" | "sentence_count";
+export type TriggerPackRevealModeEvent = "instant" | "delayed";
 export type BlindGuidanceStateEvent =
   | "queued"
   | "consumed"
@@ -37,6 +38,30 @@ export interface EventOutcomesEvent {
   success?: string;
   failure?: string;
   explode?: string;
+}
+
+export interface TriggerPackDefaultsEvent {
+  dice?: string;
+  compare?: CompareOperatorEvent;
+}
+
+export interface TriggerPackItemEvent {
+  sid: string;
+  skill: string;
+  difficulty: EventDifficultyLevelEvent;
+  reveal: TriggerPackRevealModeEvent;
+  success?: string;
+  failure?: string;
+  explode?: string;
+  dice?: string;
+  compare?: CompareOperatorEvent;
+}
+
+export interface TriggerPackEvent {
+  type: "trigger_pack";
+  version: "1";
+  defaults?: TriggerPackDefaultsEvent;
+  items: TriggerPackItemEvent[];
 }
 
 export interface EventTimerStateEvent {
@@ -209,6 +234,7 @@ export interface EventRollRecordEvent {
   | "downgraded_by_ai_limit";
   explodePolicyReason?: string;
   sourceAssistantMsgId?: string;
+  revealMode?: TriggerPackRevealModeEvent;
 }
 
 export interface PendingRoundEvent {
@@ -306,6 +332,7 @@ export interface BlindHistoryItemEvent {
   archivedAt?: number;
   dedupeKey?: string;
   state?: BlindGuidanceStateEvent;
+  revealMode?: TriggerPackRevealModeEvent;
 }
 
 export interface InteractiveTriggerEvent {
@@ -324,6 +351,12 @@ export interface InteractiveTriggerEvent {
   loreType?: string;
   note?: string;
   diceExpr?: string;
+  compare?: CompareOperatorEvent;
+  revealMode?: TriggerPackRevealModeEvent;
+  triggerPackSourceId?: string;
+  triggerPackSuccessText?: string;
+  triggerPackFailureText?: string;
+  triggerPackExplodeText?: string;
   resolvedResultGrade?: EventResultGradeEvent;
 }
 
@@ -374,6 +407,7 @@ export interface RoundSummaryEventItemEvent {
   status: SummaryEventStatusEvent;
   resultSource: EventRollSourceEvent | null;
   visibility?: RollVisibilityEvent;
+  revealMode?: TriggerPackRevealModeEvent;
   total: number | null;
   skillModifierApplied: number;
   statusModifierApplied: number;

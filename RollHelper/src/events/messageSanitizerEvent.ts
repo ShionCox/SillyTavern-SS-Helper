@@ -9,6 +9,16 @@ import type { DiceEventSpecEvent, TavernMessageEvent } from "../types/eventDomai
 
 const RH_ORIGINAL_SOURCE_KEY_Event = "rollhelper_original_source_v1";
 const RH_ORIGINAL_SOURCE_ENABLED_KEY_Event = "rollhelper_original_source_enabled_v1";
+const RH_ORIGINAL_SOURCE_META_KEY_Event = "rollhelper_original_source_meta_v1";
+
+export type AssistantOriginalSourceMetaEvent = {
+    source: "host" | "plugin_snapshot" | "fallback";
+    capturedAt: number;
+    richnessScore: number;
+    containsRollJson: boolean;
+    containsEventEnvelope: boolean;
+    containsInteractiveTrigger: boolean;
+};
 
 export function getMessageTextSafe(message: any): string {
     if (!message) return '';
@@ -120,13 +130,18 @@ function clearAssistantOriginalSourceMetaEvent(message: TavernMessageEvent): boo
         delete container[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event];
         changed = true;
     }
+    if (RH_ORIGINAL_SOURCE_META_KEY_Event in container) {
+        delete container[RH_ORIGINAL_SOURCE_META_KEY_Event];
+        changed = true;
+    }
     return changed;
 }
 
 function setAssistantOriginalSourceMetaEvent(
     message: TavernMessageEvent,
     originalSourceText: string,
-    enabled: boolean
+    enabled: boolean,
+    meta?: AssistantOriginalSourceMetaEvent
 ): boolean {
     const normalizedText = String(originalSourceText ?? "");
     const normalizedEnabled = Boolean(enabled && normalizedText.trim());
@@ -146,77 +161,32 @@ function setAssistantOriginalSourceMetaEvent(
         container[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event] = true;
         changed = true;
     }
+    const previousMeta = container[RH_ORIGINAL_SOURCE_META_KEY_Event];
+    if (meta) {
+        const nextMetaJson = JSON.stringify(meta);
+        const previousMetaJson = previousMeta == null ? "" : JSON.stringify(previousMeta);
+        if (previousMetaJson !== nextMetaJson) {
+            container[RH_ORIGINAL_SOURCE_META_KEY_Event] = meta;
+            changed = true;
+        }
+    }
     return changed;
-}
-
-/**
- * 功能：判断一段文本是否包含值得保留的原始控制块或交互标记。
- * 参数：
- *   text：待判断的文本。
- *   deps：清理依赖。
- * 返回：
- *   boolean：若文本包含 rolljson、裸事件块或交互触发标记则返回 true。
- */
-function isRichAssistantOriginalSourceEvent(
-    text: string,
-    deps: SanitizeAssistantMessageArtifactsDepsEvent
-): boolean {
-    const normalizedText = String(text ?? "").trim();
-    if (!normalizedText) return false;
-    if (/<rh-trigger\b/i.test(normalizedText)) return true;
-    if (deps.parseEventEnvelopesEvent) {
-        const parsed = deps.parseEventEnvelopesEvent(normalizedText);
-        if (parsed.events.length > 0 || parsed.ranges.length > 0) {
-            return true;
-        }
-    }
-    return stripRollJsonBlocks(normalizedText) !== normalizedText;
-}
-
-/**
- * 功能：在清理前保留一份最有价值的原始文本快照，供“复制原格式”复用。
- * 参数：
- *   message：目标助手消息。
- *   sourceCandidates：候选原始文本列表。
- *   deps：清理依赖。
- * 返回：
- *   boolean：若快照实际发生变化则返回 true。
- */
-function rememberAssistantOriginalSnapshotBeforeSanitizeEvent(
-    message: TavernMessageEvent,
-    sourceCandidates: string[],
-    deps: SanitizeAssistantMessageArtifactsDepsEvent
-): boolean {
-    const existingText = getAssistantOriginalSourceTextEvent(message);
-    const existingIsRich = isRichAssistantOriginalSourceEvent(existingText, deps);
-    for (const candidate of sourceCandidates) {
-        const normalizedCandidate = String(candidate ?? "").trim();
-        if (!normalizedCandidate) continue;
-        const candidateIsRich = isRichAssistantOriginalSourceEvent(normalizedCandidate, deps);
-        if (!candidateIsRich && existingIsRich) {
-            continue;
-        }
-        if (normalizedCandidate === existingText.trim()) {
-            return false;
-        }
-        return setAssistantOriginalSourceMetaEvent(message, normalizedCandidate, true);
-    }
-    return false;
 }
 
 export function rememberAssistantOriginalSourceTextEvent(
     message: TavernMessageEvent,
     originalSourceText: string,
-    enabled = true
+    enabled = true,
+    meta?: AssistantOriginalSourceMetaEvent
 ): boolean {
-    return setAssistantOriginalSourceMetaEvent(message, originalSourceText, enabled);
+    return setAssistantOriginalSourceMetaEvent(message, originalSourceText, enabled, meta);
 }
 
 export function resetAssistantSwipeRuntimeStateEvent(message: TavernMessageEvent): boolean {
     return clearAssistantOriginalSourceMetaEvent(message);
 }
 
-export function getAssistantOriginalSourceTextEvent(message: TavernMessageEvent | undefined): string {
+export function getPersistedAssistantOriginalSourceTextEvent(message: TavernMessageEvent | undefined): string {
     if (!message || typeof message !== "object") return "";
     const container = getAssistantOriginalSourceContainerEvent(message, false);
     const enabled = container?.[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event] === true;
@@ -225,56 +195,100 @@ export function getAssistantOriginalSourceTextEvent(message: TavernMessageEvent 
     return "";
 }
 
-export function hasAssistantOriginalSourceTextEvent(message: TavernMessageEvent | undefined): boolean {
-    return Boolean(getAssistantOriginalSourceTextEvent(message).trim());
+export function getPersistedAssistantOriginalSourceMetaEvent(
+    message: TavernMessageEvent | undefined
+): AssistantOriginalSourceMetaEvent | null {
+    if (!message || typeof message !== "object") return null;
+    const container = getAssistantOriginalSourceContainerEvent(message, false);
+    const meta = container?.[RH_ORIGINAL_SOURCE_META_KEY_Event];
+    if (!meta || typeof meta !== "object") return null;
+    return meta as AssistantOriginalSourceMetaEvent;
 }
 
-function resolveAssistantOriginalSourceCandidateEvent(
-    sourceCandidates: string[],
-    deps: SanitizeAssistantMessageArtifactsDepsEvent
-): string {
-    for (const sourceText of sourceCandidates) {
-        if (!String(sourceText ?? "").trim()) continue;
-        if (/<rh-trigger\b/i.test(sourceText)) {
-            return sourceText;
-        }
-        if (deps.parseEventEnvelopesEvent) {
-            const parsed = deps.parseEventEnvelopesEvent(sourceText);
-            if (parsed.events.length > 0 || parsed.ranges.length > 0) {
-                return sourceText;
-            }
-        }
-        if (stripRollJsonBlocks(sourceText) !== sourceText.trim()) {
-            return sourceText;
+type AssistantOriginalSourceCandidateDepsEvent = Pick<
+    SanitizeAssistantMessageArtifactsDepsEvent,
+    | "getHostOriginalSourceTextEvent"
+    | "getPreferredAssistantSourceTextEvent"
+    | "getMessageTextEvent"
+    | "parseEventEnvelopesEvent"
+>;
+
+function normalizeAssistantOriginalSourceCandidatesEvent(sourceCandidates: string[]): string[] {
+    return sourceCandidates
+        .map((item) => String(item ?? "").trim())
+        .filter((item, candidateIndex, array) => item && array.indexOf(item) === candidateIndex);
+}
+
+export function scoreAssistantOriginalSourceRichnessEvent(
+    text: string,
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent">
+): number {
+    const normalizedText = String(text ?? "").trim();
+    if (!normalizedText) return 0;
+
+    let score = 1;
+    if (/<rh-trigger\b/i.test(normalizedText)) {
+        score += 10;
+    }
+    if (/"type"\s*:\s*"trigger_pack"/i.test(normalizedText)) {
+        score += 10;
+    }
+    if (deps.parseEventEnvelopesEvent) {
+        const parsed = deps.parseEventEnvelopesEvent(normalizedText);
+        if (parsed.events.length > 0 || parsed.ranges.length > 0) {
+            score += 20;
         }
     }
-    return "";
+    if (stripRollJsonBlocks(normalizedText) !== normalizedText) {
+        score += 20;
+    }
+    score += Math.min(5, Math.floor(normalizedText.length / 400));
+    return score;
 }
 
-export function collectAssistantSourceCandidatesEvent(
+export function buildAssistantOriginalSourceMetaEvent(
+    text: string,
+    source: AssistantOriginalSourceMetaEvent["source"],
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent">
+): AssistantOriginalSourceMetaEvent {
+    const normalizedText = String(text ?? "").trim();
+    const parsed = deps.parseEventEnvelopesEvent?.(normalizedText);
+    return {
+        source,
+        capturedAt: Date.now(),
+        richnessScore: scoreAssistantOriginalSourceRichnessEvent(normalizedText, deps),
+        containsRollJson: stripRollJsonBlocks(normalizedText) !== normalizedText,
+        containsEventEnvelope: Boolean(parsed && (parsed.events.length > 0 || parsed.ranges.length > 0)),
+        containsInteractiveTrigger: /<rh-trigger\b/i.test(normalizedText) || /"type"\s*:\s*"trigger_pack"/i.test(normalizedText),
+    };
+}
+
+function collectAssistantSourceCandidatesEvent(
     message: TavernMessageEvent,
     deps: Pick<
         SanitizeAssistantMessageArtifactsDepsEvent,
-        | "getAssistantOriginalSourceTextEvent"
+        | "getHostOriginalSourceTextEvent"
         | "getPreferredAssistantSourceTextEvent"
         | "getMessageTextEvent"
     >
 ): string[] {
-    const getOriginalText = deps.getAssistantOriginalSourceTextEvent ?? ((target) => "");
+    const getStableText = (target: TavernMessageEvent | undefined) => getPersistedAssistantOriginalSourceTextEvent(target);
+    const getOriginalText = deps.getHostOriginalSourceTextEvent ?? ((target) => "");
     const getPreferredText = deps.getPreferredAssistantSourceTextEvent ?? ((target) => getMessageTextSafe(target));
     const getFallbackText = deps.getMessageTextEvent ?? ((target) => getMessageTextSafe(target));
-    return [
+    return normalizeAssistantOriginalSourceCandidatesEvent([
+        getStableText(message),
         getOriginalText(message),
         getPreferredText(message),
         getFallbackText(message),
-    ].filter((item, candidateIndex, array) => item && array.indexOf(item) === candidateIndex);
+    ]);
 }
 
 export interface SanitizeAssistantMessageArtifactsDepsEvent {
     getSettingsEvent?: () => {
         defaultBlindSkillsText?: string;
     };
-    getAssistantOriginalSourceTextEvent?: (message: TavernMessageEvent | undefined) => string;
+    getHostOriginalSourceTextEvent?: (message: TavernMessageEvent | undefined) => string;
     getPreferredAssistantSourceTextEvent?: (message: TavernMessageEvent | undefined) => string;
     getMessageTextEvent?: (message: TavernMessageEvent | undefined) => string;
     parseEventEnvelopesEvent?: (text: string) => {
@@ -286,37 +300,77 @@ export interface SanitizeAssistantMessageArtifactsDepsEvent {
     resolveSourceMessageIdEvent?: (message: TavernMessageEvent, index?: number) => string;
 }
 
-/**
- * 功能：仅保留助手消息的原始快照，不执行正文清理。
- * 参数：
- *   message：助手消息对象。
- *   deps：原始文本解析依赖。
- * 返回：
- *   boolean：若快照发生变化则返回 true。
- */
-export function rememberAssistantOriginalSnapshotEvent(
+export function ensureAssistantOriginalSnapshotPersistedEvent(
     message: TavernMessageEvent,
-    deps: Pick<
-        SanitizeAssistantMessageArtifactsDepsEvent,
-        | "getAssistantOriginalSourceTextEvent"
-        | "getPreferredAssistantSourceTextEvent"
-        | "getMessageTextEvent"
-        | "parseEventEnvelopesEvent"
-    >
+    deps: AssistantOriginalSourceCandidateDepsEvent
 ): boolean {
-    const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
+    const currentStableText = getPersistedAssistantOriginalSourceTextEvent(message);
+    const currentStableTrimmed = currentStableText.trim();
+    let bestText = currentStableTrimmed;
+    let bestScore = scoreAssistantOriginalSourceRichnessEvent(currentStableTrimmed, deps);
+    let bestSource: AssistantOriginalSourceMetaEvent["source"] = currentStableTrimmed ? "plugin_snapshot" : "fallback";
 
-    let changed = false;
-    if (rememberAssistantOriginalSnapshotBeforeSanitizeEvent(message, sourceCandidates, deps)) {
-        changed = true;
+    const sourceCandidates = [
+        {
+            text: String(deps.getHostOriginalSourceTextEvent?.(message) ?? "").trim(),
+            source: "host" as const,
+        },
+        {
+            text: String(deps.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message)).trim(),
+            source: "fallback" as const,
+        },
+        {
+            text: String(deps.getMessageTextEvent?.(message) ?? getMessageTextSafe(message)).trim(),
+            source: "fallback" as const,
+        },
+    ].filter((item, candidateIndex, array) => item.text && array.findIndex((candidate) => candidate.text === item.text) === candidateIndex);
+
+    for (const candidate of sourceCandidates) {
+        const candidateScore = scoreAssistantOriginalSourceRichnessEvent(candidate.text, deps);
+        const shouldReplace =
+            candidateScore > bestScore
+            || (candidateScore === bestScore && candidate.text.length > bestText.length);
+        if (!shouldReplace) continue;
+        bestText = candidate.text;
+        bestScore = candidateScore;
+        bestSource = candidate.source;
     }
-    const originalSourceText = resolveAssistantOriginalSourceCandidateEvent(sourceCandidates, deps);
-    if (originalSourceText.trim() && originalSourceText.trim() !== getAssistantOriginalSourceTextEvent(message).trim()) {
-        if (setAssistantOriginalSourceMetaEvent(message, originalSourceText, true)) {
-            changed = true;
+
+    if (!bestText.trim()) {
+        return false;
+    }
+    if (bestText === currentStableTrimmed) {
+        return false;
+    }
+    return setAssistantOriginalSourceMetaEvent(
+        message,
+        bestText,
+        true,
+        buildAssistantOriginalSourceMetaEvent(bestText, bestSource, deps)
+    );
+}
+
+export function getStableAssistantOriginalSourceTextEvent(
+    message: TavernMessageEvent | undefined,
+    deps?: AssistantOriginalSourceCandidateDepsEvent
+): string {
+    const stableText = getPersistedAssistantOriginalSourceTextEvent(message);
+    if (stableText.trim()) {
+        return stableText;
+    }
+    if (message && deps) {
+        ensureAssistantOriginalSnapshotPersistedEvent(message, deps);
+        const persistedText = getPersistedAssistantOriginalSourceTextEvent(message);
+        if (persistedText.trim()) {
+            return persistedText;
         }
     }
-    return changed;
+    const sourceCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
+        deps?.getHostOriginalSourceTextEvent?.(message) ?? "",
+        deps?.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message),
+        deps?.getMessageTextEvent?.(message) ?? getMessageTextSafe(message),
+    ]);
+    return sourceCandidates[0] ?? "";
 }
 
 /**
@@ -340,13 +394,17 @@ export function sanitizeAssistantMessageArtifactsEvent(
     const setText = deps.setMessageTextEvent ?? ((target, text) => {
         setMessageTextSafe(target, text);
     });
-    const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
-    if (rememberAssistantOriginalSnapshotEvent(message, deps)) {
+    if (ensureAssistantOriginalSnapshotPersistedEvent(message, deps)) {
         changed = true;
     }
+    const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
+    const displayCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
+        getPreferredText(message),
+        getFallbackText(message),
+    ]);
 
     if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent) {
-        for (const sourceText of sourceCandidates) {
+        for (const sourceText of displayCandidates) {
             const { ranges } = deps.parseEventEnvelopesEvent(sourceText);
             if (ranges.length <= 0) continue;
             logger.info(`[内容处理] 命中事件控制块 source=${sourceMessageId || "unknown"} ranges=${ranges.length}`);
@@ -362,6 +420,16 @@ export function sanitizeAssistantMessageArtifactsEvent(
             logger.info(`[内容处理] 命中宿主兜底清理 source=${sourceMessageId || "unknown"}`);
             setText(message, cleanedText);
             changed = true;
+        }
+    }
+
+    if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent && !changed) {
+        for (const sourceText of sourceCandidates) {
+            const { ranges } = deps.parseEventEnvelopesEvent(sourceText);
+            if (ranges.length <= 0) continue;
+            logger.info(`[内容处理] 命中原文快照控制块 source=${sourceMessageId || "unknown"} ranges=${ranges.length}，正文保持当前展示版本`);
+            changed = true;
+            break;
         }
     }
 

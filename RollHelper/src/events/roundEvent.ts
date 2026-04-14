@@ -17,6 +17,7 @@ import type {
   PendingResultGuidanceEvent,
   PendingRoundEvent,
   RollVisibilityEvent,
+  TriggerPackRevealModeEvent,
 } from "../types/eventDomainEvent";
 import { logger } from "../../index";
 import {
@@ -590,6 +591,7 @@ export function normalizeBlindHistoryItemEvent(input: BlindHistoryItemEvent): Bl
     invalidatedAt: Number.isFinite(Number(input.invalidatedAt)) ? Number(input.invalidatedAt) : undefined,
     archivedAt: Number.isFinite(Number(input.archivedAt)) ? Number(input.archivedAt) : undefined,
     dedupeKey: String(input.dedupeKey ?? "").trim() || undefined,
+    revealMode: input.revealMode === "instant" ? "instant" : "delayed",
     state:
       input.state === "consumed"
       || input.state === "expired"
@@ -656,9 +658,11 @@ export function formatBlindGuidanceStateLabelEvent(state: BlindGuidanceStateEven
  */
 export function formatBlindHistoryDisplayStateEvent(
   state: BlindGuidanceStateEvent,
-  displayConsumedAsNarrativeApplied = true
+  displayConsumedAsNarrativeApplied = true,
+  revealMode: TriggerPackRevealModeEvent = "delayed"
 ): string {
   if (state === "consumed") {
+    if (revealMode === "instant") return "已即时体现";
     return displayConsumedAsNarrativeApplied ? "已体现" : "已消费";
   }
   return formatBlindGuidanceStateLabelEvent(state);
@@ -797,6 +801,7 @@ export function appendBlindHistoryFromRecordEvent(
   event: DiceEventSpecEvent,
   record: EventRollRecordEvent,
   origin: BlindHistoryItemEvent["origin"] = "event_blind",
+  revealMode: TriggerPackRevealModeEvent = "delayed",
   persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
 ): void {
   if (record.visibility !== "blind" && record.source !== "blind_manual_roll") return;
@@ -814,7 +819,9 @@ export function appendBlindHistoryFromRecordEvent(
     origin,
     sourceAssistantMsgId: String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim() || undefined,
     sourceFloorKey: buildAssistantFloorKeyEvent(String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim()) || undefined,
-    state: "queued",
+    revealMode,
+    state: revealMode === "instant" ? "consumed" : "queued",
+    consumedAt: revealMode === "instant" ? record.rolledAt : undefined,
   }, persistBlindHistoryRecordEvent);
 }
 
@@ -1098,7 +1105,28 @@ export function invalidatePendingRoundFloorEvent(
 
   const meta = deps.getDiceMetaEvent();
   const round = meta.pendingRound;
-  if (!round) return false;
+  const now = Date.now();
+  const history = ensureBlindHistoryEvent(meta);
+  let historyChanged = false;
+  for (let index = 0; index < history.length; index += 1) {
+    const item = history[index];
+    if (!item?.sourceAssistantMsgId) continue;
+    if (!isSameAssistantFloorEvent(item.sourceAssistantMsgId, assistantMsgId)) continue;
+    const nextItem = normalizeBlindHistoryItemEvent({
+      ...item,
+      state: "invalidated",
+      invalidatedAt: Number(item.invalidatedAt) || now,
+    });
+    if (JSON.stringify(nextItem) === JSON.stringify(item)) continue;
+    history[index] = nextItem;
+    historyChanged = true;
+  }
+  if (!round) {
+    if (historyChanged) {
+      deps.saveMetadataSafeEvent();
+    }
+    return historyChanged;
+  }
 
   const removedEventIds = new Set<string>();
   const nextEvents = round.events.filter((event) => {
@@ -1133,12 +1161,12 @@ export function invalidatePendingRoundFloorEvent(
     if (!isSameAssistantFloorEvent(item.sourceAssistantMsgId, assistantMsgId)) return item;
     updateBlindHistoryStateByRollIdEvent(meta, item.rollId, {
       state: "invalidated",
-      invalidatedAt: Date.now(),
+      invalidatedAt: now,
     });
     return {
       ...item,
       state: "invalidated" as const,
-      invalidatedAt: Date.now(),
+      invalidatedAt: now,
     };
   });
 
@@ -1151,7 +1179,8 @@ export function invalidatePendingRoundFloorEvent(
     || nextSourceAssistantMsgIds.length !== round.sourceAssistantMsgIds.length
     || timerChanged
     || JSON.stringify(nextBlindQueue) !== JSON.stringify(blindQueue)
-    || nextResultGuidanceQueue.length !== resultGuidanceQueue.length;
+    || nextResultGuidanceQueue.length !== resultGuidanceQueue.length
+    || historyChanged;
 
   if (!changed) return false;
 
@@ -1610,10 +1639,20 @@ export interface PerformEventRollByIdDepsEvent {
 
 export interface PerformInteractiveTriggerRollDepsEvent extends PerformEventRollByIdDepsEvent {}
 
+export interface InteractiveTriggerRollFeedbackEvent {
+  revealMode: TriggerPackRevealModeEvent;
+  visibility: "public" | "blind";
+  title: string;
+  resultGrade: EventResultGradeEvent;
+  stateLabel: string;
+  feedbackText: string;
+}
+
 export interface PerformInteractiveTriggerRollResultEvent {
   round: PendingRoundEvent;
   event: DiceEventSpecEvent;
   record: EventRollRecordEvent;
+  feedback: InteractiveTriggerRollFeedbackEvent;
 }
 
 function buildInteractiveTriggerEventIdEvent(trigger: InteractiveTriggerEvent): string {
@@ -1649,10 +1688,11 @@ function buildInteractiveTriggerEventSpecEvent(
   const action = String(trigger.action || "").trim() || String(trigger.skill || "").trim() || "检定";
   const skill = String(trigger.skill || "").trim() || action;
   const difficulty = trigger.difficulty || "normal";
+  const compare = trigger.compare || ">=";
   const threshold = resolveEventThresholdEvent(
     eventId,
     String(trigger.diceExpr || "").trim() || "1d20",
-    ">=",
+    compare,
     trigger.dcHint,
     difficulty,
     "normal"
@@ -1673,7 +1713,7 @@ function buildInteractiveTriggerEventSpecEvent(
     dc: resolvedDc,
     difficulty,
     dcSource: threshold?.dcSource ?? "difficulty_mapped",
-    compare: ">=",
+    compare,
     scope: "protagonist",
     rollMode: "manual",
     advantageState: "normal",
@@ -1692,6 +1732,67 @@ function buildInteractiveTriggerEventSpecEvent(
   };
 }
 
+function resolveInteractiveTriggerRevealModeEvent(trigger: InteractiveTriggerEvent): TriggerPackRevealModeEvent {
+  return trigger.revealMode === "instant" ? "instant" : "delayed";
+}
+
+function buildInteractiveTriggerResolvedFeedbackTextEvent(args: {
+  trigger: InteractiveTriggerEvent;
+  event: DiceEventSpecEvent;
+  record: EventRollRecordEvent;
+  revealMode: TriggerPackRevealModeEvent;
+}): InteractiveTriggerRollFeedbackEvent {
+  const { trigger, event, record, revealMode } = args;
+  const visibility: "public" | "blind" =
+    record.visibility === "blind" || record.source === "blind_manual_roll" ? "blind" : "public";
+  const title = String(trigger.label || event.targetLabel || event.title || "线索").trim() || "线索";
+  const stateLabel = revealMode === "instant"
+    ? (visibility === "blind" ? "已即时体现" : "已完成")
+    : (visibility === "blind" ? "待体现" : "已完成");
+
+  const grade = record.resultGrade || "failure";
+  const successLike = record.success === true || grade === "critical_success" || grade === "partial_success" || grade === "success";
+  const branchText = grade === "critical_success"
+    ? String(trigger.triggerPackExplodeText || trigger.triggerPackSuccessText || "").trim()
+    : String(successLike ? trigger.triggerPackSuccessText : trigger.triggerPackFailureText).trim();
+
+  if (revealMode === "instant" && branchText) {
+    return {
+      revealMode,
+      visibility,
+      title,
+      resultGrade: grade,
+      stateLabel,
+      feedbackText: branchText,
+    };
+  }
+
+  if (visibility === "blind" && revealMode === "delayed") {
+    return {
+      revealMode,
+      visibility,
+      title,
+      resultGrade: grade,
+      stateLabel,
+      feedbackText: `结果等级：${formatResultGradeLabelEvent(grade, "blind")}。已加入暗骰列表，后续会通过叙事自然体现。`,
+    };
+  }
+
+  const action = String(trigger.action || trigger.skill || "检定").trim() || "检定";
+  const target = String(trigger.label || event.targetLabel || "该线索").trim() || "该线索";
+  const successText = successLike
+    ? `${action}成功，你从「${target}」取得了可用进展。`
+    : `${action}失败，你暂时没能从「${target}」得到可靠结论。`;
+  return {
+    revealMode,
+    visibility,
+    title,
+    resultGrade: grade,
+    stateLabel,
+    feedbackText: successText,
+  };
+}
+
 export async function performInteractiveTriggerRollEvent(
   trigger: InteractiveTriggerEvent,
   deps: PerformInteractiveTriggerRollDepsEvent
@@ -1704,6 +1805,7 @@ export async function performInteractiveTriggerRollEvent(
 
   const meta = deps.getDiceMetaEvent();
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
+  const revealMode = resolveInteractiveTriggerRevealModeEvent(trigger);
   const eventId = buildInteractiveTriggerEventIdEvent(trigger);
   let event = round.events.find((item) => item.id === eventId);
   if (!event) {
@@ -1799,15 +1901,19 @@ export async function performInteractiveTriggerRollEvent(
     explodePolicyApplied,
     explodePolicyReason,
     sourceAssistantMsgId: event.sourceAssistantMsgId,
+    revealMode,
   };
 
-  enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
+  if (trigger.blind && revealMode === "delayed") {
+    enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
+  }
   appendBlindHistoryFromRecordEvent(
     meta,
     event,
     record,
     "interactive_blind",
+    revealMode,
     deps.appendBlindHistoryRecordEvent
   );
   if (settings.enableDynamicResultGuidance) {
@@ -1822,6 +1928,12 @@ export async function performInteractiveTriggerRollEvent(
     round,
     event,
     record,
+    feedback: buildInteractiveTriggerResolvedFeedbackTextEvent({
+      trigger,
+      event,
+      record,
+      revealMode,
+    }),
   };
 }
 
@@ -1999,6 +2111,7 @@ async function executeManualEventRollEvent(
     event,
     record,
     "event_blind",
+    "delayed",
     deps.appendBlindHistoryRecordEvent
   );
   if (settings.enableDynamicResultGuidance) {

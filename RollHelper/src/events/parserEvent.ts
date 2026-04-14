@@ -389,6 +389,9 @@ function warnIfEventCheckImpossibleEvent(
 export function parseIsoDurationToMsEvent(raw: string, ISO_8601_DURATION_REGEX_Event: RegExp): number | null {
   const value = normalizeStringFieldEvent(raw);
   if (!value) return null;
+  if (/^(?:none|无|关闭|off)$/i.test(value)) {
+    return null;
+  }
   if (!ISO_8601_DURATION_REGEX_Event.test(value)) {
     logger.warn("非法 timeLimit，按不限时处理:", value);
     return null;

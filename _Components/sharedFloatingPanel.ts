@@ -28,7 +28,7 @@ function isFloatingMobileLayoutEvent(options: SharedFloatingPanelOptionsEvent): 
 function getFloatingBindingKeyEvent(handle: HTMLElement): string {
   const base = handle.dataset.stxFloatingBindKey?.trim();
   if (base) {
-    const safeBase = base.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeBase = base.replace(/[^a-zA-Z0-9_]+/g, "_");
     return `stxFloatingBound_${safeBase}`;
   }
   return "stxFloatingBound";
