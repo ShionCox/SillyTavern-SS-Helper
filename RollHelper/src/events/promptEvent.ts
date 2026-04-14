@@ -196,7 +196,7 @@ function buildResultGuidanceTextEvent(
   if (!Array.isArray(queue) || queue.length === 0) return "";
   const lines: string[] = [];
   lines.push(guidanceStartTag);
-  lines.push(`v=1 count=${queue.length}`);
+  lines.push(`count=${queue.length}`);
   for (const item of queue) {
     const gradeLabel = formatGradeLabelEvent(item.resultGrade);
     const compareText = `${item.compareUsed} ${item.dcUsed == null ? "N/A" : item.dcUsed}`;
@@ -430,19 +430,28 @@ function buildInteractiveTriggerProtocolBlockEvent(settings: DicePluginSettingsE
   const lines: string[] = [];
   lines.push("【交互触发协议】");
   lines.push("1. rh-trigger 只能写在最终剧情正文里，不能写进 rolljson/outcomes/desc/dc_reason。");
-  lines.push("2. trigger_pack 可选，不是每轮必出。");
-  lines.push("3. trigger_pack:");
+  lines.push("2. trigger_pack 只能输出 ```triggerjson，禁止 ```json。");
+  lines.push("3. trigger_pack 可选，不是每轮必出。");
+  lines.push("4. triggerjson:");
   lines.push("{");
   lines.push('  "type":"trigger_pack","version":"1",');
   lines.push('  "defaults":{"dice":"1d20","compare":">="},');
   lines.push('  "items":[{"sid":"str","skill":"str","difficulty":"easy|normal|hard|extreme","reveal":"instant|delayed","success":"str","failure":"str","explode":"str?"}]');
   lines.push("}");
-  lines.push("4. sid 必须对应 rh-trigger 的 sourceId；success/failure/explode 必须简短。");
-  lines.push("5. 每轮最多 1~2 个 trigger_pack，只给关键情报 trigger 使用。");
-  lines.push('6. reveal="instant" 表示命中后立即给短反馈；reveal="delayed" 表示进入后续体现。');
-  lines.push(`7. ${blindSkillText} 这类暗骰技能适用时请写 blind="1"，且对应 outcomes 必须写全。`);
+  lines.push("5. sid 必须对应 rh-trigger 的 sourceId；success/failure/explode 必须简短。");
+  lines.push("6. 每轮最多 1~2 个 trigger_pack，只给关键情报 trigger 使用。");
+  lines.push('7. reveal="instant" 表示命中后立即给短反馈；reveal="delayed" 表示进入后续体现。');
+  lines.push(`8. ${blindSkillText} 这类暗骰技能适用时请写 blind="1"，且对应 outcomes 必须写全。`);
+  lines.push("9. 只标值得继续调查、判断或检定的短词或短短语，例如异响、痕迹、异味、可疑停顿、异常缝隙、被移动的物件、矛盾细节。");
+  lines.push("10. 不要标整句、纯氛围描写、普通修饰词、装饰性名词、已经没有后续调查价值的结论句。");
+  lines.push('11. 需要立刻支持玩家决策的信息优先 instant；潜行、欺骗、伏击、藏匿、是否暴露、是否被怀疑等结果优先 delayed。');
+  lines.push('12. rh-trigger 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" sourceId="clue_1">奇怪的响声</rh-trigger>');
   if (isVerbosePromptModeEvent(settings)) {
-    lines.push('8. 情报型检定优先 instant；潜行、欺骗、伏击、藏匿、是否暴露等状态型检定优先 delayed。');
+    lines.push('13. 示例：<rh-trigger action="调查" skill="调查" difficulty="normal" sourceId="clue_1">奇怪的响声</rh-trigger>');
+    lines.push("14. rh-trigger 应落在正文里最值得继续追查的那个短词或短短语上，不要整句包裹，也不要在同一段中大量重复发光。");
+    lines.push("15. 调查、察觉、洞察、搜索、历史、聆听这类信息型检定优先 instant。");
+    lines.push("16. 潜行、欺骗、伏击、藏匿、伪装、是否暴露、是否被怀疑这类状态型检定优先 delayed。");
+    lines.push("17. 例如“奇怪的响声”“店主的停顿”“异常刮痕”适合 instant；“是否暴露”“是否被识破”适合 delayed。");
   }
   return normalizeBlockTextEvent(lines.join("\n"));
 }
@@ -453,10 +462,12 @@ function buildStatusProtocolBlockEvent(settings: DicePluginSettingsEvent): strin
   lines.push("- [APPLY_STATUS:名,整数值,turns=2,skills=A|B 或 scope=all]");
   lines.push("- [REMOVE_STATUS:名]");
   lines.push("- [CLEAR_STATUS]");
+  lines.push("- 状态标签只能写在 ```rolljson 的 outcomes.success / outcomes.failure / outcomes.explode 文本里。");
+  lines.push("- 禁止把状态标签写进正文、desc、dc_reason、rh-trigger 或 trigger_pack。");
   lines.push("- 负面状态必须为负数，正面状态必须为正数。");
   lines.push("- turns 默认 1；turns=perm 表示永久。");
   if (isVerbosePromptModeEvent(settings)) {
-    lines.push("- 状态标签只写在 outcomes 文本中，不要写入 desc、dc_reason 或 rh-trigger。");
+    lines.push("- 示例：把 [APPLY_STATUS:林间庇护,1,turns=2,skills=体魄|感知] 写进对应事件的 outcomes.success，而不是正文段落。");
   }
   return normalizeBlockTextEvent(lines.join("\n"));
 }
@@ -571,7 +582,6 @@ export function buildCompactDiceRuntimePolicyBlockEvent(
     .join(",");
   const lines: string[] = [];
   lines.push(startTag);
-  lines.push("v=1");
   lines.push(`apply_scope=${settings.eventApplyScope}`);
   lines.push(`round_mode=${settings.enableAiRoundControl ? "continuous" : "per_round"}`);
   lines.push(`roll_mode_allowed=${settings.enableAiRollMode ? "auto|manual" : "manual_only"}`);
@@ -873,6 +883,88 @@ function upsertRoundSnapshotToHistoryEvent(
   return true;
 }
 
+function buildAssistantFloorKeyFromPromptMessageEvent(
+  message: TavernMessageEvent | undefined,
+  index: number
+): string | null {
+  if (!message || typeof message !== "object") return null;
+  const explicitId = message.id ?? message.cid ?? message.uid;
+  if (explicitId != null) {
+    return `assistant:${String(explicitId)}`;
+  }
+  const timestamp =
+    (message as any).create_date
+    ?? (message as any).create_time
+    ?? (message as any).timestamp
+    ?? "";
+  const normalizedTimestamp = String(timestamp ?? "").trim();
+  if (normalizedTimestamp) {
+    return `assistant_ts:${normalizedTimestamp}`;
+  }
+  if (!Number.isFinite(index) || index < 0) return null;
+  return `assistant_idx:${index}`;
+}
+
+function collectPromptExcludedSummaryFloorKeysEvent(
+  messages: TavernMessageEvent[],
+  userIndex: number
+): Set<string> {
+  const excluded = new Set<string>();
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!isAssistantMessageEvent(message)) continue;
+    const floorKey = buildAssistantFloorKeyFromPromptMessageEvent(message, index);
+    if (floorKey) excluded.add(floorKey);
+  }
+  return excluded;
+}
+
+function filterSummaryHistoryByExcludedFloorsEvent(
+  history: RoundSummarySnapshotEvent[],
+  excludedFloorKeys: Set<string>
+): RoundSummarySnapshotEvent[] {
+  if (!Array.isArray(history) || history.length <= 0 || excludedFloorKeys.size <= 0) {
+    return Array.isArray(history) ? history : [];
+  }
+
+  return history
+    .map((snapshot) => {
+      if (!snapshot) return null;
+      const nextEvents = Array.isArray(snapshot.events)
+        ? snapshot.events.filter((event) => {
+            const floorKey = buildAssistantFloorKeyEvent(String(event?.sourceAssistantMsgId ?? "").trim());
+            return !floorKey || !excludedFloorKeys.has(floorKey);
+          })
+        : [];
+      const nextSourceAssistantMsgIds = Array.isArray(snapshot.sourceAssistantMsgIds)
+        ? snapshot.sourceAssistantMsgIds.filter((assistantMsgId) => {
+            const floorKey = buildAssistantFloorKeyEvent(String(assistantMsgId ?? "").trim());
+            return !floorKey || !excludedFloorKeys.has(floorKey);
+          })
+        : [];
+
+      if (
+        nextEvents.length === (Array.isArray(snapshot.events) ? snapshot.events.length : 0)
+        && nextSourceAssistantMsgIds.length === (Array.isArray(snapshot.sourceAssistantMsgIds) ? snapshot.sourceAssistantMsgIds.length : 0)
+      ) {
+        return snapshot;
+      }
+
+      if (nextEvents.length <= 0 && nextSourceAssistantMsgIds.length <= 0) {
+        return null;
+      }
+
+      return {
+        ...snapshot,
+        events: nextEvents,
+        eventsCount: nextEvents.length,
+        rolledCount: nextEvents.filter((event) => event?.rollId || event?.resultSource).length,
+        sourceAssistantMsgIds: nextSourceAssistantMsgIds,
+      };
+    })
+    .filter((snapshot): snapshot is RoundSummarySnapshotEvent => snapshot != null);
+}
+
 type PromptChatTargetEvent = SdkTavernPromptTargetEvent<TavernMessageEvent>;
 
 /**
@@ -992,6 +1084,10 @@ export function handlePromptReadyEvent(
   const userStableText = stripManagedBlocksEvent(getMessageTextEvent(userMsg), managedTags);
   const userMsgId = buildPromptMessageIdByTextEvent(userStableText, userMsg, userIndex);
   const userCurrentText = getMessageTextEvent(userMsg);
+  const promptExcludedSummaryFloorKeys = collectPromptExcludedSummaryFloorKeysEvent(
+    primaryTarget.messages,
+    userIndex
+  );
   if (userCurrentText !== userStableText) {
     setMessageTextEvent(userMsg, userStableText);
   }
@@ -1043,7 +1139,12 @@ export function handlePromptReadyEvent(
 
   let summaryBlockText = "";
   let blindSummaryBlockText = "";
-  if (isSameUserPrompt && meta.outboundSummary && meta.outboundSummary.userMsgId === userMsgId) {
+  const shouldReuseOutboundSummary =
+    promptExcludedSummaryFloorKeys.size <= 0
+    && isSameUserPrompt
+    && meta.outboundSummary
+    && meta.outboundSummary.userMsgId === userMsgId;
+  if (shouldReuseOutboundSummary) {
     const legacySummaryText = normalizeBlockTextEvent(
       String((meta.outboundSummary as unknown as { summaryText?: unknown }).summaryText ?? "")
     );
@@ -1051,8 +1152,12 @@ export function handlePromptReadyEvent(
     blindSummaryBlockText = normalizeBlockTextEvent(meta.outboundSummary.blindSummaryText);
   } else {
     const history = deps.ensureSummaryHistoryEvent(meta);
-    const built = deps.buildSummaryBlockFromHistoryEvent(
+    const filteredHistory = filterSummaryHistoryByExcludedFloorsEvent(
       history,
+      promptExcludedSummaryFloorKeys
+    );
+    const built = deps.buildSummaryBlockFromHistoryEvent(
+      filteredHistory,
       settings.summaryDetailMode,
       settings.summaryHistoryRounds,
       settings.includeOutcomeInSummary,

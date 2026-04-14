@@ -18,6 +18,7 @@ import {
 } from "./messageSanitizerEvent";
 import { getAssistantOriginalSourceCandidateFromHostEvent } from "./promptEvent";
 import { buildAssistantMessageIdEvent } from "./hooksEvent";
+import { getMessageInteractiveTriggersEvent, getMessageTriggerPackEvent } from "./interactiveTriggerMetadataEvent";
 
 function parseRanges(text: string) {
   const start = text.indexOf("```rolljson");
@@ -95,6 +96,51 @@ describe("原始文本稳定快照", () => {
     expect(changed).toBe(true);
     expect(String(message.mes)).toBe("塞拉菲娜抬手示意你停下。");
     expect(getPersistedAssistantOriginalSourceTextEvent(message as any)).toBe(hostOriginalText);
+  });
+
+  it("display_text 场景下 metadata 缺失时会从稳定原文重建交互触发", () => {
+    const displayText = "你察觉到奇怪的响声。";
+    const hostOriginalText = `你察觉到<rh-trigger action="调查" skill="调查" blind="1" sourceId="weird_sound">奇怪的响声</rh-trigger>。\n\n\`\`\`triggerpack
+{
+  "type": "trigger_pack",
+  "version": "1",
+  "items": [
+    {
+      "sid": "weird_sound",
+      "skill": "调查",
+      "difficulty": "normal",
+      "reveal": "instant",
+      "success": "你听出那不是风，而是木板后的抓挠声。",
+      "failure": "你暂时还听不清来源。"
+    }
+  ]
+}
+\`\`\``;
+    const message = {
+      mes: displayText,
+      extra: {},
+    };
+
+    const changed = sanitizeAssistantMessageArtifactsEvent(message as any, 0, {
+      getSettingsEvent: () => ({ defaultBlindSkillsText: "调查,察觉" }),
+      getHostOriginalSourceTextEvent: () => hostOriginalText,
+      getPreferredAssistantSourceTextEvent: () => displayText,
+      getMessageTextEvent: (target) => String((target as any)?.mes ?? ""),
+      parseEventEnvelopesEvent: () => ({
+        events: [],
+        ranges: [],
+      }),
+      removeRangesEvent: (text) => text,
+      setMessageTextEvent: (target, text) => {
+        (target as any).mes = text;
+      },
+      sourceState: "display_text",
+    });
+
+    expect(changed).toBe(true);
+    expect(String(message.mes)).toBe(displayText);
+    expect(getMessageInteractiveTriggersEvent(message as any)).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items[0].sid).toBe("weird_sound");
   });
 
   it("流式阶段只补写快照，不会改动当前展示正文", () => {

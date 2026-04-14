@@ -14,7 +14,9 @@ import {
   buildCompactDiceRuntimePolicyBlockEvent,
   buildDynamicSystemRuleTextEvent,
   buildFinalRuleTextEvent,
+  handlePromptReadyEvent,
 } from "./promptEvent";
+import { simpleHashEvent } from "../core/utilsEvent";
 
 function createSettings(overrides: Partial<DicePluginSettingsEvent> = {}): DicePluginSettingsEvent {
   return {
@@ -96,6 +98,8 @@ describe("prompt 协议分层", () => {
     expect(disabledText).not.toContain("【交互触发协议】");
     expect(disabledText).not.toContain('"type":"trigger_pack"');
     expect(enabledText).toContain("【交互触发协议】");
+    expect(enabledText).toContain("trigger_pack 只能输出 ```triggerjson，禁止 ```json。");
+    expect(enabledText).toContain("triggerjson:");
     expect(enabledText).toContain('"type":"trigger_pack"');
   });
 
@@ -128,6 +132,43 @@ describe("prompt 协议分层", () => {
     expect(verboseText).toContain("例：");
   });
 
+  it("交互触发协议包含可标与即时/延迟规则", () => {
+    const text = buildDynamicSystemRuleTextEvent(createSettings({
+      enableInteractiveTriggers: true,
+      promptVerbosityMode: "compact",
+    }));
+
+    expect(text).toContain("trigger_pack 只能输出 ```triggerjson，禁止 ```json。");
+    expect(text).toContain("只标值得继续调查、判断或检定的短词或短短语");
+    expect(text).toContain("不要标整句、纯氛围描写");
+    expect(text).toContain("优先 instant");
+    expect(text).toContain("优先 delayed");
+    expect(text).toContain("<rh-trigger action=\"调查\" skill=\"调查\"");
+  });
+
+  it("状态标签协议会明确要求写进 rolljson 的 outcomes", () => {
+    const text = buildDynamicSystemRuleTextEvent(createSettings({
+      enableStatusSystem: true,
+      promptVerbosityMode: "compact",
+    }));
+
+    expect(text).toContain("状态标签只能写在 ```rolljson 的 outcomes.success / outcomes.failure / outcomes.explode 文本里。");
+    expect(text).toContain("禁止把状态标签写进正文、desc、dc_reason、rh-trigger 或 trigger_pack。");
+  });
+
+  it("verbose 交互触发协议包含更细的倾向与示例", () => {
+    const text = buildDynamicSystemRuleTextEvent(createSettings({
+      enableInteractiveTriggers: true,
+      promptVerbosityMode: "verbose",
+    }));
+
+    expect(text).toContain("rh-trigger 应落在正文里最值得继续追查的那个短词或短短语上");
+    expect(text).toContain("信息型检定优先 instant");
+    expect(text).toContain("状态型检定优先 delayed");
+    expect(text).toContain("适合 instant");
+    expect(text).toContain("适合 delayed");
+  });
+
   it("最终规则文本会保留用户自定义补充", () => {
     const text = buildFinalRuleTextEvent(createSettings({
       ruleText: "1. 搜查失败时优先给误判线索。",
@@ -136,5 +177,100 @@ describe("prompt 协议分层", () => {
     expect(text).toContain("【骰子协议】");
     expect(text).toContain("【用户自定义补充】");
     expect(text).toContain("搜查失败时优先给误判线索");
+  });
+
+  it("重试当前楼层时不会注入该楼层上次的暗骰摘要", () => {
+    const messages = [
+      { role: "user", id: "user_1", mes: "继续调查" },
+      { role: "assistant", id: "assistant_1", mes: "上一版回复" },
+    ] as any[];
+    const userMsgId = `prompt_user:user_1:${simpleHashEvent("继续调查")}`;
+    const buildSummaryBlockFromHistoryEvent = vi.fn((historyArg: any[]) => ({
+      publicSummaryText: historyArg.length > 0 ? "<dice_round_summary>\n旧公开摘要\n</dice_round_summary>" : "",
+      blindSummaryText: historyArg.length > 0 ? "<dice_blind_round_summary>\n旧暗骰摘要\n</dice_blind_round_summary>" : "",
+    }));
+    const meta: any = {
+      lastPromptUserMsgId: userMsgId,
+      outboundSummary: {
+        userMsgId,
+        roundId: "round_old",
+        publicSummaryText: "<dice_round_summary>\n缓存公开摘要\n</dice_round_summary>",
+        blindSummaryText: "<dice_blind_round_summary>\n缓存暗骰摘要\n</dice_blind_round_summary>",
+      },
+      summaryHistory: [{
+        roundId: "round_old",
+        openedAt: 1,
+        closedAt: 2,
+        eventsCount: 1,
+        rolledCount: 1,
+        sourceAssistantMsgIds: ["assistant:assistant_1:swipe_0:hash"],
+        events: [{
+          id: "evt_1",
+          title: "调查【爪痕】",
+          desc: "旧线索",
+          targetLabel: "爪痕",
+          skill: "调查",
+          checkDice: "1d20",
+          compare: ">=",
+          dc: 12,
+          difficulty: "normal",
+          dcSource: "ai",
+          dcReason: "",
+          rollMode: "manual",
+          advantageState: "normal",
+          timeLimit: "none",
+          status: "done",
+          resultSource: "blind_manual_roll",
+          visibility: "blind",
+          revealMode: "instant",
+          total: 15,
+          skillModifierApplied: 0,
+          statusModifierApplied: 0,
+          baseModifierUsed: 0,
+          finalModifierUsed: 0,
+          success: true,
+          marginToDc: 3,
+          resultGrade: "success",
+          outcomeKind: "success",
+          outcomeText: "你发现了新鲜爪痕。",
+          explosionTriggered: false,
+          sourceAssistantMsgId: "assistant:assistant_1:swipe_0:hash",
+          rollId: "roll_1",
+        }],
+      }],
+    };
+
+    handlePromptReadyEvent({
+      messages,
+    }, {
+      getSettingsEvent: () => createSettings({ autoSendRuleToAI: false, enableStatusSystem: false }),
+      DICE_RULE_BLOCK_START_Event: "<dice_rules>",
+      DICE_RULE_BLOCK_END_Event: "</dice_rules>",
+      DICE_SUMMARY_BLOCK_START_Event: "<dice_round_summary>",
+      DICE_SUMMARY_BLOCK_END_Event: "</dice_round_summary>",
+      DICE_BLIND_SUMMARY_BLOCK_START_Event: "<dice_blind_round_summary>",
+      DICE_BLIND_SUMMARY_BLOCK_END_Event: "</dice_blind_round_summary>",
+      DICE_RESULT_GUIDANCE_BLOCK_START_Event: "<dice_result_guidance>",
+      DICE_RESULT_GUIDANCE_BLOCK_END_Event: "</dice_result_guidance>",
+      DICE_BLIND_GUIDANCE_BLOCK_START_Event: "<dice_blind_guidance>",
+      DICE_BLIND_GUIDANCE_BLOCK_END_Event: "</dice_blind_guidance>",
+      DICE_ACTIVE_STATUSES_BLOCK_START_Event: "<dice_active_statuses>",
+      DICE_ACTIVE_STATUSES_BLOCK_END_Event: "</dice_active_statuses>",
+      DICE_PASSIVE_DISCOVERY_BLOCK_START_Event: "<dice_passive_discovery>",
+      DICE_PASSIVE_DISCOVERY_BLOCK_END_Event: "</dice_passive_discovery>",
+      sweepTimeoutFailuresEvent: () => false,
+      getDiceMetaEvent: () => meta,
+      resolveSkillModifierBySkillNameEvent: () => 0,
+      ensureSummaryHistoryEvent: (targetMeta) => targetMeta.summaryHistory,
+      createRoundSummarySnapshotEvent: vi.fn(),
+      trimSummaryHistoryEvent: vi.fn(),
+      buildSummaryBlockFromHistoryEvent,
+      saveMetadataSafeEvent: vi.fn(),
+    } as any, "test");
+
+    expect(buildSummaryBlockFromHistoryEvent).toHaveBeenCalled();
+    expect(buildSummaryBlockFromHistoryEvent.mock.calls[0]?.[0]).toEqual([]);
+    expect(meta.outboundSummary?.blindSummaryText || "").toBe("");
+    expect(messages.some((item) => String(item.mes || item.content || "").includes("缓存暗骰摘要"))).toBe(false);
   });
 });

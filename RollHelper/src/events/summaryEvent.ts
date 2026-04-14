@@ -1,4 +1,3 @@
-import { formatIsoDurationNaturalLanguageEvent, formatModifier } from "../core/utilsEvent";
 import { stripStatusTagsFromTextEvent } from "./statusEvent";
 import type {
   BuiltSummaryBlocksEvent,
@@ -8,7 +7,6 @@ import type {
   DicePluginSettingsEvent,
   EventOutcomeKindEvent,
   EventRollRecordEvent,
-  EventRollSourceEvent,
   PendingRoundEvent,
   RoundSummaryEventItemEvent,
   RoundSummarySnapshotEvent,
@@ -153,13 +151,6 @@ function normalizeAdvantageStateForSummaryEvent(raw: any): "normal" | "advantage
   return "normal";
 }
 
-function formatDifficultyLabelForSummaryEvent(raw: any): string {
-  if (raw === "easy") return "简单";
-  if (raw === "hard") return "困难";
-  if (raw === "extreme") return "极难";
-  return "普通";
-}
-
 function normalizeSummaryInlineTextEvent(raw: string): string {
   const text = String(raw ?? "").replace(/\s+/g, " ").trim();
   return text.length > 0 ? text : "（空）";
@@ -177,13 +168,32 @@ function getSummaryDescMaxLenByModeEvent(detailMode: SummaryDetailModeEvent): nu
   return 140;
 }
 
-function toSummarySourceTextEvent(source: EventRollSourceEvent | null | undefined): string {
-  if (source === "manual_roll") return "手动检定";
-  if (source === "blind_manual_roll") return "暗骰检定";
-  if (source === "ai_auto_roll") return "AI自动检定";
-  if (source === "passive_check") return "被动检定";
-  if (source === "timeout_auto_fail") return "超时判定";
-  return "未知";
+/**
+ * 功能：统一摘要密度模式，防止非法值。
+ * @param settings 当前设置。
+ * @returns 摘要密度模式。
+ */
+function resolveSummaryVerbosityModeEvent(
+  settings: DicePluginSettingsEvent
+): "compact" | "verbose" {
+  return settings.promptVerbosityMode === "verbose" ? "verbose" : "compact";
+}
+
+/**
+ * 功能：根据摘要密度与详细度获取叙事段长度。
+ * @param detailMode 摘要详细度。
+ * @param verbosityMode 摘要密度模式。
+ * @returns 叙事文本最大长度。
+ */
+function getSummaryNarrativeMaxLenEvent(
+  detailMode: SummaryDetailModeEvent,
+  verbosityMode: "compact" | "verbose"
+): number {
+  const base = getSummaryDescMaxLenByModeEvent(detailMode);
+  if (verbosityMode === "compact") {
+    return Math.max(24, Math.floor(base * 0.6));
+  }
+  return base;
 }
 
 /**
@@ -229,6 +239,27 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
 }
 
 /**
+ * 功能：生成更短的结果句子，用于摘要 compact 模式。
+ * @param item 单条摘要事件。
+ * @returns 简短的结果文本。
+ */
+function toSummaryResultBriefEvent(item: RoundSummaryEventItemEvent): string {
+  if (item.status === "pending") {
+    return "待判定";
+  }
+  if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
+    return "超时失败";
+  }
+  if (item.success === true) {
+    return item.resultSource === "ai_auto_roll" ? "自动检定成功" : "成功";
+  }
+  if (item.success === false) {
+    return item.resultSource === "ai_auto_roll" ? "自动检定失败" : "失败";
+  }
+  return "已完成";
+}
+
+/**
  * 功能：把检定分级转换为暗骰摘要中的结果句子。
  * @param item 单条摘要事件。
  * @returns 仅暴露等级、不暴露点数的暗骰结果文本。
@@ -258,25 +289,25 @@ function toBlindSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): st
   return "暗骰已结算";
 }
 
-function toSummaryOutcomeSentenceEvent(
+/**
+ * 功能：生成可口语化的结果叙事，不暴露暗骰真实后果。
+ * @param item 单条摘要事件。
+ * @param settings 当前设置。
+ * @param maxLen 最大长度。
+ * @returns 叙事文本，若不可用则返回空字符串。
+ */
+function toSummaryOutcomeNarrativeEvent(
   item: RoundSummaryEventItemEvent,
-  settings: DicePluginSettingsEvent
+  settings: DicePluginSettingsEvent,
+  maxLen: number
 ): string {
   const isBlind = item.visibility === "blind" || item.resultSource === "blind_manual_roll";
   if (isBlind && !settings.blindRevealInSummary) {
     return "";
   }
-  const text = truncateSummaryTextEvent(item.outcomeText || "", 120);
-  if (item.outcomeKind === "explode") {
-    return `爆骰走向：${text}`;
-  }
-  if (item.outcomeKind === "success") {
-    return `成功走向：${text}`;
-  }
-  if (item.outcomeKind === "failure") {
-    return `失败走向：${text}`;
-  }
-  return `走向：${text}`;
+  const rawText = String(item.outcomeText || "").trim();
+  if (!rawText) return "";
+  return truncateSummaryTextEvent(rawText, maxLen);
 }
 
 function buildSummaryEventNaturalLineByModeEvent(
@@ -285,59 +316,19 @@ function buildSummaryEventNaturalLineByModeEvent(
   includeOutcomeInSummary: boolean,
   settings: DicePluginSettingsEvent
 ): string {
+  const verbosityMode = resolveSummaryVerbosityModeEvent(settings);
+  const narrativeMaxLen = getSummaryNarrativeMaxLenEvent(detailMode, verbosityMode);
   const title = truncateSummaryTextEvent(item.title, 48);
-  const desc = truncateSummaryTextEvent(item.desc, getSummaryDescMaxLenByModeEvent(detailMode));
-  const target = truncateSummaryTextEvent(item.targetLabel || "未指定", 20);
-  const resultSentence = toSummaryResultSentenceEvent(item);
-  const outcomeSentence = includeOutcomeInSummary
-    ? toSummaryOutcomeSentenceEvent(item, settings)
+  const desc = truncateSummaryTextEvent(item.desc, narrativeMaxLen);
+  const outcomeNarrative = includeOutcomeInSummary
+    ? toSummaryOutcomeNarrativeEvent(item, settings, narrativeMaxLen)
     : "";
-  const baseModifierUsed = Number.isFinite(Number(item.baseModifierUsed))
-    ? Number(item.baseModifierUsed)
-    : 0;
-  const skillModifierApplied = Number.isFinite(Number(item.skillModifierApplied))
-    ? Number(item.skillModifierApplied)
-    : 0;
-  const statusModifierApplied = Number.isFinite(Number(item.statusModifierApplied))
-    ? Number(item.statusModifierApplied)
-    : 0;
-  const finalModifierUsed = Number.isFinite(Number(item.finalModifierUsed))
-    ? Number(item.finalModifierUsed)
-    : baseModifierUsed + skillModifierApplied + statusModifierApplied;
-  const modifierSentence = `修正 ${formatModifier(baseModifierUsed)} + 技能 ${formatModifier(
-    skillModifierApplied
-  )} + 状态 ${formatModifier(statusModifierApplied)} = ${formatModifier(finalModifierUsed)}`;
+  const narrative = outcomeNarrative || desc;
+  const resultSentence =
+    verbosityMode === "compact" ? toSummaryResultBriefEvent(item) : toSummaryResultSentenceEvent(item);
+  const narrativeSuffix = narrative ? `。${narrative}` : "";
 
-  if (detailMode === "minimal") {
-    return includeOutcomeInSummary && outcomeSentence
-      ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜结果：${resultSentence}｜${outcomeSentence}`
-      : `- 标题：${title}｜对象：${target}｜描述：${desc}｜结果：${resultSentence}`;
-  }
-
-  const skill = truncateSummaryTextEvent(item.skill, 20);
-  const checkDice = truncateSummaryTextEvent(item.checkDice, 24);
-  const dcReasonText = item.dcReason ? `（DC原因：${truncateSummaryTextEvent(item.dcReason, 36)}）` : "";
-  const difficultyText = item.difficulty ? `｜难度=${formatDifficultyLabelForSummaryEvent(item.difficulty)}` : "";
-  const thresholdSourceText = item.dcSource === "difficulty_mapped" ? "｜阈值=系统换算" : "";
-  const checkText = `${skill} ${checkDice}，条件 ${item.compare} ${item.dc}${difficultyText}${thresholdSourceText}${dcReasonText}`;
-  const advantageText =
-    item.advantageState === "normal" ? "" : `｜骰态=${item.advantageState}`;
-  const gradeText = item.resultGrade ? `｜分级=${item.resultGrade}` : "";
-
-  if (detailMode === "balanced") {
-    return includeOutcomeInSummary && outcomeSentence
-      ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜结果：${resultSentence}${gradeText}｜${outcomeSentence}`
-      : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜结果：${resultSentence}${gradeText}`;
-  }
-
-  const sourceText = toSummarySourceTextEvent(item.resultSource);
-  const timeLimit = truncateSummaryTextEvent(
-    formatIsoDurationNaturalLanguageEvent(item.timeLimit || "none"),
-    26
-  );
-  return includeOutcomeInSummary && outcomeSentence
-    ? `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}｜${outcomeSentence}`
-    : `- 标题：${title}｜对象：${target}｜描述：${desc}｜检定：${checkText}${advantageText}｜${modifierSentence}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果：${resultSentence}${gradeText}`;
+  return `- ${title}：${resultSentence}${narrativeSuffix}`;
 }
 
 /**
@@ -348,46 +339,23 @@ function buildSummaryEventNaturalLineByModeEvent(
  */
 function buildBlindSummaryEventNaturalLineByModeEvent(
   item: RoundSummaryEventItemEvent,
-  detailMode: SummaryDetailModeEvent
+  detailMode: SummaryDetailModeEvent,
+  settings: DicePluginSettingsEvent
 ): string {
+  const verbosityMode = resolveSummaryVerbosityModeEvent(settings);
+  const narrativeMaxLen = getSummaryNarrativeMaxLenEvent(detailMode, verbosityMode);
   const title = truncateSummaryTextEvent(item.title, 48);
-  const desc = truncateSummaryTextEvent(item.desc, getSummaryDescMaxLenByModeEvent(detailMode));
+  const clueTextRaw = item.revealMode === "instant"
+    ? String(item.outcomeText || "").trim() || item.desc
+    : item.desc;
+  const desc = truncateSummaryTextEvent(clueTextRaw, narrativeMaxLen);
   const target = truncateSummaryTextEvent(item.targetLabel || "未指定", 20);
   const resultSentence = toBlindSummaryResultSentenceEvent(item);
-  const sourceText = toSummarySourceTextEvent(item.resultSource);
-
-  if (detailMode === "minimal") {
-    return `- 暗骰：${title}｜对象：${target}｜结果等级：${resultSentence}｜线索：${desc}`;
+  if (verbosityMode === "compact") {
+    return `- 暗骰${title}：${resultSentence}。线索：${desc}`;
   }
 
-  const skill = truncateSummaryTextEvent(item.skill, 20);
-  const checkDice = truncateSummaryTextEvent(item.checkDice, 24);
-  const difficultyText = item.difficulty ? `｜难度=${formatDifficultyLabelForSummaryEvent(item.difficulty)}` : "";
-  const gradeText = item.resultGrade ? `｜分级=${formatGradeLabelForBlindSummaryEvent(item.resultGrade)}` : "";
-
-  if (detailMode === "balanced") {
-    return `- 暗骰：${title}｜对象：${target}｜检定：${skill} ${checkDice}${difficultyText}｜结果等级：${resultSentence}${gradeText}｜线索：${desc}`;
-  }
-
-  const timeLimit = truncateSummaryTextEvent(
-    formatIsoDurationNaturalLanguageEvent(item.timeLimit || "none"),
-    26
-  );
-  return `- 暗骰：${title}｜对象：${target}｜检定：${skill} ${checkDice}${difficultyText}｜来源：${sourceText}｜模式：${item.rollMode}｜时限：${timeLimit}｜结果等级：${resultSentence}${gradeText}｜线索：${desc}`;
-}
-
-/**
- * 功能：把结果等级转换为暗骰摘要中的中文分级标签。
- * @param grade 检定分级。
- * @returns 中文分级文本。
- */
-function formatGradeLabelForBlindSummaryEvent(grade: RoundSummaryEventItemEvent["resultGrade"]): string {
-  if (grade === "critical_success") return "大成功";
-  if (grade === "partial_success") return "勉强成功";
-  if (grade === "success") return "成功";
-  if (grade === "failure") return "失败";
-  if (grade === "critical_failure") return "大失败";
-  return "未知";
+  return `- 暗骰${title}：${resultSentence}。目标：${target}。线索：${desc}`;
 }
 
 export interface BuildSummaryBlockFromHistoryDepsEvent {
@@ -427,16 +395,13 @@ export function buildSummaryBlockFromHistoryEvent(
     };
   }
 
+  const verbosityMode = resolveSummaryVerbosityModeEvent(settings);
   const publicLines: string[] = [];
   const blindLines: string[] = [];
   publicLines.push(deps.DICE_SUMMARY_BLOCK_START_Event);
-  publicLines.push(
-    `v=5 fmt=nl detail=${detailMode} window_rounds=${roundsWindow} included_rounds=${selected.length} include_outcome=${includeOutcomeInSummary ? "1" : "0"}`
-  );
+  publicLines.push(`mode=${verbosityMode} rounds=${selected.length}`);
   blindLines.push(deps.DICE_BLIND_SUMMARY_BLOCK_START_Event);
-  blindLines.push(
-    `v=1 fmt=nl detail=${detailMode} window_rounds=${roundsWindow} included_rounds=${selected.length}`
-  );
+  blindLines.push(`mode=${verbosityMode} rounds=${selected.length}`);
   blindLines.push("说明：本区块仅提供暗骰的结果等级与线索背景，不公开点数、修正、总值或具体隐藏后果。");
 
   let emittedPublicEventLines = 0;
@@ -454,24 +419,26 @@ export function buildSummaryBlockFromHistoryEvent(
     const publicUnresolved = Math.max(0, publicItems.length - publicRolledCount);
     const blindUnresolved = Math.max(0, blindItems.length - blindRolledCount);
 
+    const roundLabel = selected.length === 1
+      ? verbosityMode === "verbose"
+        ? "上一轮（已结算）"
+        : "上一轮"
+      : `第 ${i + 1} 轮`;
+
     if (publicItems.length > 0) {
       hasPublicContent = true;
-      publicLines.push(
-        `【第 ${i + 1} 轮 / roundId=${snapshot.roundId} / 关闭时间=${new Date(
-          snapshot.closedAt
-        ).toISOString()}】`
-      );
-      publicLines.push(`本轮事件数=${publicItems.length}，已结算=${publicRolledCount}，未结算=${publicUnresolved}`);
+      publicLines.push(`${roundLabel}：`);
+      if (verbosityMode === "verbose") {
+        publicLines.push(`本轮事件数=${publicItems.length}，已结算=${publicRolledCount}，未结算=${publicUnresolved}`);
+      }
     }
 
     if (blindItems.length > 0) {
       hasBlindContent = true;
-      blindLines.push(
-        `【第 ${i + 1} 轮 / roundId=${snapshot.roundId} / 关闭时间=${new Date(
-          snapshot.closedAt
-        ).toISOString()}】`
-      );
-      blindLines.push(`本轮暗骰数=${blindItems.length}，已结算=${blindRolledCount}，未结算=${blindUnresolved}`);
+      blindLines.push(`${roundLabel}：`);
+      if (verbosityMode === "verbose") {
+        blindLines.push(`本轮暗骰数=${blindItems.length}，已结算=${blindRolledCount}，未结算=${blindUnresolved}`);
+      }
     }
 
     const limitedPublicPerRound = publicItems.slice(0, deps.SUMMARY_MAX_EVENTS_Event);
@@ -480,7 +447,9 @@ export function buildSummaryBlockFromHistoryEvent(
         publicTruncatedByTotalLimit = true;
         break;
       }
-      publicLines.push(buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary, settings));
+      publicLines.push(
+        buildSummaryEventNaturalLineByModeEvent(item, detailMode, includeOutcomeInSummary, settings)
+      );
       emittedPublicEventLines++;
     }
 
@@ -490,7 +459,7 @@ export function buildSummaryBlockFromHistoryEvent(
         blindTruncatedByTotalLimit = true;
         break;
       }
-      blindLines.push(buildBlindSummaryEventNaturalLineByModeEvent(item, detailMode));
+      blindLines.push(buildBlindSummaryEventNaturalLineByModeEvent(item, detailMode, settings));
       emittedBlindEventLines++;
     }
 

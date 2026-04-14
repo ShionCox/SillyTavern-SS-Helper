@@ -265,7 +265,7 @@ function buildBlindInstructionEvent(item: BlindGuidanceEvent): string {
 
 export function buildBlindGuidanceBlockEvent(queue: BlindGuidanceEvent[], startTag: string, endTag: string): string {
   if (!Array.isArray(queue) || queue.length <= 0) return "";
-  const lines: string[] = [startTag, `v=1 count=${queue.length}`];
+  const lines: string[] = [startTag, `count=${queue.length}`];
   lines.push("instruction=以下条目仅用于指导后续叙事自然体现暗骰后果；严禁直接播报暗骰成功/失败、系统判定、DC、修正或提示块来源。");
   for (const item of queue) {
     lines.push(
@@ -287,7 +287,7 @@ export function buildPassiveDiscoveryBlockEvent(
   endTag: string
 ): string {
   if (!Array.isArray(discoveries) || discoveries.length <= 0) return "";
-  const lines: string[] = [startTag, `v=1 count=${discoveries.length}`];
+  const lines: string[] = [startTag, `count=${discoveries.length}`];
   for (const item of discoveries) {
     lines.push(
       `- type=${item.type} skill="${normalizeInlineTextEvent(item.skillName)}" passive=${item.passiveScore} dc=${item.dc} id="${normalizeInlineTextEvent(

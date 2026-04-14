@@ -21,8 +21,8 @@ const TRIGGER_STYLE_ID_Event = "st-rh-inline-trigger-style";
 const TRIGGER_SIGNATURE_ATTR_Event = "data-rh-trigger-signature";
 const SELECTION_FALLBACK_TRIED_KEYS_LIMIT_Event = 120;
 const SELECTION_FALLBACK_MULTI_SPACE_REGEX_Event = /\s{2,}/;
-// 只把真正的句末标点视为分句边界，避免半句里的逗号、顿号被误判成多句。
-const SELECTION_FALLBACK_SENTENCE_SPLIT_REGEX_Event = /[。！？；!?;]+/;
+const SELECTION_FALLBACK_SENTENCE_END_REGEX_Event = /[。！？；!?;]+[”’」』】》）)]*/g;
+const SELECTION_FALLBACK_NOISE_ONLY_REGEX_Event = /^[\s"'“”‘’`~!@#$%^&*()\-_=+\[\]{}\\|;:,.<>/?，。！？；：、…（）【】《》「」『』]+$/;
 
 type ResolvedTriggerStateEvent = {
   resolved: boolean;
@@ -30,6 +30,17 @@ type ResolvedTriggerStateEvent = {
   visibility: RollVisibilityEvent | "public";
   resultGrade?: EventRollRecordEvent["resultGrade"];
   feedbackText?: string;
+};
+
+export type SelectionFallbackSentenceAnalysisEvent = {
+  completeSentences: number;
+  fragmentCount: number;
+  totalSegments: number;
+  normalizedText: string;
+  segments: Array<{
+    text: string;
+    kind: "complete" | "fragment";
+  }>;
 };
 
 function normalizeTextEvent(value: unknown): string {
@@ -304,17 +315,79 @@ function normalizeSelectionFallbackTextEvent(text: string): string {
   return normalizeInlineTextEvent(text).replace(/\s+/g, "");
 }
 
+export function trimSelectionFallbackNoiseEvent(text: string): string {
+  const normalized = normalizeInlineTextEvent(text)
+    .replace(/^[\s"'“”‘’`~!@#$%^&*()\-_=+\[\]{}\\|;:,.<>/?，。！？；：、…（）【】《》「」『』]+/g, "")
+    .replace(/[\s"'“”‘’`~!@#$%^&*()\-_=+\[\]{}\\|;:,.<>/?，。！？；：、…（）【】《》「」『』]+$/g, "")
+    .trim();
+  if (!normalized || SELECTION_FALLBACK_NOISE_ONLY_REGEX_Event.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+export function isMeaningfulSelectionFallbackFragmentEvent(text: string): boolean {
+  const normalized = trimSelectionFallbackNoiseEvent(text);
+  if (!normalized) return false;
+  return !SELECTION_FALLBACK_NOISE_ONLY_REGEX_Event.test(normalized);
+}
+
+export function analyzeSelectionFallbackSentencesEvent(
+  text: string
+): SelectionFallbackSentenceAnalysisEvent {
+  const normalizedText = normalizeInlineTextEvent(text);
+  const segments: SelectionFallbackSentenceAnalysisEvent["segments"] = [];
+  if (!normalizedText) {
+    return {
+      completeSentences: 0,
+      fragmentCount: 0,
+      totalSegments: 0,
+      normalizedText: "",
+      segments,
+    };
+  }
+
+  let cursor = 0;
+  let match: RegExpExecArray | null = null;
+  SELECTION_FALLBACK_SENTENCE_END_REGEX_Event.lastIndex = 0;
+  while ((match = SELECTION_FALLBACK_SENTENCE_END_REGEX_Event.exec(normalizedText)) !== null) {
+    const end = match.index + match[0].length;
+    const segmentText = normalizedText.slice(cursor, end);
+    if (isMeaningfulSelectionFallbackFragmentEvent(segmentText)) {
+      segments.push({
+        text: normalizeInlineTextEvent(segmentText),
+        kind: "complete",
+      });
+    }
+    cursor = end;
+  }
+
+  const trailingText = normalizedText.slice(cursor);
+  if (isMeaningfulSelectionFallbackFragmentEvent(trailingText)) {
+    segments.push({
+      text: normalizeInlineTextEvent(trailingText),
+      kind: "fragment",
+    });
+  }
+
+  const completeSentences = segments.filter((item) => item.kind === "complete").length;
+  const fragmentCount = segments.filter((item) => item.kind === "fragment").length;
+  return {
+    completeSentences,
+    fragmentCount,
+    totalSegments: completeSentences + fragmentCount,
+    normalizedText,
+    segments,
+  };
+}
+
 /**
  * 功能：统计自由划词文本中的有效句段数量。
  * @param text 原始划词文本。
  * @returns 归一化后的有效句段数量。
  */
-function countSelectionFallbackSentencesEvent(text: string): number {
-  return String(text ?? "")
-    .split(SELECTION_FALLBACK_SENTENCE_SPLIT_REGEX_Event)
-    .map((item) => normalizeInlineTextEvent(item))
-    .filter(Boolean)
-    .length;
+export function countSelectionFallbackSentencesEvent(text: string): number {
+  return analyzeSelectionFallbackSentencesEvent(text).totalSegments;
 }
 
 /**
@@ -476,12 +549,15 @@ function isSelectionFallbackTextAllowedEvent(
     return { ok: true };
   }
 
-  const sentenceCount = countSelectionFallbackSentencesEvent(raw);
-  if (sentenceCount <= 0) {
+  const analysis = analyzeSelectionFallbackSentencesEvent(raw);
+  if (analysis.totalSegments <= 0) {
     return { ok: false, reason: "当前选区没有可识别的有效句段。" };
   }
-  if (sentenceCount > settings.selectionFallbackMaxSentences) {
-    return { ok: false, reason: `当前为按句数限制，最多允许 ${settings.selectionFallbackMaxSentences} 句。` };
+  if (analysis.totalSegments > settings.selectionFallbackMaxSentences) {
+    return {
+      ok: false,
+      reason: `当前为按句数限制，检测到 ${analysis.totalSegments} 个句段，最多允许 ${settings.selectionFallbackMaxSentences} 句。`,
+    };
   }
   return { ok: true };
 }
@@ -773,19 +849,45 @@ export interface ExecuteInteractiveTriggerDepsEvent {
   }>;
 }
 
-function buildInteractiveTriggerFeedbackCardHtmlEvent(result: Awaited<ReturnType<ExecuteInteractiveTriggerDepsEvent["performInteractiveTriggerRollEvent"]>>): string {
+function buildInteractiveTriggerFeedbackCardHtmlEvent(
+  trigger: InteractiveTriggerEvent,
+  result: Awaited<ReturnType<ExecuteInteractiveTriggerDepsEvent["performInteractiveTriggerRollEvent"]>>
+): string {
   const feedback = result.feedback;
   const gradeLabel = formatResultGradeLabelEvent(
     feedback.resultGrade as EventRollRecordEvent["resultGrade"],
     feedback.visibility === "blind" ? "blind" : "public"
   );
-  return `<div class="st-rh-trigger-feedback-card"><strong>${escapeHtmlEvent(
-    feedback.title || result.event?.title || "线索检定"
-  )}</strong><div>模式：${escapeHtmlEvent(feedback.revealMode === "instant" ? "即时反馈" : "延迟体现")}</div><div>状态：${escapeHtmlEvent(
-    feedback.stateLabel || "已完成"
-  )}</div><div>结果等级：${escapeHtmlEvent(gradeLabel)}</div><div>${escapeHtmlEvent(
-    feedback.feedbackText || "检定已完成。"
-  )}</div></div>`;
+  const title = feedback.title || result.event?.title || "线索检定";
+  const revealLabel = feedback.revealMode === "instant" ? "即时反馈" : "延迟体现";
+  const stateLabel = feedback.stateLabel || "已完成";
+  const sourceMessageId = String(trigger.sourceMessageId || "");
+  const sourceFloorKey = String(trigger.sourceFloorKey || "");
+  const sourceId = String(trigger.sourceId || "");
+  const occurrenceIndex = Number.isFinite(Number(trigger.occurrenceIndex))
+    ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex)))
+    : 0;
+
+  return `
+    <div class="st-rh-console-card">
+      <div class="st-rh-console-card-head">
+        <strong>${escapeHtmlEvent(title)}</strong>
+        <button class="st-rh-console-card-jump" data-rh-jump="1"
+          data-rh-jump-source-message="${escapeHtmlEvent(sourceMessageId)}"
+          data-rh-jump-floor-key="${escapeHtmlEvent(sourceFloorKey)}"
+          data-rh-jump-source-id="${escapeHtmlEvent(sourceId)}"
+          data-rh-jump-occurrence="${escapeHtmlEvent(String(occurrenceIndex))}">
+          跳转
+        </button>
+      </div>
+      <div class="st-rh-console-card-meta">
+        <span>模式：${escapeHtmlEvent(revealLabel)}</span>
+        <span>状态：${escapeHtmlEvent(stateLabel)}</span>
+        <span>结果等级：${escapeHtmlEvent(gradeLabel)}</span>
+      </div>
+      <div class="st-rh-console-card-desc">${escapeHtmlEvent(feedback.feedbackText || "检定已完成。")}</div>
+    </div>
+  `;
 }
 
 export async function executeInteractiveTriggerEvent(
@@ -794,7 +896,7 @@ export async function executeInteractiveTriggerEvent(
 ): Promise<void> {
   try {
     const result = await deps.performInteractiveTriggerRollEvent(trigger);
-    deps.appendToConsoleEvent(buildInteractiveTriggerFeedbackCardHtmlEvent(result), "card");
+    deps.appendToConsoleEvent(buildInteractiveTriggerFeedbackCardHtmlEvent(trigger, result), "card");
     deps.persistChatSafeEvent?.();
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
@@ -854,7 +956,7 @@ function buildResolvedTriggerMenuItemsEvent(
       {
         id: `${trigger.triggerId}:resolved-detail`,
         label: revealMode === "instant"
-          ? "已给出即时反馈，真实点数、阈值与修正不会公开显示。"
+          ? "已给出即时反馈。"
           : "真实点数、阈值与修正不会公开显示。",
         iconClassName: "fa-solid fa-circle-info",
         disabled: true,

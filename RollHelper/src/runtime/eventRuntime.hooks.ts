@@ -47,9 +47,7 @@ import {
   buildAssistantMessageIdEvent as buildAssistantMessageIdModuleEvent,
   clearDiceMetaEventState as clearDiceMetaEventStateModuleEvent,
   enhanceAssistantRawSourceButtonsEvent as enhanceAssistantRawSourceButtonsModuleEvent,
-  findLatestAssistantEvent as findLatestAssistantModuleEvent,
-  handleGenerationEndedEvent as handleGenerationEndedModuleEvent,
-  reconcilePendingRoundWithCurrentChatEvent as reconcilePendingRoundWithCurrentChatModuleEvent,
+  rebuildAssistantFloorLifecycleEvent as rebuildAssistantFloorLifecycleModuleEvent,
   registerEventHooksEvent as registerEventHooksModuleEvent,
   sanitizeAssistantMessageEventBlocksEvent as sanitizeAssistantMessageEventBlocksModuleEvent,
   sanitizeCurrentChatEventBlocksEvent as sanitizeCurrentChatEventBlocksModuleEvent,
@@ -94,12 +92,6 @@ import {
   getEventRuntimeViewStateEvent,
   refreshCountdownDomEvent,
 } from "./eventRuntime.render";
-
-function findLatestAssistantEvent(chat: TavernMessageEvent[]): { msg: TavernMessageEvent; index: number } | null {
-  return findLatestAssistantModuleEvent(chat, {
-    isAssistantMessageEvent: isAssistantMessageModuleEvent,
-  });
-}
 
 function getStableAssistantOriginalSourceTextWiredEvent(message: TavernMessageEvent | undefined): string {
   return getStableAssistantOriginalSourceTextModuleEvent(message, {
@@ -192,12 +184,11 @@ function shouldRetryInitialWidgetRestoreEvent(result: RefreshAllWidgetsResultEve
  * @returns 无返回值。
  */
 export function restoreRuntimeUiFromStateEvent(retry = 0): void {
-  sanitizeCurrentChatEventBlocksEvent();
-  sweepTimeoutFailuresEvent();
-  refreshCountdownDomEvent();
+  void rebuildAssistantFloorLifecycleModuleEvent({
+    reason: "hydrate_restore",
+    deps: buildEventHooksDepsEvent(),
+  });
   const refreshResult = refreshAllWidgetsFromStateWiredEvent();
-  enhanceInteractiveTriggersInDomEvent();
-  enhanceAssistantRawSourceButtonsEvent();
 
   if (!shouldRetryInitialWidgetRestoreEvent(refreshResult)) {
     return;
@@ -304,43 +295,12 @@ function autoRollEventsByAiModeEvent(round: PendingRoundEvent): Promise<string[]
   });
 }
 
-function handleGenerationEndedEvent(): void {
-  handleGenerationEndedModuleEvent({
+function buildEventHooksDepsEvent() {
+  return {
     getSettingsEvent: getSettingsStoreEvent,
     getLiveContextEvent: getLiveContextCoreEvent,
-    findLatestAssistantEvent,
-    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
-    buildAssistantMessageIdEvent,
-    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
-    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
-    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
-    getMessageTextEvent: getMessageTextModuleEvent,
-    parseEventEnvelopesEvent,
-    filterEventsByApplyScopeEvent,
-    removeRangesEvent,
-    setMessageTextEvent: setMessageTextModuleEvent,
-    hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
-    persistChatSafeEvent: persistChatSafeStoreEvent,
-    mergeEventsIntoPendingRoundEvent,
-    invalidatePendingRoundFloorEvent,
-    invalidateSummaryHistoryFloorEvent,
-    autoRollEventsByAiModeEvent,
-    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
-    sweepTimeoutFailuresEvent,
-    refreshCountdownDomEvent,
-    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
-  });
-}
-
-/**
- * 功能：用当前可见聊天内容对账未归档轮次，清除被重生成楼层的旧骰子状态。
- * @param reason 触发本次对账的原因。
- * @returns 若本次对账修改了未归档轮次则返回 `true`，否则返回 `false`。
- */
-function reconcilePendingRoundWithCurrentChatEvent(reason = "chat_mutated"): boolean {
-  return reconcilePendingRoundWithCurrentChatModuleEvent(reason, {
-    getSettingsEvent: getSettingsStoreEvent,
-    getLiveContextEvent: getLiveContextCoreEvent,
+    eventSource: getTavernEventSourceEvent() ?? undefined,
+    event_types: getTavernEventTypesEvent() ?? undefined,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
     buildAssistantMessageIdEvent,
@@ -351,10 +311,28 @@ function reconcilePendingRoundWithCurrentChatEvent(reason = "chat_mutated"): boo
     getMessageTextEvent: getMessageTextModuleEvent,
     parseEventEnvelopesEvent,
     filterEventsByApplyScopeEvent,
+    removeRangesEvent,
+    setMessageTextEvent: setMessageTextModuleEvent,
+    resetRecentParseFailureLogsEvent,
+    extractPromptChatFromPayloadEvent: extractPromptChatFromPayloadModuleEvent,
+    handlePromptReadyEvent,
+    resetAssistantProcessedStateEvent,
+    clearDiceMetaEventState,
+    sanitizeCurrentChatEventBlocksEvent,
+    hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
+    persistChatSafeEvent: persistChatSafeStoreEvent,
+    mergeEventsIntoPendingRoundEvent,
     invalidatePendingRoundFloorEvent,
     invalidateSummaryHistoryFloorEvent,
-    mergeEventsIntoPendingRoundEvent,
-  });
+    autoRollEventsByAiModeEvent,
+    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
+    sweepTimeoutFailuresEvent,
+    refreshCountdownDomEvent,
+    loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
+    enhanceInteractiveTriggersInDomEvent,
+    enhanceAssistantRawSourceButtonsEvent,
+    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+  };
 }
 
 function clearDiceMetaEventState(reason = "chat_reset"): void {
@@ -432,31 +410,7 @@ export function startCountdownTickerEvent(): void {
 }
 
 export function registerEventHooksEvent(): void {
-  registerEventHooksModuleEvent({
-    getLiveContextEvent: getLiveContextCoreEvent,
-    eventSource: getTavernEventSourceEvent() ?? undefined,
-    event_types: getTavernEventTypesEvent() ?? undefined,
-    isAssistantMessageEvent: isAssistantMessageModuleEvent,
-    getStableAssistantOriginalSourceTextEvent: getStableAssistantOriginalSourceTextWiredEvent,
-    getHostOriginalSourceTextEvent: getAssistantOriginalSourceCandidateFromHostModuleEvent,
-    getPreferredAssistantSourceTextEvent: getPreferredAssistantSourceTextModuleEvent,
-    getMessageTextEvent: getMessageTextModuleEvent,
-    parseEventEnvelopesEvent,
-    resetRecentParseFailureLogsEvent,
-    extractPromptChatFromPayloadEvent: extractPromptChatFromPayloadModuleEvent,
-    handlePromptReadyEvent,
-    handleGenerationEndedEvent,
-    resetAssistantProcessedStateEvent,
-    clearDiceMetaEventState,
-    sanitizeCurrentChatEventBlocksEvent,
-    sweepTimeoutFailuresEvent,
-    refreshCountdownDomEvent,
-    loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
-    refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
-    reconcilePendingRoundWithCurrentChatEvent,
-    enhanceInteractiveTriggersInDomEvent,
-    enhanceAssistantRawSourceButtonsEvent,
-  });
+  registerEventHooksModuleEvent(buildEventHooksDepsEvent());
 }
 
 export function registerDebugCommandEvent(): void {

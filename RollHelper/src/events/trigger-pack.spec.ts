@@ -20,7 +20,9 @@ vi.mock("../../index", () => ({
 
 import {
   getMessageInteractiveTriggersEvent,
+  getMessageInteractiveTriggerLifecycleMetaEvent,
   getMessageTriggerPackEvent,
+  rebuildInteractiveTriggerMetadataFromStableSourceEvent,
   sanitizeMessageInteractiveTriggersEvent,
   setMessageInteractiveTriggersEvent,
   setMessageTriggerPackEvent,
@@ -144,7 +146,7 @@ describe("trigger_pack 元数据", () => {
     expect(triggers[0].compare).toBe(">=");
   });
 
-  it("正文不再包含 trigger 时，会清空旧的 trigger / trigger_pack 元数据", () => {
+  it("显示态正文不含 trigger 时，会保留旧的 trigger / trigger_pack 元数据", () => {
     const message = {
       mes: "这里只剩普通正文。",
       extra: {},
@@ -176,6 +178,48 @@ describe("trigger_pack 元数据", () => {
     const changed = sanitizeMessageInteractiveTriggersEvent(message as any, {
       settings: createSettings(),
       sourceMessageId: "assistant:new",
+      sourceState: "display_text",
+    });
+
+    expect(changed).toBe(false);
+    expect(getMessageInteractiveTriggersEvent(message as any)).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items).toHaveLength(1);
+    expect(getMessageInteractiveTriggerLifecycleMetaEvent(message as any)?.hydratedFrom).toBe("metadata");
+  });
+
+  it("编辑态正文不再包含 trigger 时，会清空旧的 trigger / trigger_pack 元数据", () => {
+    const message = {
+      mes: "这里只剩普通正文。",
+      extra: {},
+    };
+    setMessageInteractiveTriggersEvent(message as any, [{
+      triggerId: "old",
+      label: "旧线索",
+      action: "调查",
+      skill: "调查",
+      blind: true,
+      sourceMessageId: "assistant:old",
+      sourceId: "old_sid",
+      revealMode: "instant",
+      triggerPackSourceId: "old_sid",
+      diceExpr: "1d20",
+    } as InteractiveTriggerEvent]);
+    setMessageTriggerPackEvent(message as any, {
+      type: "trigger_pack",
+      version: "1",
+      items: [{
+        sid: "old_sid",
+        skill: "调查",
+        difficulty: "normal",
+        reveal: "instant",
+        success: "旧反馈",
+      }],
+    });
+
+    const changed = sanitizeMessageInteractiveTriggersEvent(message as any, {
+      settings: createSettings(),
+      sourceMessageId: "assistant:new",
+      sourceState: "edited_source",
     });
 
     expect(changed).toBe(true);
@@ -222,6 +266,7 @@ describe("trigger_pack 元数据", () => {
         (target as any).mes = text;
       },
       resolveSourceMessageIdEvent: () => "assistant:1:swipe_0:hash",
+      sourceState: "display_text",
     });
 
     expect(changed).toBe(true);
@@ -230,6 +275,125 @@ describe("trigger_pack 元数据", () => {
     expect(String(message.mes)).not.toContain("trigger_pack");
     expect(getMessageTriggerPackEvent(message as any)?.items[0].sid).toBe("weird_sound");
     expect(getMessageInteractiveTriggersEvent(message as any)[0].revealMode).toBe("instant");
+  });
+
+  it("能识别 triggerjson 代码块里的 trigger_pack", () => {
+    const message = {
+      mes: `你听见<rh-trigger action="调查" skill="调查" blind="1" sourceId="weird_sound">奇怪的响声</rh-trigger>。\n\n\`\`\`triggerjson
+{
+  "type": "trigger_pack",
+  "version": "1",
+  "items": [
+    {
+      "sid": "weird_sound",
+      "skill": "调查",
+      "difficulty": "normal",
+      "reveal": "instant",
+      "success": "你听出那不是风，而是隔板后的抓挠声。"
+    }
+  ]
+}
+\`\`\``,
+      extra: {},
+    };
+
+    const changed = sanitizeMessageInteractiveTriggersEvent(message as any, {
+      settings: createSettings(),
+      sourceMessageId: "assistant:1:swipe_0:hash",
+      sourceState: "display_text",
+    });
+
+    expect(changed).toBe(true);
+    expect(String(message.mes)).not.toContain("trigger_pack");
+    expect(getMessageTriggerPackEvent(message as any)?.items).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items[0].sid).toBe("weird_sound");
+    expect(getMessageInteractiveTriggersEvent(message as any)?.[0]?.triggerPackSuccessText).toContain("抓挠声");
+  });
+
+  it("metadata 缺失时可从稳定原文重建 trigger / trigger_pack", () => {
+    const message = {
+      mes: "奇怪的响声。",
+      extra: {},
+    };
+    const stableSourceText = `你听见<rh-trigger action="调查" skill="调查" blind="1" sourceId="weird_sound">奇怪的响声</rh-trigger>。\n\n\`\`\`triggerpack
+{
+  "type": "trigger_pack",
+  "version": "1",
+  "items": [
+    {
+      "sid": "weird_sound",
+      "skill": "调查",
+      "difficulty": "normal",
+      "reveal": "instant",
+      "success": "你听出那不是风，而是隔板后的抓挠声。",
+      "failure": "你没法确认来源。"
+    }
+  ]
+}
+\`\`\``;
+
+    const changed = rebuildInteractiveTriggerMetadataFromStableSourceEvent(message as any, {
+      settings: createSettings(),
+      sourceMessageId: "assistant:1:swipe_0:hash",
+      stableSourceText,
+      sourceState: "raw_source",
+    });
+
+    expect(changed).toBe(true);
+    expect(getMessageInteractiveTriggersEvent(message as any)).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items[0].sid).toBe("weird_sound");
+    expect(getMessageInteractiveTriggerLifecycleMetaEvent(message as any)?.hydratedFrom).toBe("markup");
+    expect(String(message.mes)).toBe("奇怪的响声。");
+  });
+
+  it("swipe 切换时不会误继承旧 swipe 的 trigger metadata", () => {
+    const message = {
+      mes: "主消息",
+      swipe_id: 0,
+      swipes: [
+        { mes: "第一个版本里有奇怪的响声。", extra: {} },
+        { mes: "第二个版本只是普通描述。", extra: {} },
+      ],
+      swipe_info: [{}, {}],
+      extra: {},
+    };
+
+    setMessageInteractiveTriggersEvent(message as any, [{
+      triggerId: "swipe_0_trigger",
+      label: "奇怪的响声",
+      action: "调查",
+      skill: "调查",
+      blind: true,
+      sourceMessageId: "assistant:swipe_0",
+      sourceId: "weird_sound",
+      revealMode: "instant",
+      triggerPackSourceId: "weird_sound",
+      diceExpr: "1d20",
+    } as InteractiveTriggerEvent]);
+    setMessageTriggerPackEvent(message as any, {
+      type: "trigger_pack",
+      version: "1",
+      items: [{
+        sid: "weird_sound",
+        skill: "调查",
+        difficulty: "normal",
+        reveal: "instant",
+        success: "旧 swipe 反馈",
+      }],
+    });
+
+    expect(getMessageInteractiveTriggersEvent(message as any)).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items).toHaveLength(1);
+
+    message.swipe_id = 1;
+
+    expect(getMessageInteractiveTriggersEvent(message as any)).toEqual([]);
+    expect(getMessageTriggerPackEvent(message as any)).toBeNull();
+
+    message.swipe_id = 0;
+
+    expect(getMessageInteractiveTriggersEvent(message as any)).toHaveLength(1);
+    expect(getMessageTriggerPackEvent(message as any)?.items).toHaveLength(1);
   });
 });
 
@@ -300,6 +464,109 @@ describe("trigger_pack 执行链", () => {
     expect(meta.blindHistory ?? []).toHaveLength(1);
     expect(meta.blindHistory?.[0].state).toBe("consumed");
     expect(meta.blindHistory?.[0].revealMode).toBe("instant");
+  });
+
+  it("interactive blind 会占用本轮暗骰次数上限", async () => {
+    let idCounter = 0;
+    const meta: DiceMetaEvent = {
+      pendingRound: {
+        roundId: "round_limit",
+        status: "open",
+        openedAt: Date.now(),
+        sourceAssistantMsgIds: ["assistant:1:swipe_0:hash"],
+        events: [],
+        rolls: [{
+          rollId: "roll_existing",
+          roundId: "round_limit",
+          eventId: "evt_existing",
+          eventTitle: "旧暗骰",
+          diceExpr: "1d20",
+          result: {
+            expr: "1d20",
+            rolls: [12],
+            modifier: 0,
+            total: 12,
+            rawTotal: 12,
+            count: 1,
+            sides: 20,
+            sourceEngine: "builtin",
+          } as any,
+          success: true,
+          compareUsed: ">=",
+          dcUsed: 10,
+          advantageStateApplied: "normal",
+          resultGrade: "success",
+          marginToDc: 2,
+          skillModifierApplied: 0,
+          statusModifierApplied: 0,
+          baseModifierUsed: 0,
+          finalModifierUsed: 0,
+          targetLabelUsed: "旧线索",
+          rolledAt: Date.now(),
+          source: "blind_manual_roll",
+          visibility: "blind",
+          concealResult: true,
+          natState: "none",
+          timeoutAt: null,
+          sourceAssistantMsgId: "assistant:1:swipe_0:hash",
+          revealMode: "instant",
+        }],
+        eventTimers: {},
+      } as any,
+      pendingBlindGuidanceQueue: [],
+      blindHistory: [],
+    };
+
+    const trigger: InteractiveTriggerEvent = {
+      triggerId: "trigger:limit",
+      label: "第二条线索",
+      action: "调查",
+      skill: "调查",
+      blind: true,
+      sourceMessageId: "assistant:1:swipe_0:hash",
+      sourceId: "limit_source",
+      occurrenceIndex: 0,
+      difficulty: "normal",
+      diceExpr: "1d20",
+      compare: ">=",
+      revealMode: "instant",
+    };
+
+    await expect(
+      performInteractiveTriggerRollEvent(trigger, {
+        sweepTimeoutFailuresEvent: () => false,
+        getDiceMetaEvent: () => meta,
+        appendBlindHistoryRecordEvent: () => undefined,
+        ensureRoundEventTimersSyncedEvent: () => undefined,
+        recordTimeoutFailureIfNeededEvent: () => null,
+        saveMetadataSafeEvent: () => undefined,
+        getLatestRollRecordForEvent: () => null,
+        refreshAllWidgetsFromStateEvent: () => undefined,
+        refreshCountdownDomEvent: () => undefined,
+        rollDiceEvent: async () => ({
+          expr: "1d20",
+          rolls: [15],
+          modifier: 0,
+          total: 15,
+          rawTotal: 15,
+          count: 1,
+          sides: 20,
+          sourceEngine: "builtin",
+        } as any),
+        parseDiceExpression: () => ({ count: 1, sides: 20, modifier: 0, explode: false }),
+        getSettingsEvent: () => createSettings({ maxBlindRollsPerRound: 1 }),
+        resolveSkillModifierBySkillNameEvent: () => 0,
+        applySkillModifierToDiceResultEvent: (current) => ({
+          result: current,
+          baseModifierUsed: 0,
+          finalModifierUsed: 0,
+        }),
+        saveLastRoll: () => undefined,
+        normalizeCompareOperatorEvent: (raw) => raw,
+        evaluateSuccessEvent: (total, compare, dc) => total >= Number(dc ?? 0),
+        createIdEvent: (prefix) => `${prefix}_${++idCounter}`,
+      })
+    ).rejects.toThrow("本轮暗骰次数已达到上限");
   });
 });
 
@@ -430,5 +697,7 @@ describe("楼层失效与摘要", () => {
     );
 
     expect(blocks.blindSummaryText).toContain("已即时反馈");
+    expect(blocks.blindSummaryText).toContain("你听出那不是风声。");
+    expect(blocks.blindSummaryText).not.toContain("来自交互触发词的即时检定。");
   });
 });

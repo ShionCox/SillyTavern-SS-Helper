@@ -713,7 +713,7 @@ export function buildSettingsCardHtmlTemplateEvent(
           ${buildCheckboxItemEvent(
             ids.selectionFallbackEnabledId,
             "启用自由划词兜底检定",
-            "允许玩家对未被 AI 标记为 rh-trigger 的正文片段发起有限次数的兜底调查。默认开启，且默认按句数限制。",
+            "允许玩家对未被 AI 标记为 rh-trigger 的正文片段发起有限次数的兜底调查。默认开启，且默认按句数限制；句数会统计完整句和有意义残片。",
             "selection fallback trigger short phrase sentence limit",
             "开启后，自由划词仅作为有限次数的兜底调查入口。"
             )}
@@ -721,7 +721,7 @@ export function buildSettingsCardHtmlTemplateEvent(
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback limit mode sentence char count">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">自由划词限制模式</div>
-              <div class="st-roll-item-desc">二选一生效。按字数限制时使用整段长度；按句数限制时按标点分句，默认最多两句。</div>
+              <div class="st-roll-item-desc">二选一生效。按字数限制时使用整段长度；按句数限制时会统计完整句和有意义残片，默认最多两句。</div>
             </div>
             <div class="st-roll-row">
               ${buildSharedSelectField({
@@ -806,7 +806,7 @@ export function buildSettingsCardHtmlTemplateEvent(
           <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback max sentences sentence count punctuation">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">自由划词最多句数</div>
-              <div class="st-roll-item-desc">仅在“按句数限制”模式下生效，按标点分句统计有效句段数量。</div>
+              <div class="st-roll-item-desc">仅在“按句数限制”模式下生效，会按完整句与有意义残片统计有效句段数量。</div>
             </div>
             <div class="st-roll-row">
               ${buildSharedInputField({

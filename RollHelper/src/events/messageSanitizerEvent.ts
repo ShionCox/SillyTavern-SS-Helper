@@ -2,6 +2,9 @@ import { stripRollHelperArtifactsEvent } from '../../../SDK/tavern';
 import { logger } from "../../index";
 import {
     getActiveSwipeExtraContainerEvent,
+    getMessageInteractiveTriggersEvent,
+    getMessageTriggerPackEvent,
+    rebuildInteractiveTriggerMetadataFromStableSourceEvent,
     sanitizeMessageInteractiveTriggersEvent,
     stripInteractiveTriggerMarkupFromTextEvent,
 } from "./interactiveTriggerMetadataEvent";
@@ -298,6 +301,7 @@ export interface SanitizeAssistantMessageArtifactsDepsEvent {
     removeRangesEvent?: (text: string, ranges: Array<{ start: number; end: number }>) => string;
     setMessageTextEvent?: (message: TavernMessageEvent, text: string) => void;
     resolveSourceMessageIdEvent?: (message: TavernMessageEvent, index?: number) => string;
+    sourceState?: "display_text" | "raw_source" | "edited_source";
 }
 
 export function ensureAssistantOriginalSnapshotPersistedEvent(
@@ -373,6 +377,14 @@ export function getStableAssistantOriginalSourceTextEvent(
     return sourceCandidates[0] ?? "";
 }
 
+export function hasInteractiveTriggerMarkupInStableSourceEvent(
+    message: TavernMessageEvent | undefined,
+    deps?: AssistantOriginalSourceCandidateDepsEvent
+): boolean {
+    const stableText = getStableAssistantOriginalSourceTextEvent(message, deps);
+    return /<rh-trigger\b/i.test(stableText) || /"type"\s*:\s*"trigger_pack"/i.test(stableText);
+}
+
 /**
  * 功能：统一清理助手消息中的 RollHelper 控制块与交互触发标记。
  * 参数：
@@ -389,6 +401,7 @@ export function sanitizeAssistantMessageArtifactsEvent(
 ): boolean {
     let changed = false;
     const sourceMessageId = deps.resolveSourceMessageIdEvent?.(message, index) || "";
+    const sourceState = deps.sourceState || "display_text";
     const getPreferredText = deps.getPreferredAssistantSourceTextEvent ?? ((target) => getMessageTextSafe(target));
     const getFallbackText = deps.getMessageTextEvent ?? ((target) => getMessageTextSafe(target));
     const setText = deps.setMessageTextEvent ?? ((target, text) => {
@@ -434,14 +447,36 @@ export function sanitizeAssistantMessageArtifactsEvent(
     }
 
     if (deps.getSettingsEvent) {
+        const stableSourceText = getStableAssistantOriginalSourceTextEvent(message, {
+            getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
+            getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+            getMessageTextEvent: deps.getMessageTextEvent,
+            parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent ?? (() => ({ events: [], ranges: [] })),
+        });
+        const previousTriggers = getMessageInteractiveTriggersEvent(message);
+        const previousTriggerPack = getMessageTriggerPackEvent(message);
+        const rebuiltTriggerMetadata =
+            previousTriggers.length <= 0
+            && !previousTriggerPack
+            && rebuildInteractiveTriggerMetadataFromStableSourceEvent(message, {
+                settings: deps.getSettingsEvent(),
+                sourceMessageId,
+                stableSourceText,
+                sourceState: "raw_source",
+            });
+        if (rebuiltTriggerMetadata) {
+            logger.info(`[内容处理] 已从稳定原文重建交互触发元数据 source=${sourceMessageId || "unknown"}`);
+        }
         const triggerChanged = sanitizeMessageInteractiveTriggersEvent(message, {
             settings: deps.getSettingsEvent(),
             sourceMessageId,
+            sourceState,
+            stableSourceText,
         });
         if (triggerChanged) {
             logger.info(`[内容处理] 命中交互触发标记清理 source=${sourceMessageId || "unknown"}`);
         }
-        changed = changed || triggerChanged;
+        changed = changed || rebuiltTriggerMetadata || triggerChanged;
     }
 
     return changed;

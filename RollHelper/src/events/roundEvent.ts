@@ -1700,6 +1700,11 @@ function buildInteractiveTriggerEventSpecEvent(
   const resolvedDc = threshold?.dc ?? 10;
   const noteText = String(trigger.note || "").trim();
   const loreText = String(trigger.loreType || "").trim();
+  const successOutcomeText = String(trigger.triggerPackSuccessText || "").trim();
+  const failureOutcomeText = String(trigger.triggerPackFailureText || "").trim();
+  const explodeOutcomeText = String(
+    trigger.triggerPackExplodeText || trigger.triggerPackSuccessText || ""
+  ).trim();
   const descParts = [
     `来自交互触发词「${label}」的即时检定。`,
     loreText ? `线索类型：${loreText}。` : "",
@@ -1725,8 +1730,9 @@ function buildInteractiveTriggerEventSpecEvent(
     desc: descParts.join(" "),
     dcReason,
     outcomes: {
-      success: `${action}成功，围绕「${label}」获得更明确的进展。`,
-      failure: `${action}失败，围绕「${label}」产生误判、延误或新的风险。`,
+      success: successOutcomeText || `${action}成功，围绕「${label}」获得更明确的进展。`,
+      failure: failureOutcomeText || `${action}失败，围绕「${label}」产生误判、延误或新的风险。`,
+      explode: explodeOutcomeText || undefined,
     },
     sourceAssistantMsgId: String(trigger.sourceMessageId || "").trim(),
   };
@@ -1805,6 +1811,20 @@ export async function performInteractiveTriggerRollEvent(
 
   const meta = deps.getDiceMetaEvent();
   const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
+  if (trigger.blind) {
+    if (!settings.enableBlindRoll) {
+      throw new Error("暗骰功能已关闭，当前不能执行交互暗骰。");
+    }
+    if (!isBlindSkillAllowedEvent(trigger.skill || trigger.action || "", settings)) {
+      throw new Error(`「${String(trigger.skill || trigger.action || "该检定")}」当前不允许作为暗骰执行。`);
+    }
+    const blindCount =
+      countBlindRollsInRoundEvent(round)
+      + countQueuedBlindGuidanceInRoundEvent(meta, round.roundId);
+    if (blindCount >= Math.max(1, Number(settings.maxBlindRollsPerRound) || 1)) {
+      throw new Error("本轮暗骰次数已达到上限，当前不能再进行新的交互暗骰。");
+    }
+  }
   const revealMode = resolveInteractiveTriggerRevealModeEvent(trigger);
   const eventId = buildInteractiveTriggerEventIdEvent(trigger);
   let event = round.events.find((item) => item.id === eventId);

@@ -9,6 +9,7 @@ import { logger } from "../../index";
 import { ensureSharedTooltip } from "../../../_Components/sharedTooltip";
 import { formatStatusRemainingRoundsLabelEvent } from "./statusEvent";
 import { ensureSdkFloatingToolbar, SDK_FLOATING_TOOLBAR_ID } from "../../../SDK/toolbar";
+import { jumpToTriggerFromDatasetEvent } from "../Components/rollConsoleEvent";
 import {
   buildAssistantOriginalSourceMetaEvent,
   ensureAssistantOriginalSnapshotPersistedEvent,
@@ -46,7 +47,16 @@ export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
   eventSource: any;
   event_types: Record<string, string> | undefined;
+  getSettingsEvent: () => {
+    enabled: boolean;
+    eventApplyScope: "protagonist_only" | "all";
+    enableAiRoundControl: boolean;
+    defaultBlindSkillsText?: string;
+  };
+  getDiceMetaEvent: () => DiceMetaEvent;
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
+  buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
+  buildAssistantFloorKeyEvent: (assistantMsgId: string) => string | null;
   getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
@@ -56,35 +66,46 @@ export interface EventHooksDepsEvent {
     ranges: Array<{ start: number; end: number }>;
     shouldEndRound?: boolean;
   };
+  filterEventsByApplyScopeEvent: (
+    events: DiceEventSpecEvent[],
+    applyScope: "protagonist_only" | "all"
+  ) => DiceEventSpecEvent[];
+  removeRangesEvent: (text: string, ranges: Array<{ start: number; end: number }>) => string;
+  setMessageTextEvent: (message: TavernMessageEvent, text: string) => void;
   resetRecentParseFailureLogsEvent: () => void;
   extractPromptChatFromPayloadEvent: (payload: any) => any[] | null;
   handlePromptReadyEvent: (payload: any, sourceEvent?: string) => void;
-  handleGenerationEndedEvent: () => void;
   resetAssistantProcessedStateEvent: () => void;
   clearDiceMetaEventState: (reason?: string) => void;
   sanitizeCurrentChatEventBlocksEvent: () => void;
+  hideEventCodeBlocksInDomEvent: () => void;
+  persistChatSafeEvent: () => void;
+  mergeEventsIntoPendingRoundEvent: (
+    events: DiceEventSpecEvent[],
+    assistantMsgId: string
+  ) => PendingRoundEvent;
+  invalidatePendingRoundFloorEvent: (assistantMsgId: string) => boolean;
+  invalidateSummaryHistoryFloorEvent: (assistantMsgId: string) => boolean;
+  autoRollEventsByAiModeEvent: (round: PendingRoundEvent) => Promise<string[]>;
   sweepTimeoutFailuresEvent: () => boolean;
   refreshCountdownDomEvent: () => void;
   loadChatScopedStateIntoRuntimeEvent: (reason?: string) => Promise<void>;
   refreshAllWidgetsFromStateEvent: () => void;
-  reconcilePendingRoundWithCurrentChatEvent: (reason?: string) => boolean;
   enhanceInteractiveTriggersInDomEvent: () => void;
   enhanceAssistantRawSourceButtonsEvent: () => void;
+  saveMetadataSafeEvent: () => void;
 }
 
-export interface HandleGenerationEndedDepsEvent {
+export interface FinalizeAssistantFloorDataDepsEvent {
   getSettingsEvent: () => {
     enabled: boolean;
     eventApplyScope: "protagonist_only" | "all";
     enableAiRoundControl: boolean;
     defaultBlindSkillsText?: string;
   };
-  getLiveContextEvent: () => STContext | null;
-  findLatestAssistantEvent: (
-    chat: TavernMessageEvent[]
-  ) => { msg: TavernMessageEvent; index: number } | null;
   getDiceMetaEvent: () => DiceMetaEvent;
   buildAssistantMessageIdEvent: (message: TavernMessageEvent, index: number) => string;
+  buildAssistantFloorKeyEvent: (assistantMsgId: string) => string | null;
   getStableAssistantOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getHostOriginalSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
   getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined) => string;
@@ -92,7 +113,7 @@ export interface HandleGenerationEndedDepsEvent {
   parseEventEnvelopesEvent: (text: string) => {
     events: DiceEventSpecEvent[];
     ranges: Array<{ start: number; end: number }>;
-    shouldEndRound: boolean;
+    shouldEndRound?: boolean;
   };
   filterEventsByApplyScopeEvent: (
     events: DiceEventSpecEvent[],
@@ -132,7 +153,7 @@ export interface ReconcilePendingRoundWithCurrentChatDepsEvent {
   parseEventEnvelopesEvent: (text: string) => {
     events: DiceEventSpecEvent[];
     ranges: Array<{ start: number; end: number }>;
-    shouldEndRound: boolean;
+    shouldEndRound?: boolean;
   };
   filterEventsByApplyScopeEvent: (
     events: DiceEventSpecEvent[],
@@ -158,6 +179,26 @@ type AssistantMessageTargetEvent = {
   index: number;
 };
 
+type AssistantFloorLifecycleReasonEvent =
+  | "stream_snapshot"
+  | "message_received_finalize"
+  | "generation_ended_finalize"
+  | "message_swiped"
+  | "message_edited"
+  | "message_deleted"
+  | "chat_reset"
+  | "chat_changed"
+  | "hydrate_restore";
+
+type AssistantFloorLifecycleContextEvent = {
+  reason: AssistantFloorLifecycleReasonEvent;
+  message: TavernMessageEvent | null;
+  index: number | null;
+  assistantMsgId: string | null;
+  floorKey: string | null;
+  isLatestAssistant: boolean;
+};
+
 type AssistantGenerationSessionStateEvent = {
   key: string;
   swipeId: number;
@@ -178,7 +219,7 @@ function resolveAssistantEnvelopeEvent(
   message: TavernMessageEvent,
   applyScope: "protagonist_only" | "all",
   deps: Pick<
-    HandleGenerationEndedDepsEvent,
+    FinalizeAssistantFloorDataDepsEvent,
     | "getStableAssistantOriginalSourceTextEvent"
     | "getHostOriginalSourceTextEvent"
     | "getPreferredAssistantSourceTextEvent"
@@ -412,41 +453,386 @@ function tryFinalizeAssistantGenerationSessionEvent(
   };
 }
 
-/**
- * 功能：在流式输出尚未结束前尽早保留助手原始文本快照，避免控制块被宿主后续覆盖。
- * 参数：
- *   reason：触发快照捕获的原因。
- *   deps：快照捕获依赖。
- * 返回：
- *   void
- */
-function captureLatestAssistantOriginalSnapshotEvent(
-  reason: string,
-  eventArgs: unknown[],
+function isFinalizeLifecycleReasonEvent(reason: AssistantFloorLifecycleReasonEvent): boolean {
+  return reason === "message_received_finalize" || reason === "generation_ended_finalize";
+}
+
+function isChatRestoreLifecycleReasonEvent(reason: AssistantFloorLifecycleReasonEvent): boolean {
+  return reason === "chat_reset" || reason === "chat_changed" || reason === "hydrate_restore";
+}
+
+function isGlobalReconcileLifecycleReasonEvent(reason: AssistantFloorLifecycleReasonEvent): boolean {
+  return (
+    reason === "message_swiped"
+    || reason === "message_edited"
+    || reason === "message_deleted"
+    || isChatRestoreLifecycleReasonEvent(reason)
+  );
+}
+
+function resolveAssistantFloorLifecycleContextEvent(args: {
+  reason: AssistantFloorLifecycleReasonEvent;
+  target?: AssistantMessageTargetEvent | null;
+  eventArgs?: unknown[];
   deps: Pick<
     EventHooksDepsEvent,
     | "getLiveContextEvent"
     | "isAssistantMessageEvent"
-    | "getHostOriginalSourceTextEvent"
-    | "getPreferredAssistantSourceTextEvent"
-    | "getMessageTextEvent"
-    | "parseEventEnvelopesEvent"
-    | "resetRecentParseFailureLogsEvent"
-    | "resetAssistantProcessedStateEvent"
+    | "buildAssistantMessageIdEvent"
+    | "buildAssistantFloorKeyEvent"
+  >;
+}): AssistantFloorLifecycleContextEvent {
+  const liveCtx = args.deps.getLiveContextEvent();
+  const chat = Array.isArray(liveCtx?.chat) ? (liveCtx?.chat as TavernMessageEvent[]) : [];
+  const target = args.target ?? resolveAssistantEventTargetEvent(args.eventArgs ?? [], args.deps);
+  const latestAssistant = chat.length > 0
+    ? findLatestAssistantEvent(chat, { isAssistantMessageEvent: args.deps.isAssistantMessageEvent })
+    : null;
+  const assistantMsgId = target
+    ? args.deps.buildAssistantMessageIdEvent(target.msg, target.index)
+    : null;
+  const floorKey = assistantMsgId
+    ? args.deps.buildAssistantFloorKeyEvent(assistantMsgId)
+    : null;
+
+  return {
+    reason: args.reason,
+    message: target?.msg ?? null,
+    index: typeof target?.index === "number" ? target.index : null,
+    assistantMsgId,
+    floorKey,
+    isLatestAssistant: Boolean(
+      target
+      && latestAssistant
+      && latestAssistant.index === target.index
+      && latestAssistant.msg === target.msg
+    ),
+  };
+}
+
+export function hydrateAssistantFloorUiEvent(
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "sanitizeCurrentChatEventBlocksEvent"
+    | "sweepTimeoutFailuresEvent"
+    | "refreshCountdownDomEvent"
+    | "refreshAllWidgetsFromStateEvent"
+    | "enhanceInteractiveTriggersInDomEvent"
+    | "enhanceAssistantRawSourceButtonsEvent"
+    | "hideEventCodeBlocksInDomEvent"
   >
 ): void {
-  const target = resolveAssistantEventTargetEvent(eventArgs, deps);
-  if (!target) return;
-  const sessionKey = beginAssistantGenerationSessionEvent(target, reason, deps);
-  const changed = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
+  deps.sanitizeCurrentChatEventBlocksEvent();
+  deps.hideEventCodeBlocksInDomEvent();
+  deps.sweepTimeoutFailuresEvent();
+  deps.refreshCountdownDomEvent();
+  deps.refreshAllWidgetsFromStateEvent();
+  deps.enhanceInteractiveTriggersInDomEvent();
+  deps.enhanceAssistantRawSourceButtonsEvent();
+}
+
+type FinalizeAssistantFloorDataResultEvent = {
+  changedData: boolean;
+  assistantMsgId: string | null;
+  floorKey: string | null;
+};
+
+export async function finalizeAssistantFloorDataEvent(
+  target: AssistantMessageTargetEvent | null,
+  deps: FinalizeAssistantFloorDataDepsEvent
+): Promise<FinalizeAssistantFloorDataResultEvent> {
+  const settings = deps.getSettingsEvent();
+  if (!settings.enabled || !target) {
+    return { changedData: false, assistantMsgId: null, floorKey: null };
+  }
+
+  const meta = deps.getDiceMetaEvent();
+  const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
     getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
     getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
     getMessageTextEvent: deps.getMessageTextEvent,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
   });
-  if (changed) {
-    logger.info(`[内容处理] 已提前保留助手原文快照 source=${reason} session=${sessionKey}`);
+  const assistantMsgId = deps.buildAssistantMessageIdEvent(target.msg, target.index);
+  const floorKey = deps.buildAssistantFloorKeyEvent(assistantMsgId);
+  if (meta.lastProcessedAssistantMsgId === assistantMsgId) {
+    if (originalSnapshotChanged) {
+      deps.persistChatSafeEvent();
+    }
+    return {
+      changedData: originalSnapshotChanged,
+      assistantMsgId,
+      floorKey,
+    };
   }
+
+  const resolvedEnvelope = resolveAssistantEnvelopeEvent(
+    target.msg,
+    settings.eventApplyScope,
+    deps
+  );
+  const chosenText = resolvedEnvelope.chosenText;
+  const chosenEvents = resolvedEnvelope.chosenEvents;
+  const chosenRanges = resolvedEnvelope.chosenRanges;
+  const chosenShouldEndRound = resolvedEnvelope.chosenShouldEndRound;
+  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(target.msg, deps);
+  const fallbackSnapshotText = sourceCandidates.find((item) => String(item ?? "").trim()) || "";
+
+  if (!chosenText.trim()) {
+    if (originalSnapshotChanged) {
+      deps.persistChatSafeEvent();
+    }
+    return {
+      changedData: originalSnapshotChanged,
+      assistantMsgId,
+      floorKey,
+    };
+  }
+
+  meta.lastProcessedAssistantMsgId = assistantMsgId;
+  const snapshotText = chosenText.trim() || fallbackSnapshotText.trim();
+  const latestSnapshotChanged = snapshotText
+    ? rememberAssistantOriginalSourceTextEvent(
+      target.msg,
+      snapshotText,
+      true,
+      buildAssistantOriginalSourceMetaEvent(snapshotText, "plugin_snapshot", {
+        parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+      })
+    )
+    : false;
+
+  let changedData = originalSnapshotChanged || latestSnapshotChanged;
+  const cleaned = deps.removeRangesEvent(chosenText, chosenRanges);
+  if (cleaned !== deps.getMessageTextEvent(target.msg)) {
+    deps.setMessageTextEvent(target.msg, cleaned);
+    changedData = true;
+  }
+  const sanitizeChanged = sanitizeAssistantMessageArtifactsEvent(target.msg, target.index, {
+    getSettingsEvent: deps.getSettingsEvent,
+    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
+    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+    getMessageTextEvent: deps.getMessageTextEvent,
+    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+    removeRangesEvent: deps.removeRangesEvent,
+    setMessageTextEvent: deps.setMessageTextEvent,
+    resolveSourceMessageIdEvent: () => assistantMsgId,
+    sourceState: "raw_source",
+  });
+  changedData = changedData || sanitizeChanged;
+
+  const pendingRound = meta.pendingRound;
+  if (pendingRound?.status === "open" && settings.enableAiRoundControl && chosenShouldEndRound) {
+    pendingRound.status = "closed";
+    changedData = true;
+  }
+
+  const invalidatedPending = deps.invalidatePendingRoundFloorEvent(assistantMsgId);
+  const invalidatedSummary = deps.invalidateSummaryHistoryFloorEvent(assistantMsgId);
+  changedData = changedData || invalidatedPending || invalidatedSummary;
+
+  if (chosenEvents.length > 0) {
+    const round = deps.mergeEventsIntoPendingRoundEvent(chosenEvents, assistantMsgId);
+    changedData = true;
+    const autoRolled = await deps.autoRollEventsByAiModeEvent(round);
+    if (autoRolled.length > 0) {
+      changedData = true;
+    }
+  }
+
+  if (changedData) {
+    deps.persistChatSafeEvent();
+    deps.saveMetadataSafeEvent();
+  }
+
+  return {
+    changedData,
+    assistantMsgId,
+    floorKey,
+  };
+}
+
+type ReconcileAssistantFloorsResultEvent = {
+  changedData: boolean;
+  rebuiltFloorKeys: string[];
+};
+
+export async function reconcileAllTrackedAssistantFloorsEvent(
+  reason = "chat_mutated",
+  deps: EventHooksDepsEvent
+): Promise<ReconcileAssistantFloorsResultEvent> {
+  const settings = deps.getSettingsEvent();
+  if (!settings.enabled) return { changedData: false, rebuiltFloorKeys: [] };
+
+  const liveCtx = deps.getLiveContextEvent();
+  if (!liveCtx?.chat || !Array.isArray(liveCtx.chat)) {
+    return { changedData: false, rebuiltFloorKeys: [] };
+  }
+
+  const meta = deps.getDiceMetaEvent();
+  const round = meta.pendingRound;
+
+  const currentFloors = new Map<string, { assistantMsgId: string; message: TavernMessageEvent; index: number }>();
+  const chat = liveCtx.chat as TavernMessageEvent[];
+  for (let index = 0; index < chat.length; index += 1) {
+    const message = chat[index];
+    if (!deps.isAssistantMessageEvent(message)) continue;
+    const assistantMsgId = deps.buildAssistantMessageIdEvent(message, index);
+    const floorKey = deps.buildAssistantFloorKeyEvent(assistantMsgId);
+    if (!floorKey) continue;
+    currentFloors.set(floorKey, { assistantMsgId, message, index });
+  }
+
+  const trackedFloors = new Map<string, string>();
+  if (round) {
+    for (const [floorKey, assistantMsgId] of collectPendingRoundFloorVersionsEvent(round, deps.buildAssistantFloorKeyEvent)) {
+      trackedFloors.set(floorKey, assistantMsgId);
+    }
+  }
+  for (const [floorKey, assistantMsgId] of collectSummaryHistoryFloorVersionsEvent(meta.summaryHistory, deps.buildAssistantFloorKeyEvent)) {
+    if (!trackedFloors.has(floorKey)) {
+      trackedFloors.set(floorKey, assistantMsgId);
+    }
+  }
+  if (trackedFloors.size <= 0) return { changedData: false, rebuiltFloorKeys: [] };
+
+  let changedData = false;
+  const rebuiltFloorKeys = new Set<string>();
+
+  for (const [floorKey, storedAssistantMsgId] of trackedFloors) {
+    const current = currentFloors.get(floorKey);
+    if (!current) {
+      changedData = deps.invalidatePendingRoundFloorEvent(storedAssistantMsgId) || changedData;
+      changedData = deps.invalidateSummaryHistoryFloorEvent(storedAssistantMsgId) || changedData;
+      rebuiltFloorKeys.add(floorKey);
+      continue;
+    }
+    if (current.assistantMsgId === storedAssistantMsgId) {
+      continue;
+    }
+
+    const finalized = await finalizeAssistantFloorDataEvent({
+      msg: current.message,
+      index: current.index,
+    }, deps);
+    changedData = changedData || finalized.changedData;
+    rebuiltFloorKeys.add(floorKey);
+  }
+
+  if (changedData) {
+    logger.info(`[楼层对账] 已同步未归档轮次 reason=${reason}`);
+  }
+  return {
+    changedData,
+    rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
+  };
+}
+
+export async function rebuildAssistantFloorLifecycleEvent(args: {
+  reason: AssistantFloorLifecycleReasonEvent;
+  target?: AssistantMessageTargetEvent | null;
+  eventArgs?: unknown[];
+  deps: EventHooksDepsEvent;
+}): Promise<{
+  changedData: boolean;
+  changedUi: boolean;
+  rebuiltFloorKeys: string[];
+}> {
+  const context = resolveAssistantFloorLifecycleContextEvent({
+    reason: args.reason,
+    target: args.target,
+    eventArgs: args.eventArgs,
+    deps: args.deps,
+  });
+  let changedData = false;
+  const rebuiltFloorKeys = new Set<string>();
+
+  if (args.reason === "stream_snapshot") {
+    if (!context.message || context.index == null) {
+      return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
+    }
+    const target = { msg: context.message, index: context.index };
+    const sessionKey = beginAssistantGenerationSessionEvent(target, args.reason, args.deps);
+    const changed = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
+      getHostOriginalSourceTextEvent: args.deps.getHostOriginalSourceTextEvent,
+      getPreferredAssistantSourceTextEvent: args.deps.getPreferredAssistantSourceTextEvent,
+      getMessageTextEvent: args.deps.getMessageTextEvent,
+      parseEventEnvelopesEvent: args.deps.parseEventEnvelopesEvent,
+    });
+    if (changed) {
+      args.deps.persistChatSafeEvent();
+      logger.info(`[内容处理] 已提前保留助手原文快照 source=${args.reason} session=${sessionKey}`);
+    }
+    return {
+      changedData: changed,
+      changedUi: false,
+      rebuiltFloorKeys: context.floorKey ? [context.floorKey] : [],
+    };
+  }
+
+  if (isFinalizeLifecycleReasonEvent(args.reason)) {
+    if (!context.message || context.index == null) {
+      return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
+    }
+    const target = { msg: context.message, index: context.index };
+    if (args.reason === "message_received_finalize") {
+      beginAssistantGenerationSessionEvent(target, args.reason, args.deps);
+    }
+    const finalized = tryFinalizeAssistantGenerationSessionEvent(target);
+    if (!finalized.shouldFinalize) {
+      logger.info(`[内容处理] 跳过重复最终处理 source=${args.reason} session=${finalized.sessionKey}`);
+      return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
+    }
+    logger.info(`[内容处理] 进入统一楼层重建 source=${args.reason} session=${finalized.sessionKey}`);
+    const result = await finalizeAssistantFloorDataEvent(target, args.deps);
+    changedData = result.changedData;
+    if (result.floorKey) {
+      rebuiltFloorKeys.add(result.floorKey);
+    }
+  }
+
+  if (isGlobalReconcileLifecycleReasonEvent(args.reason)) {
+    if (args.reason === "message_edited" && context.message && context.index != null) {
+      const targetedChanged = sanitizeAssistantMessageArtifactsEvent(context.message, context.index, {
+        getSettingsEvent: args.deps.getSettingsEvent,
+        getHostOriginalSourceTextEvent: args.deps.getHostOriginalSourceTextEvent,
+        getPreferredAssistantSourceTextEvent: args.deps.getPreferredAssistantSourceTextEvent,
+        getMessageTextEvent: args.deps.getMessageTextEvent,
+        parseEventEnvelopesEvent: args.deps.parseEventEnvelopesEvent,
+        removeRangesEvent: args.deps.removeRangesEvent,
+        setMessageTextEvent: args.deps.setMessageTextEvent,
+        resolveSourceMessageIdEvent: (message, index) => (
+          index == null ? "" : args.deps.buildAssistantMessageIdEvent(message, index)
+        ),
+        sourceState: "edited_source",
+      });
+      if (targetedChanged) {
+        args.deps.persistChatSafeEvent();
+        changedData = true;
+      }
+    }
+
+    const reconcileResult = await reconcileAllTrackedAssistantFloorsEvent(args.reason, args.deps);
+    changedData = changedData || reconcileResult.changedData;
+    for (const floorKey of reconcileResult.rebuiltFloorKeys) {
+      rebuiltFloorKeys.add(floorKey);
+    }
+  }
+
+  if (isChatRestoreLifecycleReasonEvent(args.reason) || isGlobalReconcileLifecycleReasonEvent(args.reason) || isFinalizeLifecycleReasonEvent(args.reason)) {
+    hydrateAssistantFloorUiEvent(args.deps);
+    return {
+      changedData,
+      changedUi: true,
+      rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
+    };
+  }
+
+  return {
+    changedData,
+    changedUi: false,
+    rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
+  };
 }
 
 function buildAssistantRawSourceCopyButtonEvent(): HTMLDivElement {
@@ -525,162 +911,6 @@ export function enhanceAssistantRawSourceButtonsEvent(
  * @param deps 楼层对账依赖。
  * @returns 若对账过程中修改了未归档轮次则返回 `true`，否则返回 `false`。
  */
-export function reconcilePendingRoundWithCurrentChatEvent(
-  reason = "chat_mutated",
-  deps: ReconcilePendingRoundWithCurrentChatDepsEvent
-): boolean {
-  const settings = deps.getSettingsEvent();
-  if (!settings.enabled) return false;
-
-  const liveCtx = deps.getLiveContextEvent();
-  if (!liveCtx?.chat || !Array.isArray(liveCtx.chat)) return false;
-
-  const meta = deps.getDiceMetaEvent();
-  const round = meta.pendingRound;
-
-  const currentFloors = new Map<string, { assistantMsgId: string; message: TavernMessageEvent }>();
-  const chat = liveCtx.chat as TavernMessageEvent[];
-  for (let index = 0; index < chat.length; index += 1) {
-    const message = chat[index];
-    if (!deps.isAssistantMessageEvent(message)) continue;
-    const assistantMsgId = deps.buildAssistantMessageIdEvent(message, index);
-    const floorKey = deps.buildAssistantFloorKeyEvent(assistantMsgId);
-    if (!floorKey) continue;
-    currentFloors.set(floorKey, { assistantMsgId, message });
-  }
-
-  const trackedFloors = new Map<string, string>();
-  if (round) {
-    for (const [floorKey, assistantMsgId] of collectPendingRoundFloorVersionsEvent(round, deps.buildAssistantFloorKeyEvent)) {
-      trackedFloors.set(floorKey, assistantMsgId);
-    }
-  }
-  for (const [floorKey, assistantMsgId] of collectSummaryHistoryFloorVersionsEvent(meta.summaryHistory, deps.buildAssistantFloorKeyEvent)) {
-    if (!trackedFloors.has(floorKey)) {
-      trackedFloors.set(floorKey, assistantMsgId);
-    }
-  }
-  if (trackedFloors.size <= 0) return false;
-  let changed = false;
-
-  for (const [floorKey, storedAssistantMsgId] of trackedFloors) {
-    const current = currentFloors.get(floorKey);
-    if (!current) {
-      changed = deps.invalidatePendingRoundFloorEvent(storedAssistantMsgId) || changed;
-      changed = deps.invalidateSummaryHistoryFloorEvent(storedAssistantMsgId) || changed;
-      continue;
-    }
-    if (current.assistantMsgId === storedAssistantMsgId) {
-      continue;
-    }
-
-    changed = deps.invalidatePendingRoundFloorEvent(storedAssistantMsgId) || changed;
-    changed = deps.invalidateSummaryHistoryFloorEvent(storedAssistantMsgId) || changed;
-
-    const resolved = resolveAssistantEnvelopeEvent(current.message, settings.eventApplyScope, deps);
-    if (resolved.chosenEvents.length > 0) {
-      deps.mergeEventsIntoPendingRoundEvent(resolved.chosenEvents, current.assistantMsgId);
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    logger.info(`[楼层对账] 已同步未归档轮次 reason=${reason}`);
-  }
-  return changed;
-}
-
-export function handleGenerationEndedEvent(
-  deps: HandleGenerationEndedDepsEvent
-): void {
-  const settings = deps.getSettingsEvent();
-  if (!settings.enabled) return;
-
-  const liveCtx = deps.getLiveContextEvent();
-  if (!liveCtx?.chat || !Array.isArray(liveCtx.chat)) return;
-
-  const latestAssistant = deps.findLatestAssistantEvent(liveCtx.chat as TavernMessageEvent[]);
-  if (!latestAssistant) return;
-
-  const meta = deps.getDiceMetaEvent();
-  const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(latestAssistant.msg, {
-    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
-    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
-    getMessageTextEvent: deps.getMessageTextEvent,
-    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
-  });
-  const assistantMsgId = deps.buildAssistantMessageIdEvent(
-    latestAssistant.msg,
-    latestAssistant.index
-  );
-  if (meta.lastProcessedAssistantMsgId === assistantMsgId) return;
-
-  const resolvedEnvelope = resolveAssistantEnvelopeEvent(
-    latestAssistant.msg,
-    settings.eventApplyScope,
-    deps
-  );
-  const chosenText = resolvedEnvelope.chosenText;
-  const chosenEvents = resolvedEnvelope.chosenEvents;
-  const chosenRanges = resolvedEnvelope.chosenRanges;
-  const chosenShouldEndRound = resolvedEnvelope.chosenShouldEndRound;
-  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(latestAssistant.msg, deps);
-  const fallbackSnapshotText = sourceCandidates.find((item) => String(item ?? "").trim()) || "";
-
-  if (!chosenText.trim()) {
-    return;
-  }
-
-  const events = chosenEvents;
-  const ranges = chosenRanges;
-  if (events.length === 0 && ranges.length === 0) {
-    return;
-  }
-
-  meta.lastProcessedAssistantMsgId = assistantMsgId;
-  const snapshotText = chosenText.trim() || fallbackSnapshotText.trim();
-  const latestSnapshotChanged = snapshotText
-    ? rememberAssistantOriginalSourceTextEvent(
-      latestAssistant.msg,
-      snapshotText,
-      true,
-      buildAssistantOriginalSourceMetaEvent(snapshotText, "plugin_snapshot", {
-        parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
-      })
-    )
-    : false;
-  const cleaned = deps.removeRangesEvent(chosenText, ranges);
-  deps.setMessageTextEvent(latestAssistant.msg, cleaned);
-
-  deps.hideEventCodeBlocksInDomEvent();
-  if (ranges.length > 0 || originalSnapshotChanged || latestSnapshotChanged) {
-    deps.persistChatSafeEvent();
-  }
-
-  const pendingRound = meta.pendingRound;
-  if (pendingRound?.status === "open") {
-    if (settings.enableAiRoundControl && chosenShouldEndRound) {
-      pendingRound.status = "closed";
-    }
-  }
-
-  deps.invalidatePendingRoundFloorEvent(assistantMsgId);
-  deps.invalidateSummaryHistoryFloorEvent(assistantMsgId);
-
-  if (events.length > 0) {
-    const round = deps.mergeEventsIntoPendingRoundEvent(events, assistantMsgId);
-    deps.autoRollEventsByAiModeEvent(round).then(() => {
-      deps.sweepTimeoutFailuresEvent();
-      deps.refreshAllWidgetsFromStateEvent();
-      deps.refreshCountdownDomEvent();
-    });
-  }
-  setTimeout(() => {
-    deps.hideEventCodeBlocksInDomEvent();
-    deps.refreshCountdownDomEvent();
-  }, 50);
-}
-
 export interface FindLatestAssistantDepsEvent {
   isAssistantMessageEvent: (message: TavernMessageEvent | undefined) => boolean;
 }
@@ -814,6 +1044,7 @@ export function sanitizeAssistantMessageEventBlocksEvent(
     removeRangesEvent: deps.removeRangesEvent,
     setMessageTextEvent: deps.setMessageTextEvent,
     resolveSourceMessageIdEvent: deps.resolveSourceMessageIdEvent,
+    sourceState: "display_text",
   });
 }
 
@@ -1057,6 +1288,11 @@ function ensurePreviewDialogStyleEvent(): void {
     .st-rh-preview-item strong { color: #ffd987; }
     .st-rh-preview-btn { border: 1px solid rgba(197,160,89,0.55); background: linear-gradient(135deg, #3a2515, #1a100a); color: #f3d69c; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
     .st-rh-preview-btn.secondary { background: rgba(18, 12, 8, 0.75); color: #d1c5a5; }
+    .st-rh-preview-card { display: flex; flex-direction: column; gap: 6px; }
+    .st-rh-preview-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .st-rh-preview-card-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: rgba(233,221,188,0.75); }
+    .st-rh-preview-card-desc { font-size: 12.5px; color: rgba(233,221,188,0.9); line-height: 1.45; }
+    .st-rh-preview-jump { padding: 2px 8px; font-size: 11.5px; border-radius: 6px; }
     @media (max-width: 640px) {
       .st-rh-preview-dialog {
         width: 100vw;
@@ -1094,6 +1330,10 @@ function ensurePreviewDialogStyleEvent(): void {
       }
       .st-rh-preview-item {
         padding: 10px 11px;
+      }
+      .st-rh-preview-jump {
+        min-height: 32px;
+        padding: 4px 10px;
       }
       .st-rh-preview-btn {
         min-height: 36px;
@@ -1250,8 +1490,7 @@ function buildBlindHistoryPreviewHtmlEvent(
   const buildHistoryItemsHtml = (items: typeof history): string => items
     .map((item) => {
       const title = escapePreviewHtmlEvent(item.eventTitle || "暗骰检定");
-      const skill = escapePreviewHtmlEvent(item.skill || "未指定");
-      const target = escapePreviewHtmlEvent(item.targetLabel || "未指定");
+      const target = escapePreviewHtmlEvent(item.targetLabel || "");
       const rolledAt = escapePreviewHtmlEvent(formatBlindHistoryTimeEvent(item.rolledAt));
       const stateText = escapePreviewHtmlEvent(
         formatBlindHistoryDisplayStateEvent(
@@ -1260,22 +1499,52 @@ function buildBlindHistoryPreviewHtmlEvent(
           item.revealMode === "instant" ? "instant" : "delayed"
         )
       );
+      const revealLabel = item.revealMode === "instant" ? "即时反馈" : "延迟体现";
+      const gradeLabel = item.resultGrade
+        ? formatResultGradeLabelEvent(item.resultGrade, "blind")
+        : "未知";
       const gradeHtml = item.resultGrade
-        ? `<div>结果等级：${escapePreviewHtmlEvent(formatResultGradeLabelEvent(item.resultGrade, "blind"))}</div>`
+        ? `<span>结果等级：${escapePreviewHtmlEvent(gradeLabel)}</span>`
         : "";
       const originHtml = settings.blindHistoryShowOrigin !== false
-        ? `<div>来源：${escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin))}</div>`
+        ? `<span>来源：${escapePreviewHtmlEvent(formatBlindHistoryOriginLabelEvent(item.origin))}</span>`
         : "";
       const floorHtml = settings.blindHistoryShowFloorKey !== false
-        ? `<div>楼层：${escapePreviewHtmlEvent(formatBlindHistoryFloorKeyEvent(item.sourceFloorKey))}</div>`
+        ? `<span>楼层：${escapePreviewHtmlEvent(formatBlindHistoryFloorKeyEvent(item.sourceFloorKey))}</span>`
         : "";
+      const targetHtml = target ? `<div class="st-rh-preview-card-desc">线索：${target}</div>` : "";
       const debugHtml = settings.enableBlindDebugInfo
         ? [
             item.roundId ? `<div>轮次：${escapePreviewHtmlEvent(String(item.roundId).slice(0, 24))}</div>` : "",
             item.dedupeKey ? `<div>去重键：${escapePreviewHtmlEvent(item.dedupeKey)}</div>` : "",
           ].filter(Boolean).join("")
         : "";
-      return `<li class="st-rh-preview-item"><strong>${title}</strong><div>技能：${skill}</div><div>对象：${target}</div><div>状态：${stateText}</div>${gradeHtml}${originHtml}${floorHtml}<div>时间：${rolledAt}</div>${debugHtml}</li>`;
+      const sourceMessageId = escapePreviewHtmlEvent(item.sourceAssistantMsgId || "");
+      const sourceFloorKey = escapePreviewHtmlEvent(item.sourceFloorKey || "");
+      return `
+        <li class="st-rh-preview-item st-rh-preview-card">
+          <div class="st-rh-preview-card-head">
+            <strong>${title}</strong>
+            <button class="st-rh-preview-btn st-rh-preview-jump" data-rh-jump="1"
+              data-rh-jump-source-message="${sourceMessageId}"
+              data-rh-jump-floor-key="${sourceFloorKey}"
+              data-rh-jump-source-id=""
+              data-rh-jump-occurrence="0">跳转</button>
+          </div>
+          <div class="st-rh-preview-card-meta">
+            <span>模式：${escapePreviewHtmlEvent(revealLabel)}</span>
+            <span>状态：${stateText}</span>
+            ${gradeHtml}
+          </div>
+          ${targetHtml}
+          <div class="st-rh-preview-card-meta">
+            ${originHtml}
+            ${floorHtml}
+            <span>时间：${rolledAt}</span>
+          </div>
+          ${debugHtml}
+        </li>
+      `;
     })
     .join("");
   const activeItems = history.filter((item) => resolveBlindGuidanceStateEvent(item) !== "archived");
@@ -1425,6 +1694,19 @@ export function bindEventButtonsEvent(deps: BindEventButtonsDepsEvent): void {
         return;
       }
 
+      const jumpButton = target.closest(
+        "[data-rh-jump=\"1\"]"
+      ) as HTMLElement | null;
+      if (jumpButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const ok = jumpToTriggerFromDatasetEvent(jumpButton);
+        if (!ok) {
+          logger.info("暗骰跳转失败：未定位到对应触发点。");
+        }
+        return;
+      }
+
       const collapseToggleButton = target.closest(
         "button[data-rh-collapse-toggle='1']"
       ) as HTMLButtonElement | null;
@@ -1558,33 +1840,6 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     )
   );
 
-  const runAssistantFinalizePassEvent = (reason: string, delayMs: number, eventArgs: unknown[]): void => {
-    setTimeout(() => {
-      try {
-        const target = resolveAssistantEventTargetEvent(eventArgs, deps);
-        if (!target) return;
-        if (reason === (types.MESSAGE_RECEIVED || "message_received") || reason === "message_received") {
-          beginAssistantGenerationSessionEvent(target, reason, deps);
-        }
-        const finalized = tryFinalizeAssistantGenerationSessionEvent(target);
-        if (!finalized.shouldFinalize) {
-          logger.info(`[内容处理] 跳过重复最终处理 source=${reason} session=${finalized.sessionKey}`);
-          return;
-        }
-        logger.info(`[内容处理] 进入最终消息统一处理阶段 source=${reason} delay=${delayMs}ms`);
-        deps.handleGenerationEndedEvent();
-        deps.sanitizeCurrentChatEventBlocksEvent();
-        deps.sweepTimeoutFailuresEvent();
-        deps.refreshCountdownDomEvent();
-        deps.refreshAllWidgetsFromStateEvent();
-        deps.enhanceInteractiveTriggersInDomEvent();
-        deps.enhanceAssistantRawSourceButtonsEvent();
-      } catch (error) {
-        logger.warn(`最终消息后处理异常 (${reason}, ${delayMs}ms)`, error);
-      }
-    }, delayMs);
-  };
-
   const resetEvents = Array.from(
     new Set(
       [
@@ -1616,7 +1871,15 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     src.on(eventName, (...eventArgs: unknown[]) => {
       try {
         // 酒馆的 generation_ended 会先于 MESSAGE_RECEIVED 触发，这里只保留一个慢速兜底。
-        runAssistantFinalizePassEvent(eventName, 800, eventArgs);
+        setTimeout(() => {
+          void rebuildAssistantFloorLifecycleEvent({
+            reason: "generation_ended_finalize",
+            eventArgs,
+            deps,
+          }).catch((error) => {
+            logger.warn(`最终消息后处理异常 (${eventName}, 800ms)`, error);
+          });
+        }, 800);
       } catch (error) {
         logger.error("Generation hook 错误", error);
       }
@@ -1627,7 +1890,15 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     src.on(eventName, (...eventArgs: unknown[]) => {
       try {
         // MESSAGE_RECEIVED 发生在流式最终文本落稳之后，适合作为主处理时机。
-        runAssistantFinalizePassEvent(eventName, 30, eventArgs);
+        setTimeout(() => {
+          void rebuildAssistantFloorLifecycleEvent({
+            reason: "message_received_finalize",
+            eventArgs,
+            deps,
+          }).catch((error) => {
+            logger.warn(`最终消息后处理异常 (${eventName}, 30ms)`, error);
+          });
+        }, 30);
       } catch (error) {
         logger.error("Message received hook 错误", error);
       }
@@ -1637,7 +1908,13 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   for (const eventName of streamSnapshotEvents) {
     src.on(eventName, (...eventArgs: unknown[]) => {
       try {
-        captureLatestAssistantOriginalSnapshotEvent(eventName, eventArgs, deps);
+        void rebuildAssistantFloorLifecycleEvent({
+          reason: "stream_snapshot",
+          eventArgs,
+          deps,
+        }).catch((error) => {
+          logger.warn(`流式快照保留异常 (${eventName})`, error);
+        });
       } catch (error) {
         logger.warn(`流式快照保留异常 (${eventName})`, error);
       }
@@ -1657,12 +1934,22 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
           })
           .finally(() => {
             setTimeout(() => {
-              deps.sanitizeCurrentChatEventBlocksEvent();
-              deps.sweepTimeoutFailuresEvent();
-              deps.refreshCountdownDomEvent();
-              deps.refreshAllWidgetsFromStateEvent();
-              deps.enhanceInteractiveTriggersInDomEvent();
-              deps.enhanceAssistantRawSourceButtonsEvent();
+              const normalizedEventName = String(eventName || "").toLowerCase();
+              const reason: AssistantFloorLifecycleReasonEvent = normalizedEventName === "chat_reset"
+                ? "chat_reset"
+                : (
+                  normalizedEventName === "chat_started"
+                  || normalizedEventName === "chat_new"
+                  || normalizedEventName === "chat_created"
+                )
+                  ? "hydrate_restore"
+                  : "chat_changed";
+              void rebuildAssistantFloorLifecycleEvent({
+                reason,
+                deps,
+              }).catch((error) => {
+                logger.warn(`聊天恢复后重建异常 (${eventName})`, error);
+              });
             }, 0);
           });
       } catch (error) {
@@ -1685,16 +1972,22 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
   );
 
   for (const eventName of swipeEditEvents) {
-    src.on(eventName, () => {
+    src.on(eventName, (...eventArgs: unknown[]) => {
       try {
         setTimeout(() => {
-          deps.reconcilePendingRoundWithCurrentChatEvent(eventName);
-          deps.sanitizeCurrentChatEventBlocksEvent();
-          deps.sweepTimeoutFailuresEvent();
-          deps.refreshCountdownDomEvent();
-          deps.refreshAllWidgetsFromStateEvent();
-          deps.enhanceInteractiveTriggersInDomEvent();
-          deps.enhanceAssistantRawSourceButtonsEvent();
+          const normalizedEventName = String(eventName || "").toLowerCase();
+          const reason: AssistantFloorLifecycleReasonEvent = normalizedEventName.includes("message_edited")
+            ? "message_edited"
+            : normalizedEventName.includes("message_deleted")
+              ? "message_deleted"
+              : "message_swiped";
+          void rebuildAssistantFloorLifecycleEvent({
+            reason,
+            eventArgs,
+            deps,
+          }).catch((error) => {
+            logger.warn(`楼层重建异常 (${eventName})`, error);
+          });
         }, 50);
       } catch (error) {
         logger.warn("Swipe/edit widget refresh 异常", error);

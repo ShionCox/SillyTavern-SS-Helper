@@ -5,6 +5,8 @@ const CONSOLE_PANEL_ID_Event = "st-rh-roll-console";
 const CONSOLE_BODY_ID_Event = "st-rh-roll-console-body";
 const CONSOLE_STYLE_ID_Event = "st-rh-roll-console-style";
 const CONSOLE_MAX_ENTRIES_Event = 50;
+const CONSOLE_JUMP_HIGHLIGHT_CLASS_Event = "st-rh-jump-focus";
+const CONSOLE_JUMP_HIGHLIGHT_MESSAGE_CLASS_Event = "st-rh-jump-focus-message";
 
 let CONSOLE_VISIBLE_Event = false;
 
@@ -110,6 +112,65 @@ function ensureConsoleStylesEvent(): void {
       border: none;
       background: none;
     }
+    .st-rh-console-card {
+      border: 1px solid rgba(176,143,76,0.2);
+      background: rgba(20,17,14,0.55);
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    }
+    .st-rh-console-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 600;
+      color: #f1e2c1;
+      font-size: 12.5px;
+    }
+    .st-rh-console-card-meta {
+      font-size: 12px;
+      color: rgba(236,219,183,0.7);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .st-rh-console-card-desc {
+      font-size: 12.5px;
+      color: rgba(236,219,183,0.9);
+      line-height: 1.45;
+    }
+    .st-rh-console-card-jump {
+      border: 1px solid rgba(176,143,76,0.5);
+      background: rgba(32,24,18,0.85);
+      color: #f3d69c;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 11.5px;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, color 120ms ease;
+      flex-shrink: 0;
+    }
+    .st-rh-console-card-jump:hover {
+      border-color: rgba(243,214,156,0.8);
+      color: #fff1c6;
+      transform: translateY(-1px);
+    }
+    .${CONSOLE_JUMP_HIGHLIGHT_CLASS_Event} {
+      box-shadow: 0 0 0 2px rgba(255,214,130,0.6), 0 0 12px rgba(255,214,130,0.55);
+      border-radius: 6px;
+      background: rgba(255,214,130,0.12);
+      transition: box-shadow 150ms ease;
+    }
+    .${CONSOLE_JUMP_HIGHLIGHT_MESSAGE_CLASS_Event} {
+      outline: 2px solid rgba(255,214,130,0.55);
+      outline-offset: 2px;
+      border-radius: 6px;
+      transition: outline 150ms ease;
+    }
     .st-rh-console-empty {
       text-align: center;
       color: rgba(236,219,183,0.4);
@@ -164,6 +225,18 @@ function ensureConsolePanelEvent(): HTMLElement {
     hideConsoleEvent();
   });
 
+  panel.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const jumpButton = target.closest("[data-rh-jump=\"1\"]") as HTMLElement | null;
+    if (!jumpButton) return;
+    event.preventDefault();
+    const ok = jumpToTriggerFromDatasetEvent(jumpButton);
+    if (!ok) {
+      appendToConsoleEvent("未能定位到对应触发点，可能已被改写或清理。", "warn");
+    }
+  });
+
   return panel;
 }
 
@@ -214,6 +287,97 @@ export function appendToConsoleEvent(
   if (!CONSOLE_VISIBLE_Event) {
     showConsoleEvent();
   }
+}
+
+function escapeSelectorValueEvent(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+function resolveMessageElementByIdEvent(messageId: string): HTMLElement | null {
+  if (!messageId) return null;
+  const escaped = escapeSelectorValueEvent(messageId);
+  const selectors = [
+    `.mes[mesid="${escaped}"]`,
+    `[data-message-id="${escaped}"]`,
+    `[data-mesid="${escaped}"]`,
+  ];
+  for (const selector of selectors) {
+    const node = document.querySelector(selector);
+    if (node instanceof HTMLElement) return node;
+  }
+  return null;
+}
+
+function resolveMessageElementByFloorKeyEvent(floorKey: string): HTMLElement | null {
+  const raw = String(floorKey || "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("floor:")) {
+    return resolveMessageElementByIdEvent(raw.slice("floor:".length));
+  }
+  if (raw.startsWith("floor_msg:")) {
+    return resolveMessageElementByIdEvent(raw.slice("floor_msg:".length));
+  }
+  return null;
+}
+
+function applyTemporaryHighlightEvent(node: HTMLElement, className: string, duration = 1500): void {
+  node.classList.add(className);
+  window.setTimeout(() => {
+    node.classList.remove(className);
+  }, duration);
+}
+
+function resolveTriggerNodeEvent(
+  messageNode: HTMLElement,
+  sourceId: string,
+  occurrenceIndex: number | null
+): HTMLElement | null {
+  const triggers = Array.from(messageNode.querySelectorAll<HTMLElement>(".st-rh-inline-trigger"));
+  if (!triggers.length) return null;
+  const targetSourceId = String(sourceId || "").trim();
+  const targetOccurrence = Number.isFinite(Number(occurrenceIndex)) ? Math.max(0, Math.floor(Number(occurrenceIndex))) : null;
+  if (targetSourceId) {
+    const matched = triggers.filter((node) => String(node.dataset.sourceId || "").trim() === targetSourceId);
+    if (matched.length > 0) {
+      if (targetOccurrence != null) {
+        const exact = matched.find(
+          (node) => Math.max(0, Math.floor(Number(node.dataset.occurrenceIndex || 0))) === targetOccurrence
+        );
+        if (exact) return exact;
+      }
+      return matched[0];
+    }
+    return null;
+  }
+  return triggers[0];
+}
+
+export function jumpToTriggerFromDatasetEvent(node: HTMLElement): boolean {
+  const dataset = node.dataset || {};
+  const sourceMessageId = String(dataset.rhJumpSourceMessage || "");
+  const sourceFloorKey = String(dataset.rhJumpFloorKey || "");
+  const sourceId = String(dataset.rhJumpSourceId || "");
+  const occurrenceIndex = Number.isFinite(Number(dataset.rhJumpOccurrence))
+    ? Math.max(0, Math.floor(Number(dataset.rhJumpOccurrence)))
+    : null;
+
+  const messageNode =
+    resolveMessageElementByIdEvent(sourceMessageId) || resolveMessageElementByFloorKeyEvent(sourceFloorKey);
+  if (!messageNode) return false;
+
+  const triggerNode = resolveTriggerNodeEvent(messageNode, sourceId, occurrenceIndex);
+  if (triggerNode) {
+    triggerNode.scrollIntoView({ block: "center", behavior: "smooth" });
+    applyTemporaryHighlightEvent(triggerNode, CONSOLE_JUMP_HIGHLIGHT_CLASS_Event, 1500);
+    return true;
+  }
+
+  messageNode.scrollIntoView({ block: "center", behavior: "smooth" });
+  applyTemporaryHighlightEvent(messageNode, CONSOLE_JUMP_HIGHLIGHT_MESSAGE_CLASS_Event, 1500);
+  return true;
 }
 
 /**

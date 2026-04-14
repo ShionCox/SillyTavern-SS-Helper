@@ -13,9 +13,21 @@ import { normalizeDifficultyLevelEvent } from "./parserEvent";
 
 export const RH_TRIGGER_METADATA_KEY_Event = "rollhelper_interactive_triggers_v1";
 export const RH_TRIGGER_PACK_METADATA_KEY_Event = "rollhelper_trigger_pack_v1";
+export const RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event = "rollhelper_interactive_triggers_source_state_v1";
 
 const RH_TRIGGER_REGEX_Event = /<rh-trigger\b([^>]*)>([\s\S]*?)<\/rh-trigger>/gi;
-const TRIGGER_PACK_BLOCK_REGEX_Event = /```(?:triggerpack|json|rolljson)?\s*([\s\S]*?)```/gi;
+const TRIGGER_PACK_BLOCK_REGEX_Event = /```(?:triggerjson|triggerpack|json|rolljson)?\s*([\s\S]*?)```/gi;
+
+export type InteractiveTriggerMetadataSourceStateEvent =
+  | "display_text"
+  | "raw_source"
+  | "edited_source";
+
+export type InteractiveTriggerMetadataLifecycleMetaEvent = {
+  hydratedFrom: "markup" | "metadata";
+  sanitizedAt: number;
+  lastSourceKind: InteractiveTriggerMetadataSourceStateEvent;
+};
 
 function normalizeTextEvent(value: unknown): string {
   return String(value ?? "");
@@ -44,6 +56,27 @@ function normalizeShortFeedbackTextEvent(value: unknown): string | undefined {
   const text = normalizeInlineTextEvent(value);
   if (!text) return undefined;
   return text.slice(0, 120);
+}
+
+function normalizeInteractiveTriggerMetadataSourceStateEvent(
+  input: unknown
+): InteractiveTriggerMetadataSourceStateEvent {
+  const normalized = normalizeInlineTextEvent(input).toLowerCase();
+  if (normalized === "raw_source") return "raw_source";
+  if (normalized === "edited_source") return "edited_source";
+  return "display_text";
+}
+
+function normalizeInteractiveTriggerLifecycleMetaEvent(
+  input: unknown
+): InteractiveTriggerMetadataLifecycleMetaEvent | null {
+  if (!input || typeof input !== "object") return null;
+  const record = input as Record<string, unknown>;
+  return {
+    hydratedFrom: normalizeInlineTextEvent(record.hydratedFrom) === "metadata" ? "metadata" : "markup",
+    sanitizedAt: Number.isFinite(Number(record.sanitizedAt)) ? Number(record.sanitizedAt) : Date.now(),
+    lastSourceKind: normalizeInteractiveTriggerMetadataSourceStateEvent(record.lastSourceKind),
+  };
 }
 
 /**
@@ -104,6 +137,35 @@ function getActiveSwipeRecordEvent(message: TavernMessageEvent): Record<string, 
   }
   const activeSwipe = swipes[swipeId];
   return activeSwipe && typeof activeSwipe === "object" ? activeSwipe as Record<string, unknown> : null;
+}
+
+function hasActiveSwipeScopeEvent(message: TavernMessageEvent | undefined): boolean {
+  if (!message || typeof message !== "object") return false;
+  const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
+  const swipes = (message as any)?.swipes;
+  return Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length;
+}
+
+function getMessageExtraContainerEvent(
+  message: TavernMessageEvent,
+  create = false
+): Record<string, unknown> | null {
+  if (!message || typeof message !== "object") return null;
+  const record = message as Record<string, unknown>;
+  let extra = record.extra;
+  if (!extra || typeof extra !== "object") {
+    if (!create) return null;
+    extra = {};
+    record.extra = extra;
+  }
+  return extra as Record<string, unknown>;
+}
+
+function deleteInteractiveTriggerMetadataKeysEvent(container: Record<string, unknown> | null | undefined): void {
+  if (!container) return;
+  delete container[RH_TRIGGER_METADATA_KEY_Event];
+  delete container[RH_TRIGGER_PACK_METADATA_KEY_Event];
+  delete container[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
 }
 
 export function getActiveSwipeExtraContainerEvent(
@@ -309,15 +371,9 @@ export function getMessageInteractiveTriggersEvent(message: TavernMessageEvent |
   if (!message || typeof message !== "object") return [];
   const pack = getMessageTriggerPackEvent(message);
   const packItems = new Map((pack?.items || []).map((item) => [item.sid, item]));
-  const containers: Array<Record<string, unknown> | null> = [
-    getActiveSwipeExtraContainerEvent(message, false),
-    (() => {
-      const record = message as Record<string, unknown>;
-      return record.extra && typeof record.extra === "object"
-        ? record.extra as Record<string, unknown>
-        : null;
-    })(),
-  ];
+  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
+    ? [getActiveSwipeExtraContainerEvent(message, false)]
+    : [getMessageExtraContainerEvent(message, false)];
   for (const container of containers) {
     const raw = container?.[RH_TRIGGER_METADATA_KEY_Event];
     if (!Array.isArray(raw)) continue;
@@ -335,17 +391,27 @@ export function getMessageInteractiveTriggersEvent(message: TavernMessageEvent |
 
 export function getMessageTriggerPackEvent(message: TavernMessageEvent | undefined): TriggerPackEvent | null {
   if (!message || typeof message !== "object") return null;
-  const containers: Array<Record<string, unknown> | null> = [
-    getActiveSwipeExtraContainerEvent(message, false),
-    (() => {
-      const record = message as Record<string, unknown>;
-      return record.extra && typeof record.extra === "object"
-        ? record.extra as Record<string, unknown>
-        : null;
-    })(),
-  ];
+  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
+    ? [getActiveSwipeExtraContainerEvent(message, false)]
+    : [getMessageExtraContainerEvent(message, false)];
   for (const container of containers) {
     const normalized = normalizeTriggerPackEvent(container?.[RH_TRIGGER_PACK_METADATA_KEY_Event]);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+export function getMessageInteractiveTriggerLifecycleMetaEvent(
+  message: TavernMessageEvent | undefined
+): InteractiveTriggerMetadataLifecycleMetaEvent | null {
+  if (!message || typeof message !== "object") return null;
+  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
+    ? [getActiveSwipeExtraContainerEvent(message, false)]
+    : [getMessageExtraContainerEvent(message, false)];
+  for (const container of containers) {
+    const normalized = normalizeInteractiveTriggerLifecycleMetaEvent(
+      container?.[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event]
+    );
     if (normalized) return normalized;
   }
   return null;
@@ -377,25 +443,24 @@ export function setMessageInteractiveTriggersEvent(
     occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
   }));
 
-  const record = message as Record<string, unknown>;
-  let messageExtra = record.extra;
-  if (!messageExtra || typeof messageExtra !== "object") {
-    messageExtra = {};
-    record.extra = messageExtra;
-  }
-  if (serialized.length > 0) {
-    (messageExtra as Record<string, unknown>)[RH_TRIGGER_METADATA_KEY_Event] = serialized;
-  } else {
-    delete (messageExtra as Record<string, unknown>)[RH_TRIGGER_METADATA_KEY_Event];
-  }
-
-  const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
-  if (swipeExtra) {
+  if (hasActiveSwipeScopeEvent(message)) {
+    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
+    if (!swipeExtra) return;
     if (serialized.length > 0) {
       swipeExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
     } else {
       delete swipeExtra[RH_TRIGGER_METADATA_KEY_Event];
     }
+    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
+    return;
+  }
+
+  const messageExtra = getMessageExtraContainerEvent(message, true);
+  if (!messageExtra) return;
+  if (serialized.length > 0) {
+    messageExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
+  } else {
+    delete messageExtra[RH_TRIGGER_METADATA_KEY_Event];
   }
 }
 
@@ -427,25 +492,56 @@ export function setMessageTriggerPackEvent(
       }
     : null;
 
-  const containers = [
-    (() => {
-      const record = message as Record<string, unknown>;
-      let extra = record.extra;
-      if (!extra || typeof extra !== "object") {
-        extra = {};
-        record.extra = extra;
-      }
-      return extra as Record<string, unknown>;
-    })(),
-    getActiveSwipeExtraContainerEvent(message, true),
-  ].filter((container): container is Record<string, unknown> => Boolean(container));
-
-  for (const container of containers) {
+  if (hasActiveSwipeScopeEvent(message)) {
+    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
+    if (!swipeExtra) return;
     if (serialized) {
-      container[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
+      swipeExtra[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
     } else {
-      delete container[RH_TRIGGER_PACK_METADATA_KEY_Event];
+      delete swipeExtra[RH_TRIGGER_PACK_METADATA_KEY_Event];
     }
+    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
+    return;
+  }
+
+  const messageExtra = getMessageExtraContainerEvent(message, true);
+  if (!messageExtra) return;
+  if (serialized) {
+    messageExtra[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
+  } else {
+    delete messageExtra[RH_TRIGGER_PACK_METADATA_KEY_Event];
+  }
+}
+
+export function setMessageInteractiveTriggerLifecycleMetaEvent(
+  message: TavernMessageEvent,
+  meta: InteractiveTriggerMetadataLifecycleMetaEvent | null
+): void {
+  const serialized = meta
+    ? {
+        hydratedFrom: meta.hydratedFrom,
+        sanitizedAt: Number.isFinite(Number(meta.sanitizedAt)) ? Number(meta.sanitizedAt) : Date.now(),
+        lastSourceKind: normalizeInteractiveTriggerMetadataSourceStateEvent(meta.lastSourceKind),
+      }
+    : null;
+  if (hasActiveSwipeScopeEvent(message)) {
+    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
+    if (!swipeExtra) return;
+    if (serialized) {
+      swipeExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event] = serialized;
+    } else {
+      delete swipeExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
+    }
+    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
+    return;
+  }
+
+  const messageExtra = getMessageExtraContainerEvent(message, true);
+  if (!messageExtra) return;
+  if (serialized) {
+    messageExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event] = serialized;
+  } else {
+    delete messageExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
   }
 }
 
@@ -594,11 +690,96 @@ export function parseInteractiveTriggerMetadataFromTextEvent(
   };
 }
 
+function shouldClearInteractiveTriggerMetadataEvent(args: {
+  message: TavernMessageEvent;
+  parsed: {
+    foundTriggerMarkup: boolean;
+    foundTriggerPack: boolean;
+    cleanText: string;
+  };
+  previousTriggers: InteractiveTriggerEvent[];
+  previousTriggerPack: TriggerPackEvent | null;
+  sourceState?: InteractiveTriggerMetadataSourceStateEvent;
+  stableSourceText?: string;
+}): boolean {
+  const {
+    parsed,
+    previousTriggers,
+    previousTriggerPack,
+    sourceState,
+    stableSourceText,
+  } = args;
+  if (parsed.foundTriggerMarkup || parsed.foundTriggerPack) {
+    return false;
+  }
+  if (previousTriggers.length <= 0 && !previousTriggerPack) {
+    return false;
+  }
+  const normalizedSourceState = normalizeInteractiveTriggerMetadataSourceStateEvent(sourceState);
+  if (normalizedSourceState === "display_text") {
+    return false;
+  }
+  const stableText = normalizeTextEvent(stableSourceText);
+  if (/<rh-trigger\b/i.test(stableText) || /"type"\s*:\s*"trigger_pack"/i.test(stableText)) {
+    return false;
+  }
+  return true;
+}
+
+export function rebuildInteractiveTriggerMetadataFromStableSourceEvent(
+  message: TavernMessageEvent,
+  options?: {
+    settings?: { defaultBlindSkillsText?: string } | null;
+    sourceMessageId?: string;
+    stableSourceText?: string;
+    sourceState?: InteractiveTriggerMetadataSourceStateEvent;
+  }
+): boolean {
+  const sourceText = normalizeTextEvent(options?.stableSourceText);
+  if (!sourceText.trim()) return false;
+  const parsed = parseInteractiveTriggerMetadataFromTextEvent(sourceText, options);
+  if (!parsed.foundTriggerMarkup && !parsed.foundTriggerPack) {
+    return false;
+  }
+
+  const previousTriggers = getMessageInteractiveTriggersEvent(message);
+  const previousTriggerPack = getMessageTriggerPackEvent(message);
+  const nextTriggers = parsed.foundTriggerMarkup ? parsed.triggers : [];
+  const nextTriggerPack = parsed.foundTriggerPack ? parsed.triggerPack : null;
+  const nextTriggersJson = JSON.stringify(nextTriggers);
+  const prevTriggersJson = JSON.stringify(previousTriggers);
+  const nextPackJson = JSON.stringify(nextTriggerPack);
+  const prevPackJson = JSON.stringify(previousTriggerPack);
+  const nextSourceKind = normalizeInteractiveTriggerMetadataSourceStateEvent(
+    options?.sourceState ?? "raw_source"
+  );
+
+  if (nextTriggersJson === prevTriggersJson && nextPackJson === prevPackJson) {
+    setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+      hydratedFrom: "markup",
+      sanitizedAt: Date.now(),
+      lastSourceKind: nextSourceKind,
+    });
+    return false;
+  }
+
+  setMessageInteractiveTriggersEvent(message, nextTriggers);
+  setMessageTriggerPackEvent(message, nextTriggerPack);
+  setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+    hydratedFrom: "markup",
+    sanitizedAt: Date.now(),
+    lastSourceKind: nextSourceKind,
+  });
+  return true;
+}
+
 export function sanitizeMessageInteractiveTriggersEvent(
   message: TavernMessageEvent,
   options?: {
     settings?: { defaultBlindSkillsText?: string } | null;
     sourceMessageId?: string;
+    sourceState?: InteractiveTriggerMetadataSourceStateEvent;
+    stableSourceText?: string;
   }
 ): boolean {
   const rawText = getActiveMessageTextEvent(message);
@@ -607,22 +788,45 @@ export function sanitizeMessageInteractiveTriggersEvent(
   const parsed = parseInteractiveTriggerMetadataFromTextEvent(rawText, options);
   const previousTriggers = getMessageInteractiveTriggersEvent(message);
   const previousTriggerPack = getMessageTriggerPackEvent(message);
+  const sourceState = normalizeInteractiveTriggerMetadataSourceStateEvent(options?.sourceState);
   if (!parsed.foundTriggerMarkup && !parsed.foundTriggerPack) {
-    let cleared = false;
-    if (previousTriggers.length > 0) {
-      setMessageInteractiveTriggersEvent(message, []);
-      cleared = true;
+    const shouldClear = shouldClearInteractiveTriggerMetadataEvent({
+      message,
+      parsed,
+      previousTriggers,
+      previousTriggerPack,
+      sourceState,
+      stableSourceText: options?.stableSourceText,
+    });
+    if (!shouldClear) {
+      if (previousTriggers.length > 0 || previousTriggerPack) {
+        setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+          hydratedFrom: "metadata",
+          sanitizedAt: Date.now(),
+          lastSourceKind: sourceState,
+        });
+      }
+      return false;
     }
-    if (previousTriggerPack) {
-      setMessageTriggerPackEvent(message, null);
-      cleared = true;
-    }
-    return cleared;
+
+    setMessageInteractiveTriggersEvent(message, []);
+    setMessageTriggerPackEvent(message, null);
+    setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+      hydratedFrom: "metadata",
+      sanitizedAt: Date.now(),
+      lastSourceKind: sourceState,
+    });
+    return true;
   }
 
   setActiveMessageTextEvent(message, parsed.cleanText);
   setMessageInteractiveTriggersEvent(message, parsed.foundTriggerMarkup ? parsed.triggers : []);
   setMessageTriggerPackEvent(message, parsed.foundTriggerPack ? parsed.triggerPack : null);
+  setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+    hydratedFrom: "markup",
+    sanitizedAt: Date.now(),
+    lastSourceKind: sourceState,
+  });
   return true;
 }
 
