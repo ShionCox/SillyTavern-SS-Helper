@@ -90,6 +90,7 @@ function createSettings(overrides: Partial<DicePluginSettingsEvent> = {}): DiceP
     blindRevealInSummary: false,
     skillTableText: "{}",
     skillPresetStoreText: "",
+    promptVerbosityMode: "compact",
     ruleTextModeVersion: 1,
     ruleText: "",
     ...overrides,

@@ -649,6 +649,24 @@ export function buildSettingsCardHtmlTemplateEvent(
         <div id="${ids.panelRuleId}" class="st-roll-panel" hidden>
           <div class="st-roll-divider"><i class="fa-solid fa-scroll"></i><span>事件协议规则</span><div class="st-roll-divider-line"></div></div>
 
+          <div class="st-roll-item st-roll-search-item" data-st-roll-search="prompt verbosity compact verbose token protocol">
+            <div class="st-roll-item-main">
+              <div class="st-roll-item-title">提示词密度</div>
+              <div class="st-roll-item-desc">紧凑模式默认发送最小协议；详细模式会保留更多解释与示例，适合排查模型不稳定输出。</div>
+            </div>
+            <div class="st-roll-row">
+              ${buildSharedSelectField({
+                id: ids.promptVerbosityId,
+                value: "compact",
+                containerClassName: "stx-shared-select-flex-220",
+                options: [
+                  { value: "compact", label: "紧凑协议" },
+                  { value: "verbose", label: "详细协议" },
+                ],
+              })}
+            </div>
+          </div>
+
           <div class="st-roll-textarea-wrap st-roll-search-item" data-st-roll-search="rule text save reset">
             <div class="st-roll-row" style="margin-bottom:8px;">
               <span class="st-roll-field-label">这里写补充规则。系统基础规则会自动放在前面。</span>

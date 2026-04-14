@@ -186,6 +186,7 @@ export interface BuildSettingsCardTemplateIdsDepsEvent {
   SETTINGS_SKILL_MODAL_CLOSE_ID_Event: string;
   SETTINGS_RULE_SAVE_ID_Event: string;
   SETTINGS_RULE_RESET_ID_Event: string;
+  SETTINGS_PROMPT_VERBOSITY_ID_Event: string;
   SETTINGS_RULE_TEXT_ID_Event: string;
   SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event: string;
   SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event: string;
@@ -349,6 +350,7 @@ export function buildSettingsCardTemplateIdsEvent(
     skillModalCloseId: deps.SETTINGS_SKILL_MODAL_CLOSE_ID_Event,
     ruleSaveId: deps.SETTINGS_RULE_SAVE_ID_Event,
     ruleResetId: deps.SETTINGS_RULE_RESET_ID_Event,
+    promptVerbosityId: deps.SETTINGS_PROMPT_VERBOSITY_ID_Event,
     ruleTextId: deps.SETTINGS_RULE_TEXT_ID_Event,
     aiBridgeStatusLightId: deps.SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
     aiBridgeStatusTextId: deps.SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,

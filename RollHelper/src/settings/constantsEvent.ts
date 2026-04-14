@@ -109,6 +109,7 @@ export const SETTINGS_SKILL_EDITOR_OPEN_ID_Event = "st-roll-settings-Event-skill
 export const SETTINGS_SKILL_MODAL_ID_Event = "st-roll-settings-Event-skill-modal";
 export const SETTINGS_SKILL_MODAL_CLOSE_ID_Event = "st-roll-settings-Event-skill-modal-close";
 export const SETTINGS_RULE_TEXT_ID_Event = "st-roll-settings-Event-rule-text";
+export const SETTINGS_PROMPT_VERBOSITY_ID_Event = "st-roll-settings-Event-prompt-verbosity";
 export const SETTINGS_RULE_SAVE_ID_Event = "st-roll-settings-Event-rule-save";
 export const SETTINGS_RULE_RESET_ID_Event = "st-roll-settings-Event-rule-reset";
 export const SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event = "st-roll-settings-Event-ai-bridge-light";
@@ -276,6 +277,7 @@ export const SETTINGS_TEMPLATE_STATIC_DEPS_Event = {
   SETTINGS_SKILL_MODAL_CLOSE_ID_Event,
   SETTINGS_RULE_SAVE_ID_Event,
   SETTINGS_RULE_RESET_ID_Event,
+  SETTINGS_PROMPT_VERBOSITY_ID_Event,
   SETTINGS_RULE_TEXT_ID_Event,
   SETTINGS_AI_BRIDGE_STATUS_LIGHT_ID_Event,
   SETTINGS_AI_BRIDGE_STATUS_TEXT_ID_Event,
@@ -353,6 +355,7 @@ export const SETTINGS_BASIC_INPUT_IDS_Event = {
   SETTINGS_NARRATIVE_COST_ENABLED_ID_Event,
   SETTINGS_SUMMARY_DETAIL_ID_Event,
   SETTINGS_SUMMARY_ROUNDS_ID_Event,
+  SETTINGS_PROMPT_VERBOSITY_ID_Event,
   SETTINGS_SCOPE_ID_Event,
   SETTINGS_OUTCOME_BRANCHES_ID_Event,
   SETTINGS_EXPLODE_OUTCOME_ID_Event,
@@ -457,6 +460,7 @@ export const SETTINGS_SYNC_UI_IDS_Event = {
   SETTINGS_STATUS_ERRORS_ID_Event,
   SETTINGS_STATUS_DIRTY_HINT_ID_Event,
   SETTINGS_RULE_TEXT_ID_Event,
+  SETTINGS_PROMPT_VERBOSITY_ID_Event,
   SETTINGS_SKILL_ROWS_ID_Event,
 } as const;
 export const DICE_RULE_BLOCK_START_Event = "<dice_rules>";
@@ -572,6 +576,7 @@ export const DEFAULT_SETTINGS_Event: DicePluginSettingsEvent = {
   blindRevealInSummary: false,
   skillTableText: "{}",
   skillPresetStoreText: "",
+  promptVerbosityMode: "compact",
   ruleTextModeVersion: RULE_TEXT_MODE_VERSION_Event,
   ruleText: DEFAULT_RULE_TEXT_Event,
 };

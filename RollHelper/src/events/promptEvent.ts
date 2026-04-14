@@ -359,174 +359,182 @@ export function buildDiceRuleBlockEvent(ruleText: string, ruleStartTag: string, 
   return normalizeBlockTextEvent(`${ruleStartTag}\n${raw}\n${ruleEndTag}`);
 }
 
-export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEvent): string {
+function buildCheckDicePatternEvent(settings: DicePluginSettingsEvent): string {
   const checkDiceParts: string[] = ["NdM"];
   if (settings.enableExplodingDice) checkDiceParts.push("[!]");
   if (settings.enableAdvantageSystem) checkDiceParts.push("[khX|klX]");
   checkDiceParts.push("[+/-B]");
-  const checkDicePattern = checkDiceParts.join("");
-  const enabledDiceTypes = formatEnabledDiceTypesTextEvent(settings.aiAllowedDiceSidesText);
+  return checkDiceParts.join("");
+}
 
+function isVerbosePromptModeEvent(settings: DicePluginSettingsEvent): boolean {
+  return settings.promptVerbosityMode === "verbose";
+}
+
+function buildCoreDiceProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const checkDicePattern = buildCheckDicePatternEvent(settings);
   const lines: string[] = [];
-  lines.push("【事件骰子协议（系统动态）】");
-  lines.push("1. 仅在文末输出 ```rolljson 代码块（严禁 ```json）。");
-  lines.push("   - 若本轮存在必须立刻反馈的关键情报线索，可在 rolljson 后额外追加 1 个 ```triggerpack 代码块；没有这类线索就不要输出。");
-  lines.push("2. 叙事正文禁止直接给出判定结果，先给事件，再由系统结算并推进剧情。");
-  lines.push("3. rolljson 基本格式：");
+  lines.push("【骰子协议】");
+  lines.push("1. 只输出 ```rolljson，禁止 ```json。");
+  lines.push("2. 正文先叙事，不直接宣判检定结果。");
+  lines.push("3. rolljson:");
   lines.push("{");
-  lines.push('  "type": "dice_events", "version": "1",');
-  lines.push('  "events": [{');
-  lines.push('    "id": "str", "title": "str", "difficulty": "easy|normal|hard|extreme", "desc": "str",');
-  lines.push(`    "checkDice": "${checkDicePattern}",`);
-  lines.push('    "skill": "str",');
-  lines.push('    "compare": ">=|>|<=|<",');
-  lines.push('    "scope": "protagonist|character|all",');
-  lines.push('    "target": { "type": "self|scene|supporting|object|other", "name": "str(可选)" }');
+  lines.push('  "type":"dice_events","version":"1",');
+  lines.push('  "events":[{');
+  lines.push('    "id":"str","title":"str","difficulty":"easy|normal|hard|extreme","desc":"str",');
+  lines.push(`    "checkDice":"${checkDicePattern}",`);
+  lines.push('    "skill":"str","compare":">=|>|<=|<","scope":"protagonist|character|all",');
+  lines.push('    "target":{"type":"self|scene|supporting|object|other","name":"str?"}');
   if (settings.enableAiRollMode) {
-    lines.push('    ,"rollMode": "auto|manual"');
+    lines.push('    ,"rollMode":"auto|manual"');
   }
   if (settings.enableAdvantageSystem) {
-    lines.push('    ,"advantageState": "normal|advantage|disadvantage"');
+    lines.push('    ,"advantageState":"normal|advantage|disadvantage"');
   }
   if (settings.enableDynamicDcReason) {
-    lines.push('    ,"dc_reason": "str"');
+    lines.push('    ,"dc_reason":"str"');
   }
   if (settings.enableTimeLimit) {
-    lines.push('    ,"timeLimit": "PT30S"');
+    lines.push('    ,"timeLimit":"PT30S"');
   }
   if (settings.enableOutcomeBranches) {
-    if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
-      lines.push('    ,"outcomes": { "success": "str", "failure": "str", "explode": "str(爆骰优先)" }');
-    } else {
-      lines.push('    ,"outcomes": { "success": "str", "failure": "str" }');
-    }
+    lines.push(
+      settings.enableExplodingDice && settings.enableExplodeOutcomeBranch
+        ? '    ,"outcomes":{"success":"str","failure":"str","explode":"str?"}'
+        : '    ,"outcomes":{"success":"str","failure":"str"}'
+    );
   }
   lines.push("  }]");
   if (settings.enableAiRoundControl) {
-    lines.push('  ,"round_control": "continue|end_round",');
-    lines.push('  "end_round": bool');
+    lines.push('  ,"round_control":"continue|end_round","end_round":bool');
   }
   lines.push("}");
-  lines.push("3.1 triggerpack 仅用于少量关键情报 trigger 的即时反馈：");
-  lines.push("{");
-  lines.push('  "type": "trigger_pack", "version": "1",');
-  lines.push('  "defaults": { "dice": "1d20", "compare": ">=" },');
-  lines.push('  "items": [{ "sid": "str", "skill": "str", "difficulty": "easy|normal|hard|extreme", "reveal": "instant|delayed", "success": "str", "failure": "str", "explode": "str(可选)" }]');
-  lines.push("}");
-
-  lines.push("4. 可用能力说明：");
-  lines.push(`   - checkDice 仅使用 ${checkDicePattern}，只能写骰式本体，禁止加入技能名、状态名、自然语言、标签或变量,仅允许一个可选修正值，禁止连续修正（如 1d20+1-1）。`);
-  lines.push(`   - 当前已启用的可选骰式：${enabledDiceTypes}。只能从这些骰式中选择使用。`);
-  lines.push("   - 默认只提供 difficulty，不要手写 dc；系统会根据骰式、优劣骰与比较符自动换算实际阈值。");
-  lines.push("   - difficulty 仅允许 easy / normal / hard / extreme。");
-  lines.push("   - compare 默认使用 >=；只有在叙事上确有必要时才改成 > / <= / <。");
-  lines.push("   - 合法示例：1d20、2d20kh1、2d20kl1；若已启用对应骰式，也可使用 2d6+3、1d100。");
-  lines.push("   - 非法示例：1d20+1-1、1d20+体能、1d20+[虚弱]、1d20 (优势)。");
-  lines.push("   - 若需施加或移除状态，请仅在 outcomes 文本中使用状态标签。");
-  if (settings.enableExplodingDice && settings.enableOutcomeBranches && settings.enableExplodeOutcomeBranch) {
-    lines.push("   - 只有 checkDice 明确包含 ! 时，才允许提供 outcomes.explode；如果 checkDice 不含 !，必须完全省略 explode 字段。");
-    lines.push('   - 正例：{"checkDice":"1d20!","outcomes":{"success":"...","failure":"...","explode":"..."}}');
-    lines.push('   - 反例：{"checkDice":"1d20","outcomes":{"success":"...","failure":"...","explode":"..."}}');
-  }
-  if (settings.enableAiRollMode) {
-    lines.push("   - 可使用 rollMode=auto|manual 指定是否自动掷骰。");
-  }
-  if (settings.enableAiRoundControl) {
-    lines.push("   - 可使用 round_control 或 end_round 控制轮次是否结束。");
-  }
-  if (settings.enableExplodingDice) {
-    lines.push("   - 已启用爆骰：! 会在掷出最大面后连爆，结果会影响剧情走向。(骰式示例：1d6!+2)");
-    lines.push("   - 爆骰是否触发由系统根据真实掷骰结果决定，不可直接声明“必爆”。");
-    lines.push("   - 只有在你确实需要一条独立的爆骰后果分支时，才给该事件的 checkDice 加 !；没有 ! 就绝不能写 outcomes.explode。");
-    if (settings.enableAiRollMode) {
-      lines.push("   - AI 自动检定时，同一轮最多仅 1 个事件使用 !，其余会按普通骰结算。");
-      lines.push("   - 因此，请把 ! 和 outcomes.explode 留给本轮最关键、最值得出现爆骰分支的那个事件。");
-    }
-  }
-  if (settings.enableAdvantageSystem) {
-    lines.push("   - 已启用优势/劣势：可用 advantageState 或 kh/kl，会改变结果并影响剧情走向。");
-    lines.push("   - 重点：优势/劣势是取高或取低，不是把两次结果相加。");
-    lines.push("   - 若使用 2d20kh1 或 2d20kl1，最终只保留 1 颗 d20；未加修正时总值范围仍是 1~20，不是 2~40。");
-    lines.push("   - 生成事件前必须检查判定条件是否可达，避免写出理论上必败或必成的事件。");
-    lines.push("   - 例如：2d20kl1+1 不能搭配 >=30；2d20kh1+0 也不应搭配 >20。");
-  }
-  if (settings.enableExplodingDice && settings.enableAdvantageSystem) {
-    lines.push("   - ! 与 kh/kl 不能同用。");
-  }
-  if (settings.enableDynamicDcReason) {
-    lines.push("   - 可填写 dc_reason 解释难度依据；系统会在展示时追加“按难度自动换算阈值”的说明。");
-  }
-  if (settings.enableTimeLimit) {
-    lines.push("   - 可填写 timeLimit，且必须满足系统最小时限。");
-  }
+  lines.push("4. checkDice 只能写骰式本体；difficulty 只允许 easy|normal|hard|extreme。");
+  lines.push(`5. 已启用骰式：${formatEnabledDiceTypesTextEvent(settings.aiAllowedDiceSidesText)}。`);
   if (settings.enableOutcomeBranches) {
-    lines.push("   - outcomes 走向文本会直接影响后续剧情叙事。");
-    lines.push("   - 只要该事件属于暗骰语境，就必须提供结构化 outcomes，至少写出 success 与 failure 两个分支，不能只靠后续正文临场发挥。");
-    lines.push("   - 暗骰的大成功如果需要独立后果，优先使用 outcomes.explode 承载；没有 explode 字段时，系统只会回退到 success。");
-    lines.push("   - 当前结构没有单独的“大失败”字段；如果你希望大失败与普通失败明显不同，请把更重的失败后果写进 failure。");
-    lines.push("   - 暗骰的结构化 outcomes 才是系统选择走向的主来源；后续 blind guidance 只负责把已选中的后果自然融入叙事，不能替代 outcomes 本身。");
-    lines.push("   - 严禁在 outcomes.success / failure / explode、desc、dc_reason、note 或任何 rolljson 字段中写入 <rh-trigger>。");
-    lines.push("   - rh-trigger 只能写在最终回复的剧情正文里，而且必须落在真正关键、值得继续调查或点击的短词上。");
-    lines.push("   - 正例：正文写“你注意到书架边缘有一道<rh-trigger action=\"调查\" skill=\"调查\">异常的刮痕</rh-trigger>。”");
-    lines.push("   - 反例：在 outcomes.success、事件 desc 或其他 rolljson 字段里塞入 <rh-trigger>。");
-    if (settings.enableExplodingDice && settings.enableExplodeOutcomeBranch) {
-      lines.push("   - 爆骰触发时优先使用 outcomes.explode。");
-      lines.push("   - 如果你设想了“只有爆骰才发生”的特殊后果，就必须同时在 checkDice 中写 !；否则请把该后果合并到 success 或 failure。");
-    }
+    lines.push("6. 暗骰事件必须提供 outcomes。");
   }
-  if (settings.enableStatusSystem && settings.enableOutcomeBranches) {
-    lines.push("5. 可在 outcomes 中使用状态标签：");
-    lines.push("   - [APPLY_STATUS:名,整数值,turns=2,skills=A|B 或 scope=all]");
-    lines.push("   - turns 默认 1；支持 duration= 作为 turns 别名；turns=perm 表示永久");
-    lines.push("   - [REMOVE_STATUS:名]");
-    lines.push("   - [CLEAR_STATUS]");
-    lines.push("   - 负面状态必须使用负数；正面状态（加值）必须使用正数。");
-    lines.push("   - 状态数值绝对值需与当前骰子面数匹配，避免失衡，还需要注意状态请勿轻易附加，避免破坏平衡！");
+  lines.push("7. 所有运行时限制以 <dice_runtime_policy> 为准。");
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push(`例：{"checkDice":"${settings.enableAdvantageSystem ? "2d20kh1" : "1d20"}","compare":">=","difficulty":"normal"}`);
   }
-
-  if (settings.enableInteractiveTriggers) {
-    const blindSkillText = String(settings.defaultBlindSkillsText ?? "")
-      .split(/[\n,|]+/)
-      .map((item) => normalizeInlineTextEvent(item))
-      .filter(Boolean)
-      .join("、") || "洞察、潜行、搜查、历史、调查";
-    lines.push("6. 正文中的可交互线索请使用交互标记：");
-    lines.push('   - 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" blind="1" sourceId="bookshelf_scratches">异常的刮痕</rh-trigger>');
-    lines.push("   - 只标剧情正文中的关键线索短词或短语，不要放在 rolljson、outcomes、desc、dc_reason、状态标签、规则块或摘要块里。");
-    lines.push("   - 不要把 rh-trigger 写成骰子走向的一部分；走向只负责叙事结果，交互标记只负责正文中的下一步调查入口。");
-    lines.push("   - triggerpack 只能通过 rh-trigger 的 sourceId / sid 关联，绝不能把 success / failure 文本塞进 rh-trigger 属性里。");
-    lines.push("   - 如果本次暗骰后果、被动发现或剧情推进里出现了新的可继续调查线索，就必须在最终剧情正文对应的关键短词上补一个 rh-trigger，不能只写线索却不给点击入口。");
-    lines.push("   - 只有当该线索明确不适合继续互动、不可进一步检定，或只是纯氛围描写时，才允许不写 rh-trigger。");
-    lines.push("   - 只标真正值得玩家发起检定的短词或短语，不要整句乱标，也不要全篇大量发光。");
-    lines.push("   - 每次回复最多给出 3 个交互标记，且必须和当前叙事上下文直接相关。");
-    lines.push("   - 每次回复最多只给 1~2 个 trigger 配 triggerpack，而且优先用于异响、痕迹、气味、可疑停顿、异常刮痕等必须立刻影响决策的关键情报。");
-    lines.push("   - 普通 trigger 不要硬配 triggerpack；只写正文入口即可。");
-    lines.push("   - triggerpack 的 success / failure / explode 都必须是短句，尽量控制在 25~45 字内。");
-    lines.push("   - 情报型检定优先使用 reveal=\"instant\"；潜行、欺骗、伏击、藏匿、是否暴露等状态型检定优先使用 reveal=\"delayed\"。");
-    lines.push("   - difficulty 仅允许 easy / normal / hard / extreme，由系统自动换算阈值；不要手写成功点数。");
-    lines.push(`   - 下列技能通常应默认暗骰：${blindSkillText}。适用时请写 blind="1"。`);
-    lines.push("   - 如果你在正文里给某个 rh-trigger 标成暗骰，请确保对应的剧情后果已经在结构化 outcomes 中写全，不要把暗骰成功/失败走向塞进 trigger 文案。");
-    lines.push("   - 对于提示、痕迹、异响、异常气味、可疑人物反应、隐藏机关、错误线索等可追查对象，优先把最关键的那个短词标成 rh-trigger。");
-    lines.push("   - 被动检定自动发现的信息，如果值得继续追查，也可以继续标成可点击词。");
-  }
-
-  if (settings.enableNarrativeCostEnforcement) {
-    lines.push("7. 叙事结果约束：");
-    lines.push("   - 成功可以推进，但不要无缘无故追加重罚。");
-    lines.push("   - 失败必须附带明确叙事代价，至少体现时间损失、误判、暴露、资源消耗或引发下一风险之一。");
-    lines.push("   - 大失败必须带来显著误判、危险后果或滑稽失手，但不要把剧情直接写死。");
-    lines.push("   - 搜查、调查、洞察、历史等信息类失败，允许给出错误线索、漏掉关键点或自信的误判。");
-  }
-
-  lines.push("8. **必须遵守 <dice_runtime_policy> 的运行时限制。**");
   return normalizeBlockTextEvent(lines.join("\n"));
 }
 
+function buildInteractiveTriggerProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const blindSkillText = String(settings.defaultBlindSkillsText ?? "")
+    .split(/[\n,|]+/)
+    .map((item) => normalizeInlineTextEvent(item))
+    .filter(Boolean)
+    .join("、") || "洞察、潜行、搜查、历史、调查";
+  const lines: string[] = [];
+  lines.push("【交互触发协议】");
+  lines.push("1. rh-trigger 只能写在最终剧情正文里，不能写进 rolljson/outcomes/desc/dc_reason。");
+  lines.push("2. trigger_pack 可选，不是每轮必出。");
+  lines.push("3. trigger_pack:");
+  lines.push("{");
+  lines.push('  "type":"trigger_pack","version":"1",');
+  lines.push('  "defaults":{"dice":"1d20","compare":">="},');
+  lines.push('  "items":[{"sid":"str","skill":"str","difficulty":"easy|normal|hard|extreme","reveal":"instant|delayed","success":"str","failure":"str","explode":"str?"}]');
+  lines.push("}");
+  lines.push("4. sid 必须对应 rh-trigger 的 sourceId；success/failure/explode 必须简短。");
+  lines.push("5. 每轮最多 1~2 个 trigger_pack，只给关键情报 trigger 使用。");
+  lines.push('6. reveal="instant" 表示命中后立即给短反馈；reveal="delayed" 表示进入后续体现。');
+  lines.push(`7. ${blindSkillText} 这类暗骰技能适用时请写 blind="1"，且对应 outcomes 必须写全。`);
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push('8. 情报型检定优先 instant；潜行、欺骗、伏击、藏匿、是否暴露等状态型检定优先 delayed。');
+  }
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+function buildStatusProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const lines: string[] = [];
+  lines.push("【状态标签】");
+  lines.push("- [APPLY_STATUS:名,整数值,turns=2,skills=A|B 或 scope=all]");
+  lines.push("- [REMOVE_STATUS:名]");
+  lines.push("- [CLEAR_STATUS]");
+  lines.push("- 负面状态必须为负数，正面状态必须为正数。");
+  lines.push("- turns 默认 1；turns=perm 表示永久。");
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push("- 状态标签只写在 outcomes 文本中，不要写入 desc、dc_reason 或 rh-trigger。");
+  }
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+function buildExplodeProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const lines: string[] = [];
+  lines.push("【爆骰规则】");
+  lines.push("1. 只有 checkDice 含 ! 时，才允许写 outcomes.explode。");
+  lines.push("2. 没有 ! 就必须省略 explode。");
+  lines.push("3. ! 与 kh/kl 不能同用。");
+  if (settings.enableAiRollMode) {
+    lines.push("4. 若启用 auto 检定，同一轮最多仅 1 个事件使用 !。");
+  }
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push('例：{"checkDice":"1d20!","outcomes":{"success":"...","failure":"...","explode":"..."}}');
+  }
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+function buildAdvantageProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const lines: string[] = [];
+  lines.push("【优势/劣势规则】");
+  lines.push("1. 可用 advantageState 或 2d20kh1 / 2d20kl1。");
+  lines.push("2. kh/kl 只保留 1 颗 d20，不是两次结果相加。");
+  lines.push("3. 写事件前必须检查阈值是否可达，避免理论上必败或必成。");
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push("4. 例如 2d20kl1+1 不应搭配 >=30，2d20kh1+0 也不应搭配 >20。");
+  }
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+function buildTimeLimitProtocolBlockEvent(): string {
+  return normalizeBlockTextEvent([
+    "【时间限制】",
+    "可填写 timeLimit，且必须不小于 <dice_runtime_policy> 给出的最小时限。",
+  ].join("\n"));
+}
+
+function buildDcReasonProtocolBlockEvent(): string {
+  return normalizeBlockTextEvent([
+    "【难度说明】",
+    "可填写 dc_reason，用于解释 difficulty 的叙事依据。",
+  ].join("\n"));
+}
+
+function buildNarrativeConstraintProtocolBlockEvent(settings: DicePluginSettingsEvent): string {
+  const lines: string[] = [];
+  lines.push("【叙事约束】");
+  lines.push("1. 成功可以推进，不要无故追加重罚。");
+  lines.push("2. 失败必须附带明确代价（时间损失、误判、暴露、资源消耗、引发下一风险之一）。");
+  lines.push("3. 大失败必须显著，但仍保留后续行动空间。");
+  if (isVerbosePromptModeEvent(settings)) {
+    lines.push("4. 信息类失败可给出错误线索、漏掉关键点或自信误判。");
+  }
+  return normalizeBlockTextEvent(lines.join("\n"));
+}
+
+export function buildDynamicSystemRuleTextEvent(settings: DicePluginSettingsEvent): string {
+  const blocks = [
+    buildCoreDiceProtocolBlockEvent(settings),
+    settings.enableInteractiveTriggers ? buildInteractiveTriggerProtocolBlockEvent(settings) : "",
+    settings.enableStatusSystem && settings.enableOutcomeBranches ? buildStatusProtocolBlockEvent(settings) : "",
+    settings.enableExplodingDice ? buildExplodeProtocolBlockEvent(settings) : "",
+    settings.enableAdvantageSystem ? buildAdvantageProtocolBlockEvent(settings) : "",
+    settings.enableTimeLimit ? buildTimeLimitProtocolBlockEvent() : "",
+    settings.enableDynamicDcReason ? buildDcReasonProtocolBlockEvent() : "",
+    settings.enableNarrativeCostEnforcement ? buildNarrativeConstraintProtocolBlockEvent(settings) : "",
+  ].filter(Boolean);
+  return normalizeBlockTextEvent(blocks.join("\n\n"));
+}
+
 export function buildFinalRuleTextEvent(settings: DicePluginSettingsEvent): string {
-  const systemRuleText = buildDynamicSystemRuleTextEvent(settings);
+  const blocks = [buildDynamicSystemRuleTextEvent(settings)];
   const customRuleText = normalizeTextEvent(settings.ruleText || "").trim();
-  if (!customRuleText) return systemRuleText;
-  return normalizeBlockTextEvent(`${systemRuleText}\n\n【用户自定义补充】\n${customRuleText}`);
+  if (customRuleText) {
+    blocks.push(`【用户自定义补充】\n${customRuleText}`);
+  }
+  return normalizeBlockTextEvent(blocks.join("\n\n"));
 }
 /**
  * 功能：解析并规范化已启用的 AI 骰式列表。
@@ -553,29 +561,7 @@ function formatEnabledDiceTypesTextEvent(raw: string): string {
     .join("、");
 }
 
-function parseSkillTablePreviewEvent(skillTableText: string, limit = 20): { count: number; preview: string } {
-  try {
-    const parsed = JSON.parse(String(skillTableText || "{}"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { count: 0, preview: "empty" };
-    }
-    const entries = Object.entries(parsed as Record<string, any>)
-      .filter(([name, value]) => String(name || "").trim().length > 0 && Number.isFinite(Number(value)))
-      .map(([name, value]) => [String(name).trim(), Number(value)] as [string, number]);
-    if (entries.length <= 0) {
-      return { count: 0, preview: "empty" };
-    }
-    const preview = entries
-      .slice(0, Math.max(1, limit))
-      .map(([name, value]) => `${normalizeInlineTextEvent(name)}:${value}`)
-      .join(",");
-    return { count: entries.length, preview: preview || "empty" };
-  } catch {
-    return { count: 0, preview: "invalid_json" };
-  }
-}
-
-function buildDiceRuntimePolicyBlockEvent(
+export function buildCompactDiceRuntimePolicyBlockEvent(
   settings: DicePluginSettingsEvent,
   startTag: string,
   endTag: string
@@ -583,14 +569,12 @@ function buildDiceRuntimePolicyBlockEvent(
   const enabledDice = parseEnabledDiceSidesEvent(settings.aiAllowedDiceSidesText)
     .map((sides) => `d${sides}`)
     .join(",");
-  const skillPreview = parseSkillTablePreviewEvent(settings.skillTableText);
   const lines: string[] = [];
   lines.push(startTag);
   lines.push("v=1");
   lines.push(`apply_scope=${settings.eventApplyScope}`);
   lines.push(`round_mode=${settings.enableAiRoundControl ? "continuous" : "per_round"}`);
   lines.push(`roll_mode_allowed=${settings.enableAiRollMode ? "auto|manual" : "manual_only"}`);
-  lines.push(`ai_round_control_enabled=${settings.enableAiRoundControl ? 1 : 0}`);
   lines.push(
     `round_control_allowed=${settings.enableAiRoundControl ? "continue|end_round" : "disabled"}`
   );
@@ -600,19 +584,12 @@ function buildDiceRuntimePolicyBlockEvent(
   lines.push(`dynamic_dc_reason_enabled=${settings.enableDynamicDcReason ? 1 : 0}`);
   lines.push(`status_system_enabled=${settings.enableStatusSystem ? 1 : 0}`);
   lines.push(`status_tags_allowed=${settings.enableStatusSystem ? 1 : 0}`);
-  lines.push(`status_sign_rule=${settings.enableStatusSystem ? "debuff_negative,buff_positive" : "disabled"}`);
   lines.push(`outcome_branches_enabled=${settings.enableOutcomeBranches ? 1 : 0}`);
   lines.push(`explode_outcome_enabled=${settings.enableExplodeOutcomeBranch ? 1 : 0}`);
   lines.push(`time_limit_enabled=${settings.enableTimeLimit ? 1 : 0}`);
   lines.push(`min_time_limit_seconds=${Math.max(1, Math.floor(Number(settings.minTimeLimitSeconds) || 1))}`);
   lines.push(`enabled_dice=${enabledDice}`);
   lines.push(`skill_system_enabled=${settings.enableSkillSystem ? 1 : 0}`);
-  lines.push(`skill_table_count=${skillPreview.count}`);
-  lines.push(`skill_table_preview=${skillPreview.preview}`);
-  lines.push(`summary_detail=${settings.summaryDetailMode}`);
-  lines.push(`summary_rounds=${settings.summaryHistoryRounds}`);
-  lines.push(`summary_include_outcome=${settings.includeOutcomeInSummary ? 1 : 0}`);
-  lines.push(`list_outcome_preview=${settings.showOutcomePreviewInListCard ? 1 : 0}`);
   lines.push(endTag);
   return normalizeBlockTextEvent(lines.join("\n"));
 }
@@ -1057,7 +1034,7 @@ export function handlePromptReadyEvent(
   if (settings.autoSendRuleToAI) {
     const finalRuleText = buildFinalRuleTextEvent(settings);
     ruleBlockText = buildDiceRuleBlockEvent(finalRuleText, ruleStartTag, ruleEndTag);
-    runtimePolicyBlockText = buildDiceRuntimePolicyBlockEvent(
+    runtimePolicyBlockText = buildCompactDiceRuntimePolicyBlockEvent(
       settings,
       runtimePolicyStartTag,
       runtimePolicyEndTag

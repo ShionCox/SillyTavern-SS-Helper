@@ -903,6 +903,10 @@ function normalizeSettingsBucketEvent(source: Partial<DicePluginSettingsEvent>):
       : "",
     bucket.skillTableText
   );
+  bucket.promptVerbosityMode =
+    String((source as any)?.promptVerbosityMode ?? "").trim().toLowerCase() === "verbose"
+      ? "verbose"
+      : "compact";
   const presetStore = parseSkillPresetStoreTextEvent(bucket.skillPresetStoreText);
   if (presetStore) {
     bucket.skillTableText = syncActivePresetToSkillTableTextEvent(presetStore, bucket.skillTableText);

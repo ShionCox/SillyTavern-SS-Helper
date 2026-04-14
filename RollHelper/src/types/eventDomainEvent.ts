@@ -15,6 +15,7 @@ export type EventRollSourceEvent =
   | "timeout_auto_fail";
 export type SummaryDetailModeEvent = "minimal" | "balanced" | "detailed";
 export type RollHelperSettingsThemeEvent = "default" | "dark" | "light" | "tavern";
+export type PromptVerbosityModeEvent = "compact" | "verbose";
 export type SummaryEventStatusEvent = "pending" | "done" | "timeout";
 export type EventOutcomeKindEvent = "success" | "failure" | "explode" | "none";
 export type StatusScopeEvent = "skills" | "all";
@@ -130,6 +131,7 @@ export interface DicePluginSettingsEvent {
   blindRevealInSummary: boolean; // 仅控制摘要是否允许揭示暗骰 outcome 文本，不影响结果卡隐藏策略
   skillTableText: string;
   skillPresetStoreText: string;
+  promptVerbosityMode: PromptVerbosityModeEvent;
   ruleTextModeVersion: number;
   ruleText: string;
 }

@@ -625,6 +625,7 @@ export interface BindBasicSettingsInputsDepsEvent {
   SETTINGS_NARRATIVE_COST_ENABLED_ID_Event: string;
   SETTINGS_SUMMARY_DETAIL_ID_Event: string;
   SETTINGS_SUMMARY_ROUNDS_ID_Event: string;
+  SETTINGS_PROMPT_VERBOSITY_ID_Event: string;
   SETTINGS_SCOPE_ID_Event: string;
   SETTINGS_OUTCOME_BRANCHES_ID_Event: string;
   SETTINGS_EXPLODE_OUTCOME_ID_Event: string;
@@ -685,6 +686,7 @@ export interface BindBasicSettingsInputsDepsEvent {
     enableNarrativeCostEnforcement?: boolean;
     summaryDetailMode?: "minimal" | "balanced" | "detailed";
     summaryHistoryRounds?: number;
+    promptVerbosityMode?: "compact" | "verbose";
     eventApplyScope?: "protagonist_only" | "all";
     enableOutcomeBranches?: boolean;
     enableExplodeOutcomeBranch?: boolean;
@@ -724,6 +726,9 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   const dynamicDcReasonInput = document.getElementById(
     deps.SETTINGS_DYNAMIC_DC_REASON_ID_Event
   ) as HTMLInputElement | null;
+  const promptVerbosityInput = document.getElementById(
+    deps.SETTINGS_PROMPT_VERBOSITY_ID_Event
+  ) as HTMLSelectElement | null;
   const statusSystemEnabledInput = document.getElementById(
     deps.SETTINGS_STATUS_SYSTEM_ENABLED_ID_Event
   ) as HTMLInputElement | null;
@@ -938,6 +943,12 @@ export function bindBasicSettingsInputsEvent(deps: BindBasicSettingsInputsDepsEv
   dynamicDcReasonInput?.addEventListener("input", (event) => {
     const value = Boolean((event.target as HTMLInputElement).checked);
     deps.updateSettingsEvent({ enableDynamicDcReason: value });
+  });
+  promptVerbosityInput?.addEventListener("change", (event) => {
+    const value = String((event.target as HTMLSelectElement).value ?? "").trim() === "verbose"
+      ? "verbose"
+      : "compact";
+    deps.updateSettingsEvent({ promptVerbosityMode: value });
   });
 
   statusSystemEnabledInput?.addEventListener("input", (event) => {
@@ -1264,6 +1275,7 @@ export interface SyncSettingsUiDepsEvent {
     enableNarrativeCostEnforcement: boolean;
     summaryDetailMode: string;
     summaryHistoryRounds: number;
+    promptVerbosityMode: "compact" | "verbose";
     eventApplyScope: string;
     enableOutcomeBranches: boolean;
     enableExplodeOutcomeBranch: boolean;
@@ -1343,6 +1355,7 @@ export interface SyncSettingsUiDepsEvent {
   SETTINGS_STATUS_ERRORS_ID_Event: string;
   SETTINGS_STATUS_DIRTY_HINT_ID_Event: string;
   SETTINGS_RULE_TEXT_ID_Event: string;
+  SETTINGS_PROMPT_VERBOSITY_ID_Event: string;
   SETTINGS_SKILL_ROWS_ID_Event: string;
   getActiveStatusesEvent: () => ActiveStatusEvent[];
   getActiveChatKeyEvent: () => string;
@@ -1527,6 +1540,9 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   const ruleTextInput = document.getElementById(
     deps.SETTINGS_RULE_TEXT_ID_Event
   ) as HTMLTextAreaElement | null;
+  const promptVerbosityInput = document.getElementById(
+    deps.SETTINGS_PROMPT_VERBOSITY_ID_Event
+  ) as HTMLSelectElement | null;
   const settingsContent =
     settingsRoot?.querySelector<HTMLElement>(".st-roll-content") ?? settingsRoot ?? null;
 
@@ -1742,5 +1758,8 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
     if (ruleTextInput.value !== nextText) {
       ruleTextInput.value = nextText;
     }
+  }
+  if (promptVerbosityInput) {
+    promptVerbosityInput.value = settings.promptVerbosityMode === "verbose" ? "verbose" : "compact";
   }
 }

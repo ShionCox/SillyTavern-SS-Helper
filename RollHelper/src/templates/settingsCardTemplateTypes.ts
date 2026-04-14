@@ -124,6 +124,7 @@ export interface SettingsCardTemplateIdsEvent {
   skillModalCloseId: string;
   ruleSaveId: string;
   ruleResetId: string;
+  promptVerbosityId: string;
   ruleTextId: string;
   aiBridgeStatusLightId: string;
   aiBridgeStatusTextId: string;
