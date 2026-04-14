@@ -1424,6 +1424,22 @@ export function enhanceInteractiveTriggersInDomEvent(
   });
 }
 
+export function enhanceInteractiveTriggersInMessageEvent(
+  node: HTMLElement | null | undefined,
+  message: TavernMessageEvent | null,
+  meta: DiceMetaEvent | null | undefined
+): boolean {
+  if (!node) return false;
+  ensureTriggerStylesEvent();
+  ensureSharedTooltip();
+  try {
+    return enhanceMessageNodeEvent(node, message, meta);
+  } catch (error) {
+    logger.warn("单条消息交互高亮增强失败", error);
+    return false;
+  }
+}
+
 export function bindInteractiveTriggerDomEventsEvent(
   deps: ExecuteInteractiveTriggerDepsEvent
 ): void {

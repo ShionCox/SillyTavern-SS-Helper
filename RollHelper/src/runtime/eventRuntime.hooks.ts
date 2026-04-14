@@ -318,7 +318,6 @@ function buildEventHooksDepsEvent() {
     handlePromptReadyEvent,
     resetAssistantProcessedStateEvent,
     clearDiceMetaEventState,
-    sanitizeCurrentChatEventBlocksEvent,
     hideEventCodeBlocksInDomEvent: hideEventCodeBlocksInDomModuleEvent,
     persistChatSafeEvent: persistChatSafeStoreEvent,
     mergeEventsIntoPendingRoundEvent,

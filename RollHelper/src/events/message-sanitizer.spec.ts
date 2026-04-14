@@ -14,6 +14,7 @@ import {
   getPersistedAssistantOriginalSourceMetaEvent,
   getPersistedAssistantOriginalSourceTextEvent,
   getStableAssistantOriginalSourceTextEvent,
+  sanitizeAssistantMessageArtifactsOnceEvent,
   sanitizeAssistantMessageArtifactsEvent,
 } from "./messageSanitizerEvent";
 import { getAssistantOriginalSourceCandidateFromHostEvent } from "./promptEvent";
@@ -164,6 +165,52 @@ describe("原始文本稳定快照", () => {
     expect(changed).toBe(true);
     expect(String(message.mes)).toBe(preferredText);
     expect(getPersistedAssistantOriginalSourceTextEvent(message as any)).toBe(hostOriginalText);
+  });
+
+  it("会一次产出清理后的正文与 trigger metadata，而不是分两段写回", () => {
+    const sourceText = `剧情正文里有<rh-trigger action="调查" skill="调查" blind="1" sourceId="weird_sound">奇怪的响声</rh-trigger>。\n\n\`\`\`rolljson
+{"type":"dice_events","version":"1","events":[{"id":"evt_1","skill":"调查","targetName":"奇怪的响声"}]}
+\`\`\`\n\n\`\`\`triggerjson
+{
+  "type":"trigger_pack",
+  "version":"1",
+  "items":[
+    {"sid":"weird_sound","skill":"调查","difficulty":"normal","reveal":"instant","success":"你听见了木板后的抓挠声。"}
+  ]
+}
+\`\`\``;
+    const message = {
+      mes: sourceText,
+      extra: {},
+    };
+
+    const result = sanitizeAssistantMessageArtifactsOnceEvent(message as any, 0, {
+      getSettingsEvent: () => ({ defaultBlindSkillsText: "调查,察觉" }),
+      getHostOriginalSourceTextEvent: () => sourceText,
+      getPreferredAssistantSourceTextEvent: () => sourceText,
+      getMessageTextEvent: (target) => String((target as any)?.mes ?? ""),
+      parseEventEnvelopesEvent: (text) => ({
+        events: text.includes('"events":[{"id":"evt_1"')
+          ? [{ id: "evt_1", skill: "调查", targetName: "奇怪的响声" } as any]
+          : [],
+        ranges: parseRanges(text),
+        shouldEndRound: true,
+      }),
+      removeRangesEvent: (text, ranges) => {
+        const [range] = ranges;
+        return `${text.slice(0, range.start)}${text.slice(range.end)}`.replace(/\n{3,}/g, "\n\n").trim();
+      },
+      resolveSourceMessageIdEvent: () => "assistant:1:swipe_0:hash",
+      sourceState: "raw_source",
+    });
+
+    expect(result.cleanText).toBe("剧情正文里有奇怪的响声。");
+    expect(result.hasRollArtifacts).toBe(true);
+    expect(result.hasTriggerArtifacts).toBe(true);
+    expect(result.events).toHaveLength(1);
+    expect(result.shouldEndRound).toBe(true);
+    expect(result.triggers).toHaveLength(1);
+    expect(result.triggerPack?.items[0]?.sid).toBe("weird_sound");
   });
 });
 

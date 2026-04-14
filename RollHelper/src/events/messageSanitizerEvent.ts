@@ -3,12 +3,15 @@ import { logger } from "../../index";
 import {
     getActiveSwipeExtraContainerEvent,
     getMessageInteractiveTriggersEvent,
+    getMessageInteractiveTriggerLifecycleMetaEvent,
     getMessageTriggerPackEvent,
-    rebuildInteractiveTriggerMetadataFromStableSourceEvent,
-    sanitizeMessageInteractiveTriggersEvent,
+    parseInteractiveTriggerMetadataFromTextEvent,
+    setMessageInteractiveTriggerLifecycleMetaEvent,
+    setMessageInteractiveTriggersEvent,
+    setMessageTriggerPackEvent,
     stripInteractiveTriggerMarkupFromTextEvent,
 } from "./interactiveTriggerMetadataEvent";
-import type { DiceEventSpecEvent, TavernMessageEvent } from "../types/eventDomainEvent";
+import type { DiceEventSpecEvent, InteractiveTriggerEvent, TavernMessageEvent, TriggerPackEvent } from "../types/eventDomainEvent";
 
 const RH_ORIGINAL_SOURCE_KEY_Event = "rollhelper_original_source_v1";
 const RH_ORIGINAL_SOURCE_ENABLED_KEY_Event = "rollhelper_original_source_enabled_v1";
@@ -297,11 +300,234 @@ export interface SanitizeAssistantMessageArtifactsDepsEvent {
     parseEventEnvelopesEvent?: (text: string) => {
         events: DiceEventSpecEvent[];
         ranges: Array<{ start: number; end: number }>;
+        shouldEndRound?: boolean;
     };
     removeRangesEvent?: (text: string, ranges: Array<{ start: number; end: number }>) => string;
     setMessageTextEvent?: (message: TavernMessageEvent, text: string) => void;
     resolveSourceMessageIdEvent?: (message: TavernMessageEvent, index?: number) => string;
     sourceState?: "display_text" | "raw_source" | "edited_source";
+}
+
+export type AssistantMessageSanitizeResultEvent = {
+    cleanText: string;
+    events: DiceEventSpecEvent[];
+    triggers: InteractiveTriggerEvent[];
+    triggerPack: TriggerPackEvent | null;
+    shouldEndRound: boolean;
+    hasRollArtifacts: boolean;
+    hasTriggerArtifacts: boolean;
+    changedText: boolean;
+    changedMetadata: boolean;
+};
+
+function stripEventArtifactsFromTextEvent(
+    text: string,
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent" | "removeRangesEvent">
+): { cleanText: string; hasRollArtifacts: boolean } {
+    const rawText = String(text ?? "");
+    if (!rawText.trim()) {
+        return {
+            cleanText: "",
+            hasRollArtifacts: false,
+        };
+    }
+    if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent) {
+        const parsed = deps.parseEventEnvelopesEvent(rawText);
+        return {
+            cleanText: parsed.ranges.length > 0 ? deps.removeRangesEvent(rawText, parsed.ranges) : rawText,
+            hasRollArtifacts: parsed.ranges.length > 0,
+        };
+    }
+    const cleanedText = stripRollJsonBlocks(rawText);
+    return {
+        cleanText: cleanedText,
+        hasRollArtifacts: cleanedText !== rawText,
+    };
+}
+
+function selectArtifactSourceTextEvent(
+    sourceCandidates: string[],
+    getSettingsEvent: SanitizeAssistantMessageArtifactsDepsEvent["getSettingsEvent"],
+    sourceMessageId: string,
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent" | "removeRangesEvent">
+): string {
+    for (const candidate of sourceCandidates) {
+        const envelope = stripEventArtifactsFromTextEvent(candidate, deps);
+        const triggerParsed = parseInteractiveTriggerMetadataFromTextEvent(envelope.cleanText, {
+            settings: getSettingsEvent?.(),
+            sourceMessageId,
+        });
+        if (envelope.hasRollArtifacts || triggerParsed.foundTriggerMarkup || triggerParsed.foundTriggerPack) {
+            return candidate;
+        }
+    }
+    return sourceCandidates[0] ?? "";
+}
+
+function parseEventEnvelopeArtifactsEvent(
+    text: string,
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent" | "removeRangesEvent">
+): {
+    events: DiceEventSpecEvent[];
+    shouldEndRound: boolean;
+    cleanText: string;
+    hasRollArtifacts: boolean;
+} {
+    const rawText = String(text ?? "");
+    if (!rawText.trim()) {
+        return {
+            events: [],
+            shouldEndRound: false,
+            cleanText: "",
+            hasRollArtifacts: false,
+        };
+    }
+    if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent) {
+        const parsed = deps.parseEventEnvelopesEvent(rawText);
+        return {
+            events: Array.isArray(parsed.events) ? parsed.events : [],
+            shouldEndRound: Boolean(parsed.shouldEndRound),
+            cleanText: parsed.ranges.length > 0 ? deps.removeRangesEvent(rawText, parsed.ranges) : rawText,
+            hasRollArtifacts: parsed.ranges.length > 0,
+        };
+    }
+    const stripped = stripRollJsonBlocks(rawText);
+    return {
+        events: [],
+        shouldEndRound: false,
+        cleanText: stripped,
+        hasRollArtifacts: stripped !== rawText,
+    };
+}
+
+function applyAssistantMessageSanitizeResultEvent(
+    message: TavernMessageEvent,
+    result: AssistantMessageSanitizeResultEvent,
+    deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "setMessageTextEvent" | "sourceState" | "getSettingsEvent">
+): boolean {
+    let changed = false;
+    const setText = deps.setMessageTextEvent ?? ((target, text) => {
+        setMessageTextSafe(target, text);
+    });
+    if (result.changedText) {
+        setText(message, result.cleanText);
+        changed = true;
+    }
+    if (deps.getSettingsEvent) {
+        setMessageInteractiveTriggersEvent(message, result.triggers);
+        setMessageTriggerPackEvent(message, result.triggerPack);
+        setMessageInteractiveTriggerLifecycleMetaEvent(message, {
+            hydratedFrom: result.hasTriggerArtifacts ? "markup" : "metadata",
+            sanitizedAt: Date.now(),
+            lastSourceKind: deps.sourceState || "display_text",
+        });
+        changed = changed || result.changedMetadata;
+    }
+    return changed;
+}
+
+export function sanitizeAssistantMessageArtifactsOnceEvent(
+    message: TavernMessageEvent,
+    index: number | undefined,
+    deps: SanitizeAssistantMessageArtifactsDepsEvent
+): AssistantMessageSanitizeResultEvent {
+    const sourceMessageId = deps.resolveSourceMessageIdEvent?.(message, index) || "";
+    const getPreferredText = deps.getPreferredAssistantSourceTextEvent ?? ((target) => getMessageTextSafe(target));
+    const getFallbackText = deps.getMessageTextEvent ?? ((target) => getMessageTextSafe(target));
+    const stableSourceText = getStableAssistantOriginalSourceTextEvent(message, {
+        getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
+        getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
+        getMessageTextEvent: deps.getMessageTextEvent,
+        parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent ?? (() => ({ events: [], ranges: [] })),
+    });
+    const displayCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
+        getPreferredText(message),
+        getFallbackText(message),
+    ]);
+    const sourceCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
+        stableSourceText,
+        ...displayCandidates,
+    ]);
+    const envelopeSource = selectArtifactSourceTextEvent(
+        sourceCandidates,
+        deps.getSettingsEvent,
+        sourceMessageId,
+        deps
+    );
+    const envelopeParsed = parseEventEnvelopeArtifactsEvent(envelopeSource, deps);
+    const displayTextSource = selectArtifactSourceTextEvent(
+        displayCandidates.length > 0 ? displayCandidates : sourceCandidates,
+        deps.getSettingsEvent,
+        sourceMessageId,
+        deps
+    );
+    const metadataSource = selectArtifactSourceTextEvent(
+        sourceCandidates,
+        deps.getSettingsEvent,
+        sourceMessageId,
+        deps
+    );
+    const strippedDisplayArtifacts = stripEventArtifactsFromTextEvent(displayTextSource, deps);
+    const displayParsed = parseInteractiveTriggerMetadataFromTextEvent(strippedDisplayArtifacts.cleanText, {
+        settings: deps.getSettingsEvent?.(),
+        sourceMessageId,
+    });
+    const strippedMetadataArtifacts = stripEventArtifactsFromTextEvent(metadataSource, deps);
+    const metadataParsed = parseInteractiveTriggerMetadataFromTextEvent(strippedMetadataArtifacts.cleanText, {
+        settings: deps.getSettingsEvent?.(),
+        sourceMessageId,
+    });
+    const nextCleanText = displayParsed.cleanText;
+    const previousText = getFallbackText(message);
+    const previousTriggers = getMessageInteractiveTriggersEvent(message);
+    const previousTriggerPack = getMessageTriggerPackEvent(message);
+    const previousLifecycleMeta = getMessageInteractiveTriggerLifecycleMetaEvent(message);
+    const hasTriggerArtifacts = metadataParsed.foundTriggerMarkup || metadataParsed.foundTriggerPack;
+
+    let nextTriggers = metadataParsed.foundTriggerMarkup ? metadataParsed.triggers : [];
+    let nextTriggerPack = metadataParsed.foundTriggerPack ? metadataParsed.triggerPack : null;
+    let hydratedFrom: "markup" | "metadata" = hasTriggerArtifacts ? "markup" : "metadata";
+
+    if (!hasTriggerArtifacts) {
+        const stableStrippedArtifacts = stripEventArtifactsFromTextEvent(stableSourceText, deps);
+        const stableParsed = parseInteractiveTriggerMetadataFromTextEvent(stableStrippedArtifacts.cleanText, {
+            settings: deps.getSettingsEvent?.(),
+            sourceMessageId,
+        });
+        if (stableParsed.foundTriggerMarkup || stableParsed.foundTriggerPack) {
+            nextTriggers = stableParsed.foundTriggerMarkup ? stableParsed.triggers : [];
+            nextTriggerPack = stableParsed.foundTriggerPack ? stableParsed.triggerPack : null;
+        } else if (deps.sourceState === "display_text") {
+            nextTriggers = previousTriggers;
+            nextTriggerPack = previousTriggerPack;
+        }
+    }
+
+    const changedText = nextCleanText !== previousText;
+    const nextTriggersJson = JSON.stringify(nextTriggers);
+    const prevTriggersJson = JSON.stringify(previousTriggers);
+    const nextPackJson = JSON.stringify(nextTriggerPack);
+    const prevPackJson = JSON.stringify(previousTriggerPack);
+    const nextLifecycleJson = JSON.stringify({
+        hydratedFrom,
+        lastSourceKind: deps.sourceState || "display_text",
+    });
+    const prevLifecycleJson = JSON.stringify({
+        hydratedFrom: previousLifecycleMeta?.hydratedFrom || "metadata",
+        lastSourceKind: previousLifecycleMeta?.lastSourceKind || "display_text",
+    });
+
+    return {
+        cleanText: nextCleanText,
+        events: envelopeParsed.events,
+        triggers: nextTriggers,
+        triggerPack: nextTriggerPack,
+        shouldEndRound: envelopeParsed.shouldEndRound,
+        hasRollArtifacts: envelopeParsed.hasRollArtifacts || strippedDisplayArtifacts.hasRollArtifacts || strippedMetadataArtifacts.hasRollArtifacts,
+        hasTriggerArtifacts,
+        changedText,
+        changedMetadata: nextTriggersJson !== prevTriggersJson || nextPackJson !== prevPackJson || nextLifecycleJson !== prevLifecycleJson,
+    };
 }
 
 export function ensureAssistantOriginalSnapshotPersistedEvent(
@@ -402,83 +628,24 @@ export function sanitizeAssistantMessageArtifactsEvent(
     let changed = false;
     const sourceMessageId = deps.resolveSourceMessageIdEvent?.(message, index) || "";
     const sourceState = deps.sourceState || "display_text";
-    const getPreferredText = deps.getPreferredAssistantSourceTextEvent ?? ((target) => getMessageTextSafe(target));
-    const getFallbackText = deps.getMessageTextEvent ?? ((target) => getMessageTextSafe(target));
     const setText = deps.setMessageTextEvent ?? ((target, text) => {
         setMessageTextSafe(target, text);
     });
     if (ensureAssistantOriginalSnapshotPersistedEvent(message, deps)) {
         changed = true;
     }
-    const sourceCandidates = collectAssistantSourceCandidatesEvent(message, deps);
-    const displayCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
-        getPreferredText(message),
-        getFallbackText(message),
-    ]);
-
-    if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent) {
-        for (const sourceText of displayCandidates) {
-            const { ranges } = deps.parseEventEnvelopesEvent(sourceText);
-            if (ranges.length <= 0) continue;
-            logger.info(`[内容处理] 命中事件控制块 source=${sourceMessageId || "unknown"} ranges=${ranges.length}`);
-            const cleaned = deps.removeRangesEvent(sourceText, ranges);
-            setText(message, cleaned);
-            changed = true;
-            break;
-        }
-    } else {
-        const rawText = getFallbackText(message);
-        const cleanedText = stripRollJsonBlocks(rawText);
-        if (cleanedText !== rawText) {
-            logger.info(`[内容处理] 命中宿主兜底清理 source=${sourceMessageId || "unknown"}`);
-            setText(message, cleanedText);
-            changed = true;
-        }
+    const result = sanitizeAssistantMessageArtifactsOnceEvent(message, index, deps);
+    if (result.hasRollArtifacts) {
+        logger.info(`[内容处理] 命中事件控制块 source=${sourceMessageId || "unknown"}`);
     }
-
-    if (deps.parseEventEnvelopesEvent && deps.removeRangesEvent && !changed) {
-        for (const sourceText of sourceCandidates) {
-            const { ranges } = deps.parseEventEnvelopesEvent(sourceText);
-            if (ranges.length <= 0) continue;
-            logger.info(`[内容处理] 命中原文快照控制块 source=${sourceMessageId || "unknown"} ranges=${ranges.length}，正文保持当前展示版本`);
-            changed = true;
-            break;
-        }
+    if (result.hasTriggerArtifacts) {
+        logger.info(`[内容处理] 命中交互触发标记清理 source=${sourceMessageId || "unknown"}`);
     }
-
-    if (deps.getSettingsEvent) {
-        const stableSourceText = getStableAssistantOriginalSourceTextEvent(message, {
-            getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
-            getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
-            getMessageTextEvent: deps.getMessageTextEvent,
-            parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent ?? (() => ({ events: [], ranges: [] })),
-        });
-        const previousTriggers = getMessageInteractiveTriggersEvent(message);
-        const previousTriggerPack = getMessageTriggerPackEvent(message);
-        const rebuiltTriggerMetadata =
-            previousTriggers.length <= 0
-            && !previousTriggerPack
-            && rebuildInteractiveTriggerMetadataFromStableSourceEvent(message, {
-                settings: deps.getSettingsEvent(),
-                sourceMessageId,
-                stableSourceText,
-                sourceState: "raw_source",
-            });
-        if (rebuiltTriggerMetadata) {
-            logger.info(`[内容处理] 已从稳定原文重建交互触发元数据 source=${sourceMessageId || "unknown"}`);
-        }
-        const triggerChanged = sanitizeMessageInteractiveTriggersEvent(message, {
-            settings: deps.getSettingsEvent(),
-            sourceMessageId,
-            sourceState,
-            stableSourceText,
-        });
-        if (triggerChanged) {
-            logger.info(`[内容处理] 命中交互触发标记清理 source=${sourceMessageId || "unknown"}`);
-        }
-        changed = changed || rebuiltTriggerMetadata || triggerChanged;
-    }
-
+    changed = applyAssistantMessageSanitizeResultEvent(message, result, {
+        setMessageTextEvent: setText,
+        sourceState,
+        getSettingsEvent: deps.getSettingsEvent,
+    }) || changed;
     return changed;
 }
 

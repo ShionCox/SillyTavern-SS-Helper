@@ -307,9 +307,9 @@ export function refreshCountdownDomEvent(deps: RefreshCountdownDomDepsEvent): vo
   }
 }
 
-export function hideEventCodeBlocksInDomEvent(): void {
+function hideEventCodeBlocksWithinRootEvent(root: ParentNode): void {
   try {
-    const preBlocks = Array.from(document.querySelectorAll("pre"));
+    const preBlocks = Array.from(root.querySelectorAll("pre"));
     for (const pre of preBlocks) {
       if (pre.classList.contains('language-rolljson') || pre.querySelector('.language-rolljson') || pre.querySelector('code.language-rolljson')) {
         pre.remove();
@@ -332,6 +332,15 @@ export function hideEventCodeBlocksInDomEvent(): void {
   } catch (error) {
     logger.warn("隐藏事件代码块失败", error);
   }
+}
+
+export function hideEventCodeBlocksInMessageEvent(root: ParentNode | null | undefined): void {
+  if (!root) return;
+  hideEventCodeBlocksWithinRootEvent(root);
+}
+
+export function hideEventCodeBlocksInDomEvent(): void {
+  hideEventCodeBlocksWithinRootEvent(document);
 }
 
 function buildOutcomePreviewHtmlEvent(
