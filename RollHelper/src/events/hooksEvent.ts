@@ -14,6 +14,7 @@ import {
   sanitizeAssistantMessageArtifactsOnceEvent,
   buildAssistantOriginalSourceMetaEvent,
   ensureAssistantOriginalSnapshotPersistedEvent,
+  getPersistedAssistantOriginalSourceTextEvent,
   getMessageTextSafe,
   rememberAssistantOriginalSourceTextEvent,
   resetAssistantSwipeRuntimeStateEvent,
@@ -183,6 +184,7 @@ type AssistantMessageTargetEvent = {
 };
 
 type AssistantFloorLifecycleReasonEvent =
+  | "generation_started"
   | "stream_snapshot"
   | "message_received_finalize"
   | "generation_ended_finalize"
@@ -203,13 +205,18 @@ type AssistantFloorLifecycleContextEvent = {
 };
 
 type AssistantGenerationSessionStateEvent = {
-  key: string;
+  sessionKey: string;
+  runtimeKey: string;
   swipeId: number;
   sequence: number;
+  targetIndex: number | null;
+  latestStreamText: string;
+  latestStreamUpdatedAt: number;
   finalized: boolean;
 };
 
 const assistantGenerationSessionsEvent = new Map<string, AssistantGenerationSessionStateEvent>();
+let assistantGenerationSequenceEvent = 0;
 
 /**
  * 功能：收集当前未归档轮次中所有已跟踪楼层的最新消息标识。
@@ -328,7 +335,18 @@ function resolveAssistantRuntimeMessageKeyEvent(message: TavernMessageEvent, ind
 }
 
 function buildAssistantGenerationSessionKeyEvent(state: AssistantGenerationSessionStateEvent): string {
-  return `${state.key}:swipe_${state.swipeId}:session_${state.sequence}`;
+  return `${state.runtimeKey}:swipe_${state.swipeId}:session_${state.sequence}`;
+}
+
+function beginAssistantGenerationDraftEvent(
+  reason: string,
+  deps: Pick<EventHooksDepsEvent, "resetRecentParseFailureLogsEvent" | "resetAssistantProcessedStateEvent">
+): number {
+  assistantGenerationSequenceEvent += 1;
+  deps.resetRecentParseFailureLogsEvent();
+  deps.resetAssistantProcessedStateEvent();
+  logger.info(`[内容处理] 检测到助手重生成会话开始 source=${reason} sequence=${assistantGenerationSequenceEvent}`);
+  return assistantGenerationSequenceEvent;
 }
 
 function resolveAssistantEventTargetEvent(
@@ -356,51 +374,77 @@ function beginAssistantGenerationSessionEvent(
   reason: string,
   deps: Pick<EventHooksDepsEvent, "resetRecentParseFailureLogsEvent" | "resetAssistantProcessedStateEvent">
 ): string {
-  const key = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
   const swipeId = resolveAssistantSwipeIdEvent(target.msg);
-  const previous = assistantGenerationSessionsEvent.get(key);
-  const shouldStartNew = !previous || previous.swipeId !== swipeId || previous.finalized;
+  const previous = assistantGenerationSessionsEvent.get(runtimeKey);
+  const activeSequence = assistantGenerationSequenceEvent > 0
+    ? assistantGenerationSequenceEvent
+    : (previous?.sequence ?? 1);
+  const shouldStartNew =
+    !previous
+    || previous.swipeId !== swipeId
+    || previous.finalized
+    || previous.sequence !== activeSequence;
   const nextState: AssistantGenerationSessionStateEvent = shouldStartNew
     ? {
-      key,
+      sessionKey: "",
+      runtimeKey,
       swipeId,
-      sequence: (previous?.sequence ?? 0) + 1,
+      sequence: activeSequence,
+      targetIndex: target.index,
+      latestStreamText: "",
+      latestStreamUpdatedAt: 0,
       finalized: false,
     }
-    : previous;
+    : {
+      ...previous,
+      targetIndex: target.index,
+    };
+  nextState.sessionKey = buildAssistantGenerationSessionKeyEvent(nextState);
 
   if (shouldStartNew) {
-    assistantGenerationSessionsEvent.set(key, nextState);
+    assistantGenerationSessionsEvent.set(runtimeKey, nextState);
     resetAssistantSwipeRuntimeStateEvent(target.msg);
-    deps.resetRecentParseFailureLogsEvent();
-    deps.resetAssistantProcessedStateEvent();
-    logger.info(`[内容处理] 检测到助手重生成会话开始 source=${reason} key=${buildAssistantGenerationSessionKeyEvent(nextState)}`);
+    logger.info(`[内容处理] 绑定助手生成会话 source=${reason} key=${nextState.sessionKey}`);
+  } else {
+    assistantGenerationSessionsEvent.set(runtimeKey, nextState);
   }
 
-  return buildAssistantGenerationSessionKeyEvent(nextState);
+  return nextState.sessionKey;
 }
 
 function tryFinalizeAssistantGenerationSessionEvent(
   target: AssistantMessageTargetEvent
 ): { sessionKey: string; shouldFinalize: boolean } {
-  const key = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
   const swipeId = resolveAssistantSwipeIdEvent(target.msg);
-  const previous = assistantGenerationSessionsEvent.get(key);
-  const nextState: AssistantGenerationSessionStateEvent = !previous || previous.swipeId !== swipeId
+  const previous = assistantGenerationSessionsEvent.get(runtimeKey);
+  const activeSequence = assistantGenerationSequenceEvent > 0
+    ? assistantGenerationSequenceEvent
+    : (previous?.sequence ?? 1);
+  const nextState: AssistantGenerationSessionStateEvent = !previous
+    || previous.swipeId !== swipeId
+    || previous.sequence !== activeSequence
     ? {
-      key,
+      sessionKey: "",
+      runtimeKey,
       swipeId,
-      sequence: (previous?.sequence ?? 0) + 1,
+      sequence: activeSequence,
+      targetIndex: target.index,
+      latestStreamText: "",
+      latestStreamUpdatedAt: 0,
       finalized: true,
     }
     : {
       ...previous,
+      targetIndex: target.index,
       finalized: true,
     };
-  assistantGenerationSessionsEvent.set(key, nextState);
+  nextState.sessionKey = buildAssistantGenerationSessionKeyEvent(nextState);
+  assistantGenerationSessionsEvent.set(runtimeKey, nextState);
   return {
-    sessionKey: buildAssistantGenerationSessionKeyEvent(nextState),
-    shouldFinalize: !(previous && previous.swipeId === swipeId && previous.finalized),
+    sessionKey: nextState.sessionKey,
+    shouldFinalize: !(previous && previous.swipeId === swipeId && previous.sequence === activeSequence && previous.finalized),
   };
 }
 
@@ -439,7 +483,9 @@ function resolveAssistantFloorLifecycleContextEvent(args: {
   const latestAssistant = chat.length > 0
     ? findLatestAssistantEvent(chat, { isAssistantMessageEvent: args.deps.isAssistantMessageEvent })
     : null;
+  const shouldResolveStableId = args.reason !== "stream_snapshot" && args.reason !== "generation_started";
   const assistantMsgId = target
+    && shouldResolveStableId
     ? args.deps.buildAssistantMessageIdEvent(target.msg, target.index)
     : null;
   const floorKey = assistantMsgId
@@ -588,10 +634,23 @@ function prepareAssistantFloorSanitizedDataEvent(
 ): PreparedAssistantFloorSanitizedDataEvent | null {
   const settings = deps.getSettingsEvent();
   const meta = deps.getDiceMetaEvent();
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const activeSession = assistantGenerationSessionsEvent.get(runtimeKey);
+  const currentMessageText = deps.getMessageTextEvent(target.msg);
+  const streamSnapshotText = String(activeSession?.latestStreamText ?? "");
+  const hostOriginalText = deps.getHostOriginalSourceTextEvent(target.msg);
+  const persistedSnapshotText = getPersistedAssistantOriginalSourceTextEvent(target.msg);
+  const finalizeSourceCandidates = [
+    currentMessageText,
+    streamSnapshotText,
+    hostOriginalText,
+    persistedSnapshotText,
+  ].filter((item, index, array) => item && array.indexOf(item) === index);
+  const preferredFinalizeSourceText = finalizeSourceCandidates.find((item) => String(item ?? "").trim()) || "";
   const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
-    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
-    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
-    getMessageTextEvent: deps.getMessageTextEvent,
+    getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
+    getPreferredAssistantSourceTextEvent: () => currentMessageText,
+    getMessageTextEvent: () => currentMessageText,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
   });
   const assistantMsgId = deps.buildAssistantMessageIdEvent(target.msg, target.index);
@@ -609,13 +668,11 @@ function prepareAssistantFloorSanitizedDataEvent(
     };
   }
 
-  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(target.msg, deps);
-  const fallbackSnapshotText = sourceCandidates.find((item) => String(item ?? "").trim()) || "";
   const sanitizeResult = sanitizeAssistantMessageArtifactsOnceEvent(target.msg, target.index, {
     getSettingsEvent: deps.getSettingsEvent,
-    getHostOriginalSourceTextEvent: deps.getHostOriginalSourceTextEvent,
-    getPreferredAssistantSourceTextEvent: deps.getPreferredAssistantSourceTextEvent,
-    getMessageTextEvent: deps.getMessageTextEvent,
+    getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
+    getPreferredAssistantSourceTextEvent: () => currentMessageText,
+    getMessageTextEvent: () => currentMessageText,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
     removeRangesEvent: deps.removeRangesEvent,
     resolveSourceMessageIdEvent: () => assistantMsgId,
@@ -641,7 +698,7 @@ function prepareAssistantFloorSanitizedDataEvent(
   }
 
   meta.lastProcessedAssistantMsgId = assistantMsgId;
-  const snapshotText = sourceCandidates.find((item) => {
+  const snapshotText = finalizeSourceCandidates.find((item) => {
     const normalized = String(item ?? "").trim();
     return Boolean(normalized)
       && (
@@ -649,7 +706,7 @@ function prepareAssistantFloorSanitizedDataEvent(
         || /<rh-trigger\b/i.test(normalized)
         || /"type"\s*:\s*"trigger_pack"/i.test(normalized)
       );
-  }) || fallbackSnapshotText.trim();
+  }) || preferredFinalizeSourceText.trim();
   const latestSnapshotChanged = snapshotText
     ? rememberAssistantOriginalSourceTextEvent(
       target.msg,
@@ -839,26 +896,39 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
   let changedData = false;
   const rebuiltFloorKeys = new Set<string>();
 
+  if (args.reason === "generation_started") {
+    beginAssistantGenerationDraftEvent(args.reason, args.deps);
+    return {
+      changedData: false,
+      changedUi: false,
+      rebuiltFloorKeys: [],
+    };
+  }
+
   if (args.reason === "stream_snapshot") {
-    if (!context.message || context.index == null) {
+    const target = context.message && context.index != null
+      ? { msg: context.message, index: context.index }
+      : resolveAssistantEventTargetEvent(args.eventArgs ?? [], args.deps);
+    if (!target) {
       return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
     }
-    const target = { msg: context.message, index: context.index };
     const sessionKey = beginAssistantGenerationSessionEvent(target, args.reason, args.deps);
-    const changed = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
-      getHostOriginalSourceTextEvent: args.deps.getHostOriginalSourceTextEvent,
-      getPreferredAssistantSourceTextEvent: args.deps.getPreferredAssistantSourceTextEvent,
-      getMessageTextEvent: args.deps.getMessageTextEvent,
-      parseEventEnvelopesEvent: args.deps.parseEventEnvelopesEvent,
-    });
-    if (changed) {
-      args.deps.persistChatSafeEvent();
-      logger.info(`[内容处理] 已提前保留助手原文快照 source=${args.reason} session=${sessionKey}`);
+    const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+    const session = assistantGenerationSessionsEvent.get(runtimeKey);
+    const nextStreamText = args.eventArgs?.find((item) => typeof item === "string")
+      || args.deps.getMessageTextEvent(target.msg);
+    const normalizedStreamText = String(nextStreamText ?? "");
+    if (session && session.latestStreamText !== normalizedStreamText) {
+      session.latestStreamText = normalizedStreamText;
+      session.latestStreamUpdatedAt = Date.now();
+      session.targetIndex = target.index;
+      assistantGenerationSessionsEvent.set(runtimeKey, session);
+      logger.debug(`[内容处理] 已记录流式快照 phase=stream session=${sessionKey} length=${normalizedStreamText.length}`);
     }
     return {
-      changedData: changed,
+      changedData: false,
       changedUi: false,
-      rebuiltFloorKeys: context.floorKey ? [context.floorKey] : [],
+      rebuiltFloorKeys: [],
     };
   }
 
@@ -1927,6 +1997,13 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
       )
     )
   );
+  const generationStartedEvents = Array.from(
+    new Set(
+      [types.GENERATION_STARTED, "generation_started"].filter(
+        (item): item is string => typeof item === "string" && item.length > 0
+      )
+    )
+  );
 
   const messageReceivedEvents = Array.from(
     new Set(
@@ -1967,6 +2044,22 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
         deps.handlePromptReadyEvent(payload, eventName);
       } catch (error) {
         logger.error("Prompt hook 错误", error);
+      }
+    });
+  }
+
+  for (const eventName of generationStartedEvents) {
+    src.on(eventName, (...eventArgs: unknown[]) => {
+      try {
+        void rebuildAssistantFloorLifecycleEvent({
+          reason: "generation_started",
+          eventArgs,
+          deps,
+        }).catch((error) => {
+          logger.warn(`生成会话初始化异常 (${eventName})`, error);
+        });
+      } catch (error) {
+        logger.error("Generation started hook 错误", error);
       }
     });
   }
@@ -2029,6 +2122,7 @@ export function registerEventHooksEvent(deps: EventHooksDepsEvent): void {
     src.on(eventName, () => {
       try {
         assistantGenerationSessionsEvent.clear();
+        assistantGenerationSequenceEvent = 0;
         deps.resetRecentParseFailureLogsEvent();
         deps.clearDiceMetaEventState(eventName);
         void deps

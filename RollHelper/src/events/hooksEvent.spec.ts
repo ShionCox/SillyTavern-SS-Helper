@@ -22,7 +22,7 @@ vi.mock("./interactiveTriggersEvent", () => ({
   enhanceInteractiveTriggersInMessageEvent: mockedModules.enhanceInteractiveTriggersInMessageEvent,
 }));
 
-import { finalizeAssistantFloorDataEvent } from "./hooksEvent";
+import { finalizeAssistantFloorDataEvent, rebuildAssistantFloorLifecycleEvent } from "./hooksEvent";
 import { getPersistedAssistantOriginalSourceTextEvent } from "./messageSanitizerEvent";
 
 function createFakeDocument() {
@@ -81,6 +81,216 @@ function createFakeDocument() {
 }
 
 describe("finalizeAssistantFloorDataEvent", () => {
+  it("流式快照阶段不会触发解析链，只会缓存最新文本", async () => {
+    const streamText = `剧情正文里有奇怪的响声。\n\n\`\`\`rolljson
+{"type":"dice_events","version":"1","events":[{"id":"event-1"}]}
+\`\`\``;
+    const message = {
+      mes: "剧情正文里有奇怪的响声。",
+      extra: {},
+    };
+    const parseEventEnvelopesEvent = vi.fn(() => ({
+      events: [],
+      ranges: [],
+      shouldEndRound: false,
+    }));
+    const buildAssistantMessageIdEvent = vi.fn(() => "assistant:1:swipe_0:hash");
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      deps: {
+        getLiveContextEvent: () => ({ chat: [message] } as any),
+        eventSource: null,
+        event_types: {},
+        getSettingsEvent: () => ({
+          enabled: true,
+          eventApplyScope: "all",
+          enableAiRoundControl: false,
+          defaultBlindSkillsText: "调查",
+        }),
+        getDiceMetaEvent: () => ({ pendingRound: null } as any),
+        isAssistantMessageEvent: () => true,
+        buildAssistantMessageIdEvent,
+        buildAssistantFloorKeyEvent: () => "floor:1",
+        getStableAssistantOriginalSourceTextEvent: () => "",
+        getHostOriginalSourceTextEvent: () => "",
+        getPreferredAssistantSourceTextEvent: () => "",
+        getMessageTextEvent: () => message.mes,
+        parseEventEnvelopesEvent,
+        filterEventsByApplyScopeEvent: (events) => events as any,
+        removeRangesEvent: (text) => text,
+        setMessageTextEvent: (target, text) => {
+          (target as any).mes = text;
+        },
+        resetRecentParseFailureLogsEvent: vi.fn(),
+        extractPromptChatFromPayloadEvent: vi.fn(),
+        handlePromptReadyEvent: vi.fn(),
+        resetAssistantProcessedStateEvent: vi.fn(),
+        clearDiceMetaEventState: vi.fn(),
+        hideEventCodeBlocksInDomEvent: vi.fn(),
+        persistChatSafeEvent: vi.fn(),
+        mergeEventsIntoPendingRoundEvent: vi.fn(),
+        invalidatePendingRoundFloorEvent: vi.fn(() => false),
+        invalidateSummaryHistoryFloorEvent: vi.fn(() => false),
+        autoRollEventsByAiModeEvent: vi.fn(async () => []),
+        sweepTimeoutFailuresEvent: vi.fn(() => false),
+        refreshCountdownDomEvent: vi.fn(),
+        loadChatScopedStateIntoRuntimeEvent: vi.fn(async () => {}),
+        refreshAllWidgetsFromStateEvent: vi.fn(),
+        enhanceInteractiveTriggersInDomEvent: vi.fn(),
+        enhanceAssistantRawSourceButtonsEvent: vi.fn(),
+        saveMetadataSafeEvent: vi.fn(),
+      },
+    });
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "stream_snapshot",
+      eventArgs: [0, streamText],
+      deps: {
+        getLiveContextEvent: () => ({ chat: [message] } as any),
+        eventSource: null,
+        event_types: {},
+        getSettingsEvent: () => ({
+          enabled: true,
+          eventApplyScope: "all",
+          enableAiRoundControl: false,
+          defaultBlindSkillsText: "调查",
+        }),
+        getDiceMetaEvent: () => ({ pendingRound: null } as any),
+        isAssistantMessageEvent: () => true,
+        buildAssistantMessageIdEvent,
+        buildAssistantFloorKeyEvent: () => "floor:1",
+        getStableAssistantOriginalSourceTextEvent: () => "",
+        getHostOriginalSourceTextEvent: () => "",
+        getPreferredAssistantSourceTextEvent: () => "",
+        getMessageTextEvent: () => message.mes,
+        parseEventEnvelopesEvent,
+        filterEventsByApplyScopeEvent: (events) => events as any,
+        removeRangesEvent: (text) => text,
+        setMessageTextEvent: (target, text) => {
+          (target as any).mes = text;
+        },
+        resetRecentParseFailureLogsEvent: vi.fn(),
+        extractPromptChatFromPayloadEvent: vi.fn(),
+        handlePromptReadyEvent: vi.fn(),
+        resetAssistantProcessedStateEvent: vi.fn(),
+        clearDiceMetaEventState: vi.fn(),
+        hideEventCodeBlocksInDomEvent: vi.fn(),
+        persistChatSafeEvent: vi.fn(),
+        mergeEventsIntoPendingRoundEvent: vi.fn(),
+        invalidatePendingRoundFloorEvent: vi.fn(() => false),
+        invalidateSummaryHistoryFloorEvent: vi.fn(() => false),
+        autoRollEventsByAiModeEvent: vi.fn(async () => []),
+        sweepTimeoutFailuresEvent: vi.fn(() => false),
+        refreshCountdownDomEvent: vi.fn(),
+        loadChatScopedStateIntoRuntimeEvent: vi.fn(async () => {}),
+        refreshAllWidgetsFromStateEvent: vi.fn(),
+        enhanceInteractiveTriggersInDomEvent: vi.fn(),
+        enhanceAssistantRawSourceButtonsEvent: vi.fn(),
+        saveMetadataSafeEvent: vi.fn(),
+      },
+    });
+
+    expect(parseEventEnvelopesEvent).not.toHaveBeenCalled();
+    expect(buildAssistantMessageIdEvent).not.toHaveBeenCalled();
+    expect(String(message.mes)).toBe("剧情正文里有奇怪的响声。");
+  });
+
+  it("finalize 会回退到流式缓存作为源文本并完成清理", async () => {
+    const streamText = `剧情正文里有奇怪的响声。\n\n\`\`\`rolljson
+{"type":"dice_events","version":"1","events":[{"id":"event-1","skill":"调查","targetName":"奇怪的响声"}]}
+\`\`\``;
+    const message = {
+      mes: "",
+      extra: {},
+    };
+    const meta = {
+      pendingRound: {
+        roundId: "round-1",
+        status: "open",
+        events: [],
+        rolls: [],
+      },
+    };
+    (globalThis as any).document = {
+      getElementById: () => null,
+    };
+
+    const deps = {
+      getLiveContextEvent: () => ({ chat: [message] } as any),
+      eventSource: null,
+      event_types: {},
+      getSettingsEvent: () => ({
+        enabled: true,
+        eventApplyScope: "all",
+        enableAiRoundControl: false,
+        defaultBlindSkillsText: "调查",
+      }),
+      getDiceMetaEvent: () => meta as any,
+      isAssistantMessageEvent: () => true,
+      buildAssistantMessageIdEvent: () => "assistant:1:swipe_0:hash",
+      buildAssistantFloorKeyEvent: () => "floor:1",
+      getStableAssistantOriginalSourceTextEvent: () => "",
+      getHostOriginalSourceTextEvent: () => "",
+      getPreferredAssistantSourceTextEvent: () => "",
+      getMessageTextEvent: (target: any) => String(target?.mes ?? ""),
+      parseEventEnvelopesEvent: (text: string) => {
+        const start = text.indexOf("```rolljson");
+        const end = text.indexOf("```", start + 3);
+        return {
+          events: text.includes('"id":"event-1"') ? [{ id: "event-1", skill: "调查", targetName: "奇怪的响声" }] : [],
+          ranges: start >= 0 && end >= 0 ? [{ start, end: end + 3 }] : [],
+          shouldEndRound: false,
+        };
+      },
+      filterEventsByApplyScopeEvent: (events: any) => events,
+      removeRangesEvent: (text: string, ranges: Array<{ start: number; end: number }>) => {
+        const [range] = ranges;
+        return `${text.slice(0, range.start)}${text.slice(range.end)}`.replace(/\n{3,}/g, "\n\n").trim();
+      },
+      setMessageTextEvent: (target: any, text: string) => {
+        target.mes = text;
+      },
+      resetRecentParseFailureLogsEvent: vi.fn(),
+      extractPromptChatFromPayloadEvent: vi.fn(),
+      handlePromptReadyEvent: vi.fn(),
+      resetAssistantProcessedStateEvent: vi.fn(),
+      clearDiceMetaEventState: vi.fn(),
+      hideEventCodeBlocksInDomEvent: vi.fn(),
+      persistChatSafeEvent: vi.fn(),
+      mergeEventsIntoPendingRoundEvent: vi.fn(() => meta.pendingRound),
+      invalidatePendingRoundFloorEvent: vi.fn(() => false),
+      invalidateSummaryHistoryFloorEvent: vi.fn(() => false),
+      autoRollEventsByAiModeEvent: vi.fn(async () => ["event-1"]),
+      sweepTimeoutFailuresEvent: vi.fn(() => false),
+      refreshCountdownDomEvent: vi.fn(),
+      loadChatScopedStateIntoRuntimeEvent: vi.fn(async () => {}),
+      refreshAllWidgetsFromStateEvent: vi.fn(),
+      enhanceInteractiveTriggersInDomEvent: vi.fn(),
+      enhanceAssistantRawSourceButtonsEvent: vi.fn(),
+      saveMetadataSafeEvent: vi.fn(),
+    };
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      deps,
+    });
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "stream_snapshot",
+      eventArgs: [0, streamText],
+      deps,
+    });
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "message_received_finalize",
+      eventArgs: [0],
+      deps,
+    });
+
+    expect(String(message.mes)).toBe("剧情正文里有奇怪的响声。");
+    expect(deps.mergeEventsIntoPendingRoundEvent).toHaveBeenCalledOnce();
+    expect(deps.autoRollEventsByAiModeEvent).toHaveBeenCalledOnce();
+  });
+
   it("会在 autoRoll 前先同步当前消息 DOM 为干净正文", async () => {
     const sourceText = `剧情正文里有<rh-trigger action="调查" skill="调查" blind="1" sourceId="weird_sound">奇怪的响声</rh-trigger>。\n\n\`\`\`rolljson
 {"type":"dice_events","version":"1","events":[{"id":"event-1","skill":"调查","targetName":"奇怪的响声"}]}
