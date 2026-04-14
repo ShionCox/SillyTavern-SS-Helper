@@ -161,32 +161,17 @@ function ensureStyle(): void {
   document.head.appendChild(style);
 }
 
-function findScopedHost(hostElement: HTMLElement): HTMLDivElement | null {
-  return Array.from(hostElement.children).find(
-    (child): child is HTMLDivElement =>
-      child instanceof HTMLDivElement &&
-      child.classList.contains('stx-shared-dialog-host') &&
-      child.dataset.stxDialogHostScope === 'local',
-  ) ?? null;
-}
-
 function ensureHost(state: SharedDialogState, hostElement?: HTMLElement | null): HTMLDivElement {
   ensureStyle();
-  if (hostElement instanceof HTMLElement) {
-    const scopedHost = findScopedHost(hostElement) ?? document.createElement('div');
-    if (!scopedHost.isConnected) {
-      scopedHost.className = 'stx-shared-dialog-host';
-      scopedHost.dataset.stxDialogHostScope = 'local';
-      hostElement.appendChild(scopedHost);
-    }
-    mountThemeHost(scopedHost);
-    return scopedHost;
-  }
+  void hostElement;
   let host = document.getElementById(SHARED_DIALOG_HOST_ID) as HTMLDivElement | null;
   if (!host) {
     host = document.createElement('div');
     host.id = SHARED_DIALOG_HOST_ID;
     host.className = 'stx-shared-dialog-host';
+    document.body.appendChild(host);
+  }
+  if (host.parentElement !== document.body) {
     document.body.appendChild(host);
   }
   mountThemeHost(host);

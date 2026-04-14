@@ -395,6 +395,20 @@ export function playRollAnimation(status: DiceBoxRollStatus): Promise<void> {
 }
 
 /**
+ * 功能：在不展示成功失败结果文案的前提下，安全结束当前 3D 骰子展示并隐藏画布。
+ * @returns 动画收尾结束后的 Promise。
+ */
+export async function hideDiceBoxPresentationEvent(): Promise<void> {
+  injectDiceBoxCss();
+  const box = await initDiceBox();
+  box.hide(DICE_CANVAS_HIDE_CLASS);
+  startHideDiceCanvasEvent();
+  await delayEvent(DICE_CANVAS_FADE_DURATION_MS);
+  forceHideDiceCanvasEvent();
+  focusedDice = [];
+}
+
+/**
  * 功能：仅展示 3D 骰子的聚焦收尾，不叠加成功失败文案。
  * @returns 动画结束后的 Promise。
  */

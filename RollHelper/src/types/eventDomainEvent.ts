@@ -171,6 +171,8 @@ export interface ActiveStatusEvent {
   createdAt: number;
   updatedAt: number;
   source?: "ai_tag" | "manual_editor";
+  sourceAssistantMsgId?: string;
+  sourceFloorKey?: string;
 }
 
 export interface SkillPresetEvent {
@@ -251,11 +253,13 @@ export interface EventRollRecordEvent {
 
 export interface PendingRoundEvent {
   roundId: string;
+  instanceToken: string;
   status: "open" | "closed";
   events: DiceEventSpecEvent[];
   rolls: EventRollRecordEvent[];
   eventTimers: Record<string, EventTimerStateEvent>;
   sourceAssistantMsgIds: string[];
+  sourceFloorKey?: string;
   openedAt: number;
 }
 

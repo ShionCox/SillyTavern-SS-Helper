@@ -172,6 +172,8 @@ export function normalizeActiveStatusEvent(raw: any, now = Date.now()): ActiveSt
   const updatedAt = Number.isFinite(updatedAtRaw) ? updatedAtRaw : createdAt;
   const sourceRaw = normalizeStringEvent((raw as any).source);
   const source = sourceRaw === "manual_editor" || sourceRaw === "ai_tag" ? sourceRaw : undefined;
+  const sourceAssistantMsgId = normalizeStringEvent((raw as any).sourceAssistantMsgId) || undefined;
+  const sourceFloorKey = normalizeStringEvent((raw as any).sourceFloorKey) || undefined;
 
   if (!name || !Number.isFinite(modifier)) return null;
   if (scope === "skills" && skills.length <= 0) return null;
@@ -186,6 +188,8 @@ export function normalizeActiveStatusEvent(raw: any, now = Date.now()): ActiveSt
     createdAt,
     updatedAt,
     source,
+    sourceAssistantMsgId,
+    sourceFloorKey,
   };
 }
 
@@ -220,7 +224,11 @@ export function applyStatusCommandsToMetaEvent(
   meta: DiceMetaEvent,
   commands: ParsedStatusCommandEvent[],
   source: "ai_tag" | "manual_editor",
-  now = Date.now()
+  now = Date.now(),
+  origin?: {
+    sourceAssistantMsgId?: string;
+    sourceFloorKey?: string;
+  }
 ): boolean {
   if (!Array.isArray(commands) || commands.length <= 0) return false;
   const statuses = ensureActiveStatusesEvent(meta);
@@ -259,6 +267,8 @@ export function applyStatusCommandsToMetaEvent(
         createdAt: previous?.createdAt ?? now,
         updatedAt: now,
         source,
+        sourceAssistantMsgId: origin?.sourceAssistantMsgId,
+        sourceFloorKey: origin?.sourceFloorKey,
       };
       if (idx >= 0) {
         statuses[idx] = next;

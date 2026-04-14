@@ -23,7 +23,6 @@ const SELECTION_FALLBACK_TRIED_KEYS_LIMIT_Event = 120;
 const SELECTION_FALLBACK_MULTI_SPACE_REGEX_Event = /\s{2,}/;
 const SELECTION_FALLBACK_SENTENCE_END_REGEX_Event = /[。！？；!?;]+[”’」』】》）)]*/g;
 const SELECTION_FALLBACK_NOISE_ONLY_REGEX_Event = /^[\s"'“”‘’`~!@#$%^&*()\-_=+\[\]{}\\|;:,.<>/?，。！？；：、…（）【】《》「」『』]+$/;
-
 type ResolvedTriggerStateEvent = {
   resolved: boolean;
   statusLabel: string;
@@ -287,7 +286,7 @@ function buildTriggerMarkupEvent(payload: InteractiveTriggerEvent, resolvedState
     ? String(Math.max(0, Math.floor(Number(payload.occurrenceIndex))))
     : "0"}" data-resolved="${resolvedState.resolved ? "1" : "0"}" data-resolved-label="${escapeHtmlEvent(
     resolvedState.statusLabel
-  )}" data-resolved-visibility="${escapeHtmlEvent(resolvedState.visibility)}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}> <i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
+  )}" data-resolved-visibility="${escapeHtmlEvent(resolvedState.visibility)}"${hoverEnabled ? ` data-tip="${escapeHtmlAttributeEvent(tooltip)}" data-tip-html="true"` : ""}><i class="fa-solid fa-dice-d20 st-rh-inline-trigger-icon" aria-hidden="true"></i>${escapeHtmlEvent(payload.label)}</span>`;
 }
 
 function resolveMessageContainerIdEvent(node: HTMLElement): string {
@@ -301,6 +300,20 @@ function resolveMessageContainerIdEvent(node: HTMLElement): string {
     carrier?.getAttribute("data-mesid") ||
     "";
   return normalizeInlineTextEvent(raw);
+}
+
+function resolveTriggerNodeFromEventTargetEvent(target: EventTarget | null): HTMLElement | null {
+  if (!target) return null;
+  const directClosest = (target as { closest?: (selector: string) => Element | null })?.closest;
+  if (typeof directClosest === "function") {
+    return directClosest.call(target, ".st-rh-inline-trigger") as HTMLElement | null;
+  }
+  const parentElement = (target as { parentElement?: HTMLElement | null })?.parentElement ?? null;
+  const parentClosest = (parentElement as { closest?: (selector: string) => Element | null } | null)?.closest;
+  if (typeof parentClosest === "function") {
+    return parentClosest.call(parentElement, ".st-rh-inline-trigger") as HTMLElement | null;
+  }
+  return null;
 }
 
 function resolveMessageRecordEvent(
@@ -913,7 +926,10 @@ function enhanceMessageNodeEvent(
   const currentText = normalizeTextEvent(node.textContent);
   const nextSignature = buildTriggerSignatureEvent(currentText, triggers, meta);
   const currentSignature = node.getAttribute(TRIGGER_SIGNATURE_ATTR_Event) || "";
-  if (currentSignature === nextSignature && node.querySelectorAll(".st-rh-inline-trigger").length === triggers.length) {
+  const currentInlineCount = node.querySelectorAll(".st-rh-inline-trigger").length;
+  const currentRanges = buildRenderableTriggerRangesEvent(currentText, triggers);
+  const expectedInlineCount = currentRanges.length;
+  if (currentSignature === nextSignature && currentInlineCount === expectedInlineCount) {
     return changed;
   }
 
@@ -1070,7 +1086,9 @@ export async function executeInteractiveTriggerEvent(
 ): Promise<void> {
   try {
     const result = await deps.performInteractiveTriggerRollEvent(trigger);
-    deps.appendToConsoleEvent(buildInteractiveTriggerFeedbackCardHtmlEvent(trigger, result), "card");
+    if (result.feedback.visibility !== "blind") {
+      deps.appendToConsoleEvent(buildInteractiveTriggerFeedbackCardHtmlEvent(trigger, result), "card");
+    }
     deps.persistChatSafeEvent?.();
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 0);
     setTimeout(() => deps.refreshInteractiveTriggersInDomEvent?.(), 120);
@@ -1474,8 +1492,7 @@ export function bindInteractiveTriggerDomEventsEvent(
     (event) => {
       const settings = deps.getSettingsEvent();
       if (!settings.enableInteractiveTriggers) return;
-      const target = event.target as HTMLElement | null;
-      const triggerNode = target?.closest(".st-rh-inline-trigger") as HTMLElement | null;
+      const triggerNode = resolveTriggerNodeFromEventTargetEvent(event.target);
       if (!triggerNode) return;
       event.preventDefault();
       event.stopPropagation();

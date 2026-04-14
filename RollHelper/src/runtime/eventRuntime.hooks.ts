@@ -175,7 +175,10 @@ function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
  * @returns 需要继续重试时返回 `true`，否则返回 `false`。
  */
 function shouldRetryInitialWidgetRestoreEvent(result: RefreshAllWidgetsResultEvent): boolean {
-  return result.hasPendingRound && !result.pendingRoundMounted;
+  return (
+    (result.hasPendingRound && !result.pendingRoundMounted)
+    || (result.hasHistoryWidgets && !result.historyWidgetsMounted)
+  );
 }
 
 /**

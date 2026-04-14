@@ -31,6 +31,8 @@ export interface RefreshAllWidgetsResultEvent {
   mountedWidgetCount: number;
   hasPendingRound: boolean;
   pendingRoundMounted: boolean;
+  hasHistoryWidgets: boolean;
+  historyWidgetsMounted: boolean;
   chatDomReady: boolean;
 }
 
@@ -341,8 +343,9 @@ function mountHistoryRoundWidgetsEvent(
   snapshot: RoundSummarySnapshotEvent,
   chat: TavernMessageEvent[],
   deps: AnchorDepsEvent
-): number {
+): { mountedCount: number; hasRestorableWidgets: boolean } {
   let mountedCount = 0;
+  let hasRestorableWidgets = false;
 
   const floorBuckets = new Map<string, Array<{ event: DiceEventSpecEvent; record: EventRollRecordEvent }>>();
 
@@ -353,6 +356,7 @@ function mountHistoryRoundWidgetsEvent(
     const rebuilt = rebuildEventAndRecordFromSnapshotEvent(item, snapshot.roundId);
     if (!rebuilt) continue;
     if (isBlindResultRecordEvent(rebuilt.record)) continue;
+    hasRestorableWidgets = true;
 
     const msgId = item.sourceAssistantMsgId;
     let bucket = floorBuckets.get(msgId);
@@ -367,7 +371,10 @@ function mountHistoryRoundWidgetsEvent(
     if (items.length <= 0) continue;
 
     const mesElement = findMesElementByMsgIdEvent(msgId, chat);
-    if (!mesElement) continue;
+    if (!mesElement) {
+      logger.warn(`[卡片恢复] 未找到历史结果锚点 roundId=${snapshot.roundId} sourceMsgId=${msgId}`);
+      continue;
+    }
 
     const cards: string[] = [];
     for (const { event, record } of items) {
@@ -380,7 +387,10 @@ function mountHistoryRoundWidgetsEvent(
     }
   }
 
-  return mountedCount;
+  return {
+    mountedCount,
+    hasRestorableWidgets,
+  };
 }
 
 /**
@@ -417,6 +427,8 @@ export function refreshAllWidgetsFromStateEvent(
     mountedWidgetCount: 0,
     hasPendingRound: false,
     pendingRoundMounted: false,
+    hasHistoryWidgets: false,
+    historyWidgetsMounted: false,
     chatDomReady: !!document.getElementById("chat"),
   };
 
@@ -452,8 +464,14 @@ export function refreshAllWidgetsFromStateEvent(
   if (Array.isArray(meta.summaryHistory)) {
     for (const snapshot of meta.summaryHistory) {
       if (!snapshot.events || snapshot.events.length <= 0) continue;
-      const historyMounted = mountHistoryRoundWidgetsEvent(snapshot, chat, deps);
-      result.mountedWidgetCount += historyMounted;
+      const historyResult = mountHistoryRoundWidgetsEvent(snapshot, chat, deps);
+      if (historyResult.hasRestorableWidgets) {
+        result.hasHistoryWidgets = true;
+      }
+      if (historyResult.mountedCount > 0) {
+        result.historyWidgetsMounted = true;
+      }
+      result.mountedWidgetCount += historyResult.mountedCount;
     }
   }
 

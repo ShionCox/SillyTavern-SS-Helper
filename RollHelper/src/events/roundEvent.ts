@@ -1,5 +1,6 @@
 import type { DiceOptions, DiceResult } from "../types/diceEvent";
 import type {
+  ActiveStatusEvent,
   AdvantageStateEvent,
   BlindGuidanceStateEvent,
   BlindHistoryItemEvent,
@@ -483,6 +484,22 @@ async function playRollResultAnimationEvent(status: RollVisualStatusEvent): Prom
     await playRollAnimation(status);
   } catch (error) {
     logger.warn("检定结果样式弹出失败，已继续完成检定", error);
+  }
+}
+
+/**
+ * 功能：在轮次实例失效时，仅执行 3D 骰子的隐藏收尾，避免旧骰盒停留在界面上。
+ * @param result 当前刚完成掷骰的结果。
+ * @returns 无返回值。
+ */
+async function cleanupStale3DRollPresentationEvent(result: DiceResult): Promise<void> {
+  if (typeof document === "undefined") return;
+  try {
+    if (result.sourceEngine !== "dice_box") return;
+    const { hideDiceBoxPresentationEvent } = await import("../core/diceBox");
+    await hideDiceBoxPresentationEvent();
+  } catch (error) {
+    logger.warn("旧轮次 3D 骰子收尾失败，已继续中止旧结果回写", error);
   }
 }
 
@@ -1034,7 +1051,38 @@ function applyOutcomeStatusEffectsFromRecordEvent(
   const rawOutcomeText = resolveRawOutcomeTextEvent(event, record, settings);
   if (!rawOutcomeText) return false;
   const resolved = extractStatusCommandsAndCleanTextEvent(rawOutcomeText, event.skill || "");
-  return applyStatusCommandsToMetaEvent(meta, resolved.commands, "ai_tag");
+  const sourceAssistantMsgId = String(record.sourceAssistantMsgId || event.sourceAssistantMsgId || "").trim() || undefined;
+  return applyStatusCommandsToMetaEvent(
+    meta,
+    resolved.commands,
+    "ai_tag",
+    Date.now(),
+    {
+      sourceAssistantMsgId,
+      sourceFloorKey: sourceAssistantMsgId ? buildAssistantFloorKeyEvent(sourceAssistantMsgId) || undefined : undefined,
+    }
+  );
+}
+
+/**
+ * 功能：判断某个生效状态是否来源于指定助手楼层。
+ * @param status 当前生效状态。
+ * @param assistantMsgId 需要失效的助手消息标识。
+ * @returns boolean：来源匹配时返回 true。
+ */
+function isActiveStatusFromAssistantFloorEvent(
+  status: ActiveStatusEvent,
+  assistantMsgId: string
+): boolean {
+  if (!status) return false;
+  const sourceAssistantMsgId = String(status.sourceAssistantMsgId ?? "").trim();
+  if (sourceAssistantMsgId) {
+    return isSameAssistantFloorEvent(sourceAssistantMsgId, assistantMsgId);
+  }
+  const sourceFloorKey = String(status.sourceFloorKey ?? "").trim();
+  if (!sourceFloorKey) return false;
+  const assistantFloorKey = buildAssistantFloorKeyEvent(assistantMsgId);
+  return Boolean(assistantFloorKey) && sourceFloorKey === assistantFloorKey;
 }
 
 export function ensureEventTimerIndexEvent(round: PendingRoundEvent): Record<string, EventTimerStateEvent> {
@@ -1106,6 +1154,12 @@ export function invalidatePendingRoundFloorEvent(
   const meta = deps.getDiceMetaEvent();
   const round = meta.pendingRound;
   const now = Date.now();
+  const statuses = ensureActiveStatusesEvent(meta);
+  const nextStatuses = statuses.filter((item) => !isActiveStatusFromAssistantFloorEvent(item, assistantMsgId));
+  const statusesChanged = nextStatuses.length !== statuses.length;
+  if (statusesChanged) {
+    meta.activeStatuses = nextStatuses;
+  }
   const history = ensureBlindHistoryEvent(meta);
   let historyChanged = false;
   for (let index = 0; index < history.length; index += 1) {
@@ -1122,10 +1176,10 @@ export function invalidatePendingRoundFloorEvent(
     historyChanged = true;
   }
   if (!round) {
-    if (historyChanged) {
+    if (historyChanged || statusesChanged) {
       deps.saveMetadataSafeEvent();
     }
-    return historyChanged;
+    return historyChanged || statusesChanged;
   }
 
   const removedEventIds = new Set<string>();
@@ -1180,15 +1234,23 @@ export function invalidatePendingRoundFloorEvent(
     || timerChanged
     || JSON.stringify(nextBlindQueue) !== JSON.stringify(blindQueue)
     || nextResultGuidanceQueue.length !== resultGuidanceQueue.length
-    || historyChanged;
+    || historyChanged
+    || statusesChanged;
 
   if (!changed) return false;
 
   round.events = nextEvents;
   round.rolls = nextRolls;
   round.sourceAssistantMsgIds = nextSourceAssistantMsgIds;
+  round.sourceFloorKey =
+    nextSourceAssistantMsgIds.length > 0
+      ? buildAssistantFloorKeyEvent(nextSourceAssistantMsgIds[nextSourceAssistantMsgIds.length - 1]) || undefined
+      : undefined;
   meta.pendingBlindGuidanceQueue = nextBlindQueue;
   meta.pendingResultGuidanceQueue = nextResultGuidanceQueue;
+  if (isPendingRoundEmptyEvent(round)) {
+    meta.pendingRound = undefined;
+  }
   deps.saveMetadataSafeEvent();
   return true;
 }
@@ -1347,22 +1409,77 @@ export interface EnsureOpenPendingRoundDepsEvent {
   now?: () => number;
 }
 
-export function ensureOpenPendingRoundEvent(meta: DiceMetaEvent, deps: EnsureOpenPendingRoundDepsEvent): PendingRoundEvent {
-  const status = (meta.pendingRound as any)?.status;
+/**
+ * 功能：创建新的未归档轮次实例，并附带并发失效保护所需的内部标识。
+ * @param deps 创建轮次所需的时间与 ID 依赖。
+ * @param sourceFloorKey 当前轮次绑定的楼层键。
+ * @returns PendingRoundEvent：全新的未归档轮次实例。
+ */
+function createPendingRoundInstanceEvent(
+  deps: EnsureOpenPendingRoundDepsEvent,
+  sourceFloorKey?: string
+): PendingRoundEvent {
   const currentNow = deps.now ? deps.now() : Date.now();
+  return {
+    roundId: deps.createIdEvent("round"),
+    instanceToken: deps.createIdEvent("rinst"),
+    status: "open",
+    events: [],
+    rolls: [],
+    eventTimers: {},
+    sourceAssistantMsgIds: [],
+    sourceFloorKey,
+    openedAt: currentNow,
+  };
+}
+
+/**
+ * 功能：判断未归档轮次是否已经清空到可以直接移除。
+ * @param round 当前未归档轮次。
+ * @returns boolean：当事件、结果与来源都为空时返回 true。
+ */
+function isPendingRoundEmptyEvent(round: PendingRoundEvent | null | undefined): boolean {
+  if (!round) return true;
+  return (
+    (!Array.isArray(round.events) || round.events.length <= 0)
+    && (!Array.isArray(round.rolls) || round.rolls.length <= 0)
+    && (!Array.isArray(round.sourceAssistantMsgIds) || round.sourceAssistantMsgIds.length <= 0)
+  );
+}
+
+/**
+ * 功能：判断当前元数据里的未归档轮次是否仍然是指定的有效实例。
+ * @param meta 当前骰子元数据。
+ * @param expectedRoundId 期望的轮次 ID。
+ * @param expectedInstanceToken 期望的实例令牌。
+ * @param expectedFloorKey 期望的楼层键。
+ * @returns boolean：仍为同一有效实例时返回 true。
+ */
+function isPendingRoundInstanceActiveEvent(
+  meta: DiceMetaEvent,
+  expectedRoundId: string,
+  expectedInstanceToken: string,
+  expectedFloorKey?: string
+): boolean {
+  const current = meta.pendingRound;
+  if (!current || current.status !== "open") return false;
+  if (current.roundId !== expectedRoundId) return false;
+  if (String(current.instanceToken ?? "").trim() !== expectedInstanceToken) return false;
+  const normalizedExpectedFloorKey = String(expectedFloorKey ?? "").trim();
+  if (!normalizedExpectedFloorKey) return true;
+  return String(current.sourceFloorKey ?? "").trim() === normalizedExpectedFloorKey;
+}
+
+export function ensureOpenPendingRoundEvent(meta: DiceMetaEvent, deps: EnsureOpenPendingRoundDepsEvent): PendingRoundEvent {
+  const status = meta.pendingRound?.status;
   if (!meta.pendingRound || status !== "open") {
-    meta.pendingRound = {
-      roundId: deps.createIdEvent("round"),
-      status: "open",
-      events: [],
-      rolls: [],
-      eventTimers: {},
-      sourceAssistantMsgIds: [],
-      openedAt: currentNow,
-    };
+    meta.pendingRound = createPendingRoundInstanceEvent(deps);
   }
   if (!meta.pendingRound.eventTimers || typeof meta.pendingRound.eventTimers !== "object") {
     meta.pendingRound.eventTimers = {};
+  }
+  if (!String(meta.pendingRound.instanceToken ?? "").trim()) {
+    meta.pendingRound.instanceToken = deps.createIdEvent("rinst");
   }
   return meta.pendingRound;
 }
@@ -1390,11 +1507,12 @@ export function mergeEventsIntoPendingRoundEvent(
   if (previousRound && previousRound.status !== "open") {
     decayStatusesForNewRoundEvent(meta);
   }
-  const round = ensureOpenPendingRoundEvent(meta, { createIdEvent: deps.createIdEvent });
+  const sourceFloorKey = buildAssistantFloorKeyEvent(assistantMsgId) || undefined;
+  const round = createPendingRoundInstanceEvent({ createIdEvent: deps.createIdEvent }, sourceFloorKey);
+  meta.pendingRound = round;
   const now = Date.now();
   const timers = ensureEventTimerIndexEvent(round);
   const merged = new Map<string, DiceEventSpecEvent>();
-  for (const event of round.events) merged.set(event.id, { ...event });
 
   for (const incomingRaw of events) {
     const incoming = { ...incomingRaw };
@@ -1442,7 +1560,8 @@ export function mergeEventsIntoPendingRoundEvent(
     resolveEventTargetEvent: deps.resolveEventTargetEvent,
     resolveEventTimeLimitByUrgencyEvent: deps.resolveEventTimeLimitByUrgencyEvent,
   });
-  if (!round.sourceAssistantMsgIds.includes(assistantMsgId)) round.sourceAssistantMsgIds.push(assistantMsgId);
+  round.sourceAssistantMsgIds = [assistantMsgId];
+  round.sourceFloorKey = sourceFloorKey;
   deps.saveMetadataSafeEvent();
   return round;
 }
@@ -2212,6 +2331,9 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
 
   deps.ensureRoundEventTimersSyncedEvent(round);
   const meta = deps.getDiceMetaEvent();
+  const expectedRoundId = round.roundId;
+  const expectedInstanceToken = String(round.instanceToken ?? "").trim();
+  const expectedFloorKey = String(round.sourceFloorKey ?? "").trim() || undefined;
   let changed = false;
   let lastResult: DiceResult | null = null;
   const resultCards: string[] = [];
@@ -2221,15 +2343,46 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
       (item.explodePolicyApplied === "enabled" || String(item.diceExpr || "").includes("!"))
   ).length;
 
+  /**
+   * 功能：在自动掷骰异步链路的关键节点确认当前轮次实例仍然有效。
+   * @param stage 当前校验阶段名称。
+   * @param eventId 当前事件 ID。
+   * @returns boolean：仍可继续写入时返回 true。
+   */
+  const assertRoundStillActiveEvent = (stage: string, eventId: string): boolean => {
+    const latestMeta = deps.getDiceMetaEvent();
+    const active = isPendingRoundInstanceActiveEvent(
+      latestMeta,
+      expectedRoundId,
+      expectedInstanceToken,
+      expectedFloorKey
+    );
+    if (!active) {
+      logger.info(
+        `[自动掷骰] 检测到轮次实例已失效，停止回写 stage=${stage} round=${expectedRoundId} event=${eventId} instance=${expectedInstanceToken || "none"} floor=${expectedFloorKey || "none"}`
+      );
+    }
+    return active;
+  };
+
   for (const event of round.events) {
+    if (!assertRoundStillActiveEvent("before_event", event.id)) {
+      return [];
+    }
     const mode: EventRollModeEvent = event.rollMode === "auto" ? "auto" : "manual";
-    if (mode !== "auto") continue;
+    if (mode !== "auto") {
+      continue;
+    }
 
     const existingRecord = deps.getLatestRollRecordForEvent(round, event.id);
-    if (existingRecord) continue;
+    if (existingRecord) {
+      continue;
+    }
 
     const exprRaw = String(event.checkDice || "").trim();
-    if (!exprRaw) continue;
+    if (!exprRaw) {
+      continue;
+    }
     const requestedExplode = exprRaw.includes("!");
     let explodePolicyApplied: EventRollRecordEvent["explodePolicyApplied"] = "not_requested";
     let explodePolicyReason = "未请求爆骰。";
@@ -2267,6 +2420,10 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
       logger.warn(`AI 自动掷骰失败: event=${event.id}`, error);
       continue;
     }
+    if (!assertRoundStillActiveEvent("after_roll", event.id)) {
+      await cleanupStale3DRollPresentationEvent(result);
+      return [];
+    }
 
     const skillModifierApplied = deps.resolveSkillModifierBySkillNameEvent(event.skill, settings);
     const adjusted = deps.applySkillModifierToDiceResultEvent(result, skillModifierApplied);
@@ -2280,7 +2437,14 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
     const success = deps.evaluateSuccessEvent(result.total, compareUsed, dcUsed);
     const grade = evaluateResultGradeEvent(result, success, compareUsed, dcUsed, "ai_auto_roll");
     if (shouldPlay3DRollAnimationEvent(settings, result)) {
+      if (!assertRoundStillActiveEvent("before_animation", event.id)) {
+        await cleanupStale3DRollPresentationEvent(result);
+        return [];
+      }
       await playRollResultAnimationEvent(resolveRollVisualStatusFromGradeEvent(grade.resultGrade));
+      if (!assertRoundStillActiveEvent("after_animation", event.id)) {
+        return [];
+      }
     }
 
     const record: EventRollRecordEvent = {
@@ -2312,6 +2476,9 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
       explodePolicyReason,
       sourceAssistantMsgId: event.sourceAssistantMsgId,
     };
+    if (!assertRoundStillActiveEvent("before_commit", event.id)) {
+      return [];
+    }
 
     round.rolls.push(record);
     if (settings.enableDynamicResultGuidance) {
@@ -2320,10 +2487,15 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
     applyOutcomeStatusEffectsFromRecordEvent(meta, event, record, settings);
     changed = true;
     lastResult = result;
-    resultCards.push(deps.buildEventRollResultCardEvent(event, record));
+    if (record.visibility !== "blind" && record.source !== "blind_manual_roll") {
+      resultCards.push(deps.buildEventRollResultCardEvent(event, record));
+    }
   }
 
   if (!changed) return [];
+  if (!assertRoundStillActiveEvent("before_finalize", "all")) {
+    return [];
+  }
   if (lastResult) {
     deps.saveLastRoll(lastResult);
   }

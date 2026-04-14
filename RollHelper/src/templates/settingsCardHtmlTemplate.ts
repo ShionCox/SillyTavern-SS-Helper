@@ -472,7 +472,7 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <dialog id="${ids.skillModalId}" class="st-roll-skill-modal">
+          <div id="${ids.skillModalId}" class="st-roll-skill-modal" hidden aria-hidden="true">
             <div class="st-roll-skill-modal-backdrop" data-skill-modal-role="backdrop"></div>
             <div class="st-roll-skill-modal-panel">
               <div class="st-roll-skill-modal-head">
@@ -716,7 +716,7 @@ export function buildSettingsCardHtmlTemplateEvent(
                 </div>
               </div>
             </div>
-          </dialog>
+          </div>
         </div>
 
         <div id="${ids.panelRuleId}" class="st-roll-panel" hidden>

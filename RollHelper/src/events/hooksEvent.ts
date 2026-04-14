@@ -33,6 +33,7 @@ import { getSelectionFallbackRemainingSummaryEvent } from "./interactiveTriggers
 
 const RH_COPY_SOURCE_BUTTON_ATTR_Event = "data-rh-copy-source";
 const RH_COPY_SOURCE_BUTTON_STYLE_ID_Event = "st-rh-copy-source-style";
+type AssistantFloorSourcePolicyEvent = "finalize" | "reconcile";
 
 function collectAssistantSourceCandidatesForHooksEvent(
   message: TavernMessageEvent,
@@ -45,11 +46,31 @@ function collectAssistantSourceCandidatesForHooksEvent(
   >
 ): string[] {
   return [
-    deps.getStableAssistantOriginalSourceTextEvent(message),
-    deps.getHostOriginalSourceTextEvent(message),
     deps.getPreferredAssistantSourceTextEvent(message),
     deps.getMessageTextEvent(message),
+    deps.getStableAssistantOriginalSourceTextEvent(message),
+    deps.getHostOriginalSourceTextEvent(message),
   ].filter((item, index, array) => item && array.indexOf(item) === index);
+}
+
+/**
+ * 功能：判断当前文本是否像是尚未输出完整的事件控制块，避免在流式阶段反复触发 JSON 修复与告警。
+ * @param text 候选文本。
+ * @returns boolean：疑似半截控制块时返回 true。
+ */
+function looksLikeIncompleteAssistantControlBlockEvent(text: string): boolean {
+  const normalized = String(text ?? "");
+  if (!normalized.trim()) return false;
+  const hasDiceEventsHead =
+    /"type"\s*:\s*"dice_events"/i.test(normalized)
+    || /```(?:rolljson|json)\b/i.test(normalized)
+    || /<eventjson>/i.test(normalized);
+  if (!hasDiceEventsHead) return false;
+  const openCurlyCount = (normalized.match(/\{/g) || []).length;
+  const closeCurlyCount = (normalized.match(/\}/g) || []).length;
+  const openSquareCount = (normalized.match(/\[/g) || []).length;
+  const closeSquareCount = (normalized.match(/\]/g) || []).length;
+  return openCurlyCount > closeCurlyCount || openSquareCount > closeSquareCount;
 }
 
 export interface EventHooksDepsEvent {
@@ -212,6 +233,10 @@ type AssistantGenerationSessionStateEvent = {
   targetIndex: number | null;
   latestStreamText: string;
   latestStreamUpdatedAt: number;
+  cleanupAssistantMsgId: string | null;
+  cleanupFloorKey: string | null;
+  cleanupApplied: boolean;
+  cleanupProbeScheduled: boolean;
   finalized: boolean;
 };
 
@@ -339,13 +364,11 @@ function buildAssistantGenerationSessionKeyEvent(state: AssistantGenerationSessi
 }
 
 function beginAssistantGenerationDraftEvent(
-  reason: string,
   deps: Pick<EventHooksDepsEvent, "resetRecentParseFailureLogsEvent" | "resetAssistantProcessedStateEvent">
 ): number {
   assistantGenerationSequenceEvent += 1;
   deps.resetRecentParseFailureLogsEvent();
   deps.resetAssistantProcessedStateEvent();
-  logger.info(`[内容处理] 检测到助手重生成会话开始 source=${reason} sequence=${assistantGenerationSequenceEvent}`);
   return assistantGenerationSequenceEvent;
 }
 
@@ -371,8 +394,11 @@ function resolveAssistantEventTargetEvent(
 
 function beginAssistantGenerationSessionEvent(
   target: AssistantMessageTargetEvent,
-  reason: string,
-  deps: Pick<EventHooksDepsEvent, "resetRecentParseFailureLogsEvent" | "resetAssistantProcessedStateEvent">
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "buildAssistantMessageIdEvent"
+    | "buildAssistantFloorKeyEvent"
+  >
 ): string {
   const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
   const swipeId = resolveAssistantSwipeIdEvent(target.msg);
@@ -385,6 +411,8 @@ function beginAssistantGenerationSessionEvent(
     || previous.swipeId !== swipeId
     || previous.finalized
     || previous.sequence !== activeSequence;
+  const currentAssistantMsgId = deps.buildAssistantMessageIdEvent(target.msg, target.index);
+  const currentFloorKey = deps.buildAssistantFloorKeyEvent(currentAssistantMsgId);
   const nextState: AssistantGenerationSessionStateEvent = shouldStartNew
     ? {
       sessionKey: "",
@@ -394,6 +422,10 @@ function beginAssistantGenerationSessionEvent(
       targetIndex: target.index,
       latestStreamText: "",
       latestStreamUpdatedAt: 0,
+      cleanupAssistantMsgId: currentAssistantMsgId || null,
+      cleanupFloorKey: currentFloorKey,
+      cleanupApplied: false,
+      cleanupProbeScheduled: false,
       finalized: false,
     }
     : {
@@ -405,7 +437,6 @@ function beginAssistantGenerationSessionEvent(
   if (shouldStartNew) {
     assistantGenerationSessionsEvent.set(runtimeKey, nextState);
     resetAssistantSwipeRuntimeStateEvent(target.msg);
-    logger.info(`[内容处理] 绑定助手生成会话 source=${reason} key=${nextState.sessionKey}`);
   } else {
     assistantGenerationSessionsEvent.set(runtimeKey, nextState);
   }
@@ -413,9 +444,57 @@ function beginAssistantGenerationSessionEvent(
   return nextState.sessionKey;
 }
 
+/**
+ * 功能：在新的助手生成会话真正开始输出或最终接管前，按楼层清除旧卡片与旧历史。
+ * @param target 当前助手消息目标。
+ * @param deps 楼层清理依赖。
+ * @returns 受影响的楼层键；若没有实际清理则返回 `null`。
+ */
+function applyPendingAssistantGenerationCleanupEvent(
+  target: AssistantMessageTargetEvent,
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "buildAssistantMessageIdEvent"
+    | "buildAssistantFloorKeyEvent"
+    | "invalidatePendingRoundFloorEvent"
+    | "invalidateSummaryHistoryFloorEvent"
+    | "persistChatSafeEvent"
+    | "saveMetadataSafeEvent"
+  >
+): string | null {
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
+  const session = assistantGenerationSessionsEvent.get(runtimeKey);
+  if (!session || session.cleanupApplied) return null;
+
+  const assistantMsgId =
+    String(session.cleanupAssistantMsgId ?? "").trim()
+    || deps.buildAssistantMessageIdEvent(target.msg, target.index);
+  const floorKey =
+    session.cleanupFloorKey
+    || deps.buildAssistantFloorKeyEvent(assistantMsgId)
+    || null;
+  if (!assistantMsgId || !floorKey) {
+    session.cleanupApplied = true;
+    assistantGenerationSessionsEvent.set(runtimeKey, session);
+    return null;
+  }
+
+  const invalidatedPending = deps.invalidatePendingRoundFloorEvent(assistantMsgId);
+  const invalidatedSummary = deps.invalidateSummaryHistoryFloorEvent(assistantMsgId);
+  session.cleanupApplied = true;
+  assistantGenerationSessionsEvent.set(runtimeKey, session);
+  if (!invalidatedPending && !invalidatedSummary) {
+    return null;
+  }
+
+  deps.persistChatSafeEvent();
+  deps.saveMetadataSafeEvent();
+  return floorKey;
+}
+
 function tryFinalizeAssistantGenerationSessionEvent(
   target: AssistantMessageTargetEvent
-): { sessionKey: string; shouldFinalize: boolean } {
+): boolean {
   const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
   const swipeId = resolveAssistantSwipeIdEvent(target.msg);
   const previous = assistantGenerationSessionsEvent.get(runtimeKey);
@@ -433,6 +512,10 @@ function tryFinalizeAssistantGenerationSessionEvent(
       targetIndex: target.index,
       latestStreamText: "",
       latestStreamUpdatedAt: 0,
+      cleanupAssistantMsgId: null,
+      cleanupFloorKey: null,
+      cleanupApplied: true,
+      cleanupProbeScheduled: true,
       finalized: true,
     }
     : {
@@ -442,10 +525,122 @@ function tryFinalizeAssistantGenerationSessionEvent(
     };
   nextState.sessionKey = buildAssistantGenerationSessionKeyEvent(nextState);
   assistantGenerationSessionsEvent.set(runtimeKey, nextState);
-  return {
-    sessionKey: nextState.sessionKey,
-    shouldFinalize: !(previous && previous.swipeId === swipeId && previous.sequence === activeSequence && previous.finalized),
-  };
+  return !(previous && previous.swipeId === swipeId && previous.sequence === activeSequence && previous.finalized);
+}
+
+/**
+ * 功能：判断指定助手楼层当前是否仍处于未最终完成的生成会话中。
+ * @param message 助手消息对象。
+ * @param index 消息索引。
+ * @returns boolean：仍在生成中时返回 true。
+ */
+function isAssistantGenerationPendingEvent(
+  message: TavernMessageEvent | null,
+  index: number | null
+): boolean {
+  if (!message || index == null) return false;
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(message, index);
+  const session = assistantGenerationSessionsEvent.get(runtimeKey);
+  return Boolean(session && session.finalized !== true);
+}
+
+/**
+ * 功能：判断宿主消息 DOM 是否已进入 Thinking 阶段。
+ * @param target 助手消息目标。
+ * @returns boolean：命中 Thinking 标记时返回 true。
+ */
+function isAssistantMessageThinkingDomStateEvent(target: AssistantMessageTargetEvent): boolean {
+  if (typeof document === "undefined") return false;
+  const mesElement = resolveAssistantMessageElementEvent(target);
+  if (!mesElement) return false;
+  const details = mesElement.querySelector(".mes_reasoning_details") as HTMLElement | null;
+  const header = mesElement.querySelector(".mes_reasoning_header_title") as HTMLElement | null;
+  if (!details && !header) return false;
+  const duration =
+    String(details?.dataset?.duration ?? "").trim()
+    || String(header?.dataset?.duration ?? "").trim();
+  const headerText = String(header?.textContent ?? "").trim().toLowerCase();
+  if (headerText.includes("thinking")) return true;
+  return !duration && Boolean(header);
+}
+
+/**
+ * 功能：判断当前楼层是否已经进入宿主的“重新生成占位态”或 Thinking 态，此时可以立即清理旧卡片。
+ * @param target 助手消息目标。
+ * @param deps 读取消息文本所需依赖。
+ * @returns boolean：为空文本、纯省略号占位或 Thinking 状态时返回 true。
+ */
+function shouldClearFloorImmediatelyOnGenerationStartEvent(
+  target: AssistantMessageTargetEvent,
+  deps: Pick<EventHooksDepsEvent, "getMessageTextEvent">
+): boolean {
+  const text = String(deps.getMessageTextEvent(target.msg) ?? "").trim();
+  if (!text) return true;
+  if (/^(?:\.{3,}|…+)$/.test(text)) return true;
+  return isAssistantMessageThinkingDomStateEvent(target);
+}
+
+const ASSISTANT_GENERATION_CLEANUP_PROBE_DELAY_MS_Event = 120;
+const ASSISTANT_GENERATION_CLEANUP_PROBE_MAX_ATTEMPTS_Event = 8;
+
+/**
+ * 功能：在生成开始后短暂轮询宿主 DOM，尽量在 Thinking 标记出现时立即清理旧卡片。
+ * @param args 轮询清理所需参数。
+ * @returns 无返回值。
+ */
+function scheduleAssistantGenerationCleanupProbeEvent(args: {
+  sessionKey: string;
+  target: AssistantMessageTargetEvent;
+  deps: Pick<
+    EventHooksDepsEvent,
+    | "getMessageTextEvent"
+    | "buildAssistantMessageIdEvent"
+    | "buildAssistantFloorKeyEvent"
+    | "invalidatePendingRoundFloorEvent"
+    | "invalidateSummaryHistoryFloorEvent"
+    | "persistChatSafeEvent"
+    | "saveMetadataSafeEvent"
+    | "sweepTimeoutFailuresEvent"
+    | "refreshCountdownDomEvent"
+    | "refreshAllWidgetsFromStateEvent"
+    | "enhanceInteractiveTriggersInDomEvent"
+    | "enhanceAssistantRawSourceButtonsEvent"
+    | "hideEventCodeBlocksInDomEvent"
+  >;
+  attemptsLeft?: number;
+}): void {
+  const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(args.target.msg, args.target.index);
+  const session = assistantGenerationSessionsEvent.get(runtimeKey);
+  if (!session) return;
+  if (session.cleanupProbeScheduled && (args.attemptsLeft ?? ASSISTANT_GENERATION_CLEANUP_PROBE_MAX_ATTEMPTS_Event) === ASSISTANT_GENERATION_CLEANUP_PROBE_MAX_ATTEMPTS_Event) {
+    return;
+  }
+  session.cleanupProbeScheduled = true;
+  assistantGenerationSessionsEvent.set(runtimeKey, session);
+
+  const attemptsLeft = args.attemptsLeft ?? ASSISTANT_GENERATION_CLEANUP_PROBE_MAX_ATTEMPTS_Event;
+  setTimeout(() => {
+    const activeSession = assistantGenerationSessionsEvent.get(runtimeKey);
+    if (!activeSession || activeSession.sessionKey !== args.sessionKey || activeSession.finalized || activeSession.cleanupApplied) {
+      return;
+    }
+    if (shouldClearFloorImmediatelyOnGenerationStartEvent(args.target, args.deps)) {
+      const cleanedFloorKey = applyPendingAssistantGenerationCleanupEvent(args.target, args.deps);
+      if (cleanedFloorKey) {
+        hydrateAssistantFloorUiEvent(args.deps);
+      }
+      return;
+    }
+    if (attemptsLeft <= 1) {
+      activeSession.cleanupProbeScheduled = false;
+      assistantGenerationSessionsEvent.set(runtimeKey, activeSession);
+      return;
+    }
+    scheduleAssistantGenerationCleanupProbeEvent({
+      ...args,
+      attemptsLeft: attemptsLeft - 1,
+    });
+  }, ASSISTANT_GENERATION_CLEANUP_PROBE_DELAY_MS_Event);
 }
 
 function isFinalizeLifecycleReasonEvent(reason: AssistantFloorLifecycleReasonEvent): boolean {
@@ -630,7 +825,8 @@ async function hydrateAssistantMessageDomImmediatelyEvent(args: {
 
 function prepareAssistantFloorSanitizedDataEvent(
   target: AssistantMessageTargetEvent,
-  deps: FinalizeAssistantFloorDataDepsEvent
+  deps: FinalizeAssistantFloorDataDepsEvent,
+  sourcePolicy: AssistantFloorSourcePolicyEvent = "finalize"
 ): PreparedAssistantFloorSanitizedDataEvent | null {
   const settings = deps.getSettingsEvent();
   const meta = deps.getDiceMetaEvent();
@@ -640,13 +836,24 @@ function prepareAssistantFloorSanitizedDataEvent(
   const streamSnapshotText = String(activeSession?.latestStreamText ?? "");
   const hostOriginalText = deps.getHostOriginalSourceTextEvent(target.msg);
   const persistedSnapshotText = getPersistedAssistantOriginalSourceTextEvent(target.msg);
-  const finalizeSourceCandidates = [
+  const fullSourceCandidates = [
     currentMessageText,
     streamSnapshotText,
     hostOriginalText,
     persistedSnapshotText,
   ].filter((item, index, array) => item && array.indexOf(item) === index);
-  const preferredFinalizeSourceText = finalizeSourceCandidates.find((item) => String(item ?? "").trim()) || "";
+  const finalizeSourceCandidates = (
+    sourcePolicy === "reconcile"
+      ? [
+          currentMessageText,
+          streamSnapshotText,
+        ]
+      : fullSourceCandidates
+  ).filter((item, index, array) => item && array.indexOf(item) === index);
+  const preferredFinalizeSourceText =
+    finalizeSourceCandidates.find((item) => String(item ?? "").trim())
+    || fullSourceCandidates.find((item) => String(item ?? "").trim())
+    || "";
   const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
     getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
     getPreferredAssistantSourceTextEvent: () => currentMessageText,
@@ -668,16 +875,36 @@ function prepareAssistantFloorSanitizedDataEvent(
     };
   }
 
-  const sanitizeResult = sanitizeAssistantMessageArtifactsOnceEvent(target.msg, target.index, {
-    getSettingsEvent: deps.getSettingsEvent,
-    getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
-    getPreferredAssistantSourceTextEvent: () => currentMessageText,
-    getMessageTextEvent: () => currentMessageText,
-    parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
-    removeRangesEvent: deps.removeRangesEvent,
-    resolveSourceMessageIdEvent: () => assistantMsgId,
-    sourceState: "raw_source",
-  });
+  const sanitizeResult = sourcePolicy === "reconcile"
+    ? (() => {
+        const parsed = deps.parseEventEnvelopesEvent(preferredFinalizeSourceText);
+        const events = Array.isArray(parsed.events) ? parsed.events : [];
+        const ranges = Array.isArray(parsed.ranges) ? parsed.ranges : [];
+        const cleanText = ranges.length > 0
+          ? deps.removeRangesEvent(preferredFinalizeSourceText, ranges)
+          : preferredFinalizeSourceText;
+        return {
+          cleanText,
+          events,
+          triggers: [],
+          triggerPack: null,
+          shouldEndRound: Boolean(parsed.shouldEndRound),
+          hasRollArtifacts: ranges.length > 0,
+          hasTriggerArtifacts: false,
+          changedText: cleanText !== currentMessageText,
+          changedMetadata: false,
+        };
+      })()
+    : sanitizeAssistantMessageArtifactsOnceEvent(target.msg, target.index, {
+        getSettingsEvent: deps.getSettingsEvent,
+        getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
+        getPreferredAssistantSourceTextEvent: () => currentMessageText,
+        getMessageTextEvent: () => currentMessageText,
+        parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
+        removeRangesEvent: deps.removeRangesEvent,
+        resolveSourceMessageIdEvent: () => assistantMsgId,
+        sourceState: "raw_source",
+      });
   const chosenText = sanitizeResult.cleanText;
   const shouldFinalize =
     chosenText.trim().length > 0
@@ -773,14 +1000,15 @@ async function attachAssistantFloorEventsAndAutoRollEvent(
 
 export async function finalizeAssistantFloorDataEvent(
   target: AssistantMessageTargetEvent | null,
-  deps: FinalizeAssistantFloorDataDepsEvent
+  deps: FinalizeAssistantFloorDataDepsEvent,
+  sourcePolicy: AssistantFloorSourcePolicyEvent = "finalize"
 ): Promise<FinalizeAssistantFloorDataResultEvent> {
   const settings = deps.getSettingsEvent();
   if (!settings.enabled || !target) {
     return { changedData: false, assistantMsgId: null, floorKey: null };
   }
 
-  const prepared = prepareAssistantFloorSanitizedDataEvent(target, deps);
+  const prepared = prepareAssistantFloorSanitizedDataEvent(target, deps, sourcePolicy);
   if (!prepared) {
     return { changedData: false, assistantMsgId: null, floorKey: null };
   }
@@ -847,6 +1075,8 @@ export async function reconcileAllTrackedAssistantFloorsEvent(
 
   let changedData = false;
   const rebuiltFloorKeys = new Set<string>();
+  const sourcePolicy: AssistantFloorSourcePolicyEvent =
+    reason === "message_swiped" ? "finalize" : "reconcile";
 
   for (const [floorKey, storedAssistantMsgId] of trackedFloors) {
     const current = currentFloors.get(floorKey);
@@ -860,15 +1090,21 @@ export async function reconcileAllTrackedAssistantFloorsEvent(
       continue;
     }
 
+    logger.info(
+      `[楼层恢复] 检测到楼层版本变化，准备重建 floor=${floorKey} old=${storedAssistantMsgId} new=${current.assistantMsgId}`
+    );
+
     const finalized = await finalizeAssistantFloorDataEvent({
       msg: current.message,
       index: current.index,
-    }, deps);
+    }, deps, sourcePolicy);
     changedData = changedData || finalized.changedData;
     rebuiltFloorKeys.add(floorKey);
   }
 
   if (changedData) {
+    deps.persistChatSafeEvent();
+    deps.saveMetadataSafeEvent();
     logger.info(`[楼层对账] 已同步未归档轮次 reason=${reason}`);
   }
   return {
@@ -897,11 +1133,32 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
   const rebuiltFloorKeys = new Set<string>();
 
   if (args.reason === "generation_started") {
-    beginAssistantGenerationDraftEvent(args.reason, args.deps);
+    beginAssistantGenerationDraftEvent(args.deps);
+    if (context.message && context.index != null) {
+      const target = { msg: context.message, index: context.index };
+      const sessionKey = beginAssistantGenerationSessionEvent(
+        target,
+        args.deps
+      );
+      if (shouldClearFloorImmediatelyOnGenerationStartEvent(target, args.deps)) {
+        const cleanedFloorKey = applyPendingAssistantGenerationCleanupEvent(target, args.deps);
+        if (cleanedFloorKey) {
+          changedData = true;
+          rebuiltFloorKeys.add(cleanedFloorKey);
+          hydrateAssistantFloorUiEvent(args.deps);
+        }
+      } else {
+        scheduleAssistantGenerationCleanupProbeEvent({
+          sessionKey,
+          target,
+          deps: args.deps,
+        });
+      }
+    }
     return {
-      changedData: false,
-      changedUi: false,
-      rebuiltFloorKeys: [],
+      changedData,
+      changedUi: changedData,
+      rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
     };
   }
 
@@ -912,7 +1169,7 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
     if (!target) {
       return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
     }
-    const sessionKey = beginAssistantGenerationSessionEvent(target, args.reason, args.deps);
+    beginAssistantGenerationSessionEvent(target, args.deps);
     const runtimeKey = resolveAssistantRuntimeMessageKeyEvent(target.msg, target.index);
     const session = assistantGenerationSessionsEvent.get(runtimeKey);
     const nextStreamText = args.eventArgs?.find((item) => typeof item === "string")
@@ -923,12 +1180,19 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
       session.latestStreamUpdatedAt = Date.now();
       session.targetIndex = target.index;
       assistantGenerationSessionsEvent.set(runtimeKey, session);
-      logger.debug(`[内容处理] 已记录流式快照 phase=stream session=${sessionKey} length=${normalizedStreamText.length}`);
+    }
+    if (normalizedStreamText.trim()) {
+      const cleanedFloorKey = applyPendingAssistantGenerationCleanupEvent(target, args.deps);
+      if (cleanedFloorKey) {
+        changedData = true;
+        rebuiltFloorKeys.add(cleanedFloorKey);
+        hydrateAssistantFloorUiEvent(args.deps);
+      }
     }
     return {
-      changedData: false,
-      changedUi: false,
-      rebuiltFloorKeys: [],
+      changedData,
+      changedUi: changedData,
+      rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
     };
   }
 
@@ -938,15 +1202,18 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
     }
     const target = { msg: context.message, index: context.index };
     if (args.reason === "message_received_finalize") {
-      beginAssistantGenerationSessionEvent(target, args.reason, args.deps);
+      beginAssistantGenerationSessionEvent(target, args.deps);
     }
-    const finalized = tryFinalizeAssistantGenerationSessionEvent(target);
-    if (!finalized.shouldFinalize) {
-      logger.info(`[内容处理] 跳过重复最终处理 source=${args.reason} session=${finalized.sessionKey}`);
+    const shouldFinalize = tryFinalizeAssistantGenerationSessionEvent(target);
+    if (!shouldFinalize) {
       return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
     }
-    logger.info(`[内容处理] 进入统一楼层重建 source=${args.reason} session=${finalized.sessionKey}`);
-    const result = await finalizeAssistantFloorDataEvent(target, args.deps);
+    const cleanedFloorKey = applyPendingAssistantGenerationCleanupEvent(target, args.deps);
+    if (cleanedFloorKey) {
+      changedData = true;
+      rebuiltFloorKeys.add(cleanedFloorKey);
+    }
+    const result = await finalizeAssistantFloorDataEvent(target, args.deps, "finalize");
     changedData = result.changedData;
     if (result.floorKey) {
       rebuiltFloorKeys.add(result.floorKey);
@@ -954,6 +1221,41 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
   }
 
   if (isGlobalReconcileLifecycleReasonEvent(args.reason)) {
+    if (
+      args.reason === "message_swiped"
+      && context.isLatestAssistant
+      && isAssistantGenerationPendingEvent(context.message, context.index)
+    ) {
+      if (
+        context.message
+        && context.index != null
+        && shouldClearFloorImmediatelyOnGenerationStartEvent(
+          { msg: context.message, index: context.index },
+          args.deps
+        )
+      ) {
+        const cleanedFloorKey = applyPendingAssistantGenerationCleanupEvent(
+          { msg: context.message, index: context.index },
+          args.deps
+        );
+        if (cleanedFloorKey) {
+          changedData = true;
+          rebuiltFloorKeys.add(cleanedFloorKey);
+          hydrateAssistantFloorUiEvent(args.deps);
+          return {
+            changedData: true,
+            changedUi: true,
+            rebuiltFloorKeys: Array.from(rebuiltFloorKeys),
+          };
+        }
+      }
+      return {
+        changedData: false,
+        changedUi: false,
+        rebuiltFloorKeys: [],
+      };
+    }
+
     if (args.reason === "message_edited" && context.message && context.index != null) {
       const targetedChanged = sanitizeAssistantMessageArtifactsEvent(context.message, context.index, {
         getSettingsEvent: args.deps.getSettingsEvent,
@@ -1113,18 +1415,37 @@ function buildAssistantMessageVersionTextEvent(
   message: TavernMessageEvent,
   deps: BuildAssistantMessageIdDepsEvent
 ): string {
-  const sourceCandidates = collectAssistantSourceCandidatesForHooksEvent(message, deps);
+  const preferredText = String(deps.getPreferredAssistantSourceTextEvent(message) ?? "");
+  const messageText = String(deps.getMessageTextEvent(message) ?? "");
+  const primaryCandidates = [preferredText, messageText].filter(
+    (item, index, array) => item && array.indexOf(item) === index
+  );
+  const fallbackCandidates =
+    primaryCandidates.length > 0
+      ? []
+      : [
+          deps.getStableAssistantOriginalSourceTextEvent(message),
+          deps.getHostOriginalSourceTextEvent(message),
+        ].filter((item, index, array) => item && array.indexOf(item) === index);
+  const sourceCandidates = [...primaryCandidates, ...fallbackCandidates];
   if (sourceCandidates.length <= 0) {
     return "";
   }
 
   for (const sourceText of sourceCandidates) {
-    const parsed = deps.parseEventEnvelopesEvent(sourceText);
-    if (!Array.isArray(parsed.ranges) || parsed.ranges.length <= 0) {
-      if (sourceText.trim()) return sourceText;
-      continue;
+    if (looksLikeIncompleteAssistantControlBlockEvent(sourceText)) {
+      return sourceText;
     }
-    return deps.removeRangesEvent(sourceText, parsed.ranges);
+    try {
+      const parsed = deps.parseEventEnvelopesEvent(sourceText);
+      if (!Array.isArray(parsed.ranges) || parsed.ranges.length <= 0) {
+        if (sourceText.trim()) return sourceText;
+        continue;
+      }
+      return deps.removeRangesEvent(sourceText, parsed.ranges);
+    } catch {
+      if (sourceText.trim()) return sourceText;
+    }
   }
 
   return sourceCandidates[0] ?? "";

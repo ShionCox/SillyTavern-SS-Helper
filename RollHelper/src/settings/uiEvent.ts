@@ -245,6 +245,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     dragHandleSelector: string;
     rootClassName: string;
     backdropClassName: string;
+    enableFloating?: boolean;
     afterOpen?: () => void;
   }): void => {
     const owner = params.owner;
@@ -263,11 +264,9 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
     if (!panel) return;
 
     const anchor = panel.nextSibling;
-    const hostElement = owner.parentElement instanceof HTMLElement ? owner.parentElement : null;
 
     openSharedDialog({
       id: params.dialogId,
-      hostElement,
       layout: "bare",
       chrome: false,
       closeOnBackdrop: true,
@@ -286,7 +285,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
         instance.content.style.overflow = "visible";
         instance.content.appendChild(panel);
         const dragHandle = panel.querySelector<HTMLElement>(params.dragHandleSelector);
-        if (dragHandle) {
+        if (params.enableFloating !== false && dragHandle) {
           dragHandle.dataset.stxFloatingBindKey = params.dialogId;
           bindSharedFloatingPanelDragEvent({
             panel,
@@ -302,20 +301,22 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
             },
           });
         }
-        requestAnimationFrame(() => {
-          ensureSharedFloatingPanelPositionEvent({
-            panel,
-            handle: dragHandle ?? panel,
-            mobileBreakpoint: 680,
-            initialPosition: () => {
-              const rect = panel.getBoundingClientRect();
-              return {
-                left: Math.round((window.innerWidth - rect.width) / 2 + (params.panelVariant === "status" ? 32 : -12)),
-                top: params.panelVariant === "status" ? 78 : 64,
-              };
-            },
+        if (params.enableFloating !== false) {
+          requestAnimationFrame(() => {
+            ensureSharedFloatingPanelPositionEvent({
+              panel,
+              handle: dragHandle ?? panel,
+              mobileBreakpoint: 680,
+              initialPosition: () => {
+                const rect = panel.getBoundingClientRect();
+                return {
+                  left: Math.round((window.innerWidth - rect.width) / 2 + (params.panelVariant === "status" ? 32 : -12)),
+                  top: params.panelVariant === "status" ? 78 : 64,
+                };
+              },
+            });
           });
-        });
+        }
         syncSharedSelects(instance.root);
       },
       onAfterOpen: () => {
@@ -341,6 +342,7 @@ export function bindSettingsTabsAndModalEvent(deps: BindSettingsTabsAndModalDeps
       dragHandleSelector: ".st-roll-skill-modal-head",
       rootClassName: "st-roll-skill-modal",
       backdropClassName: "st-roll-skill-modal-backdrop",
+      enableFloating: false,
     });
   };
 
