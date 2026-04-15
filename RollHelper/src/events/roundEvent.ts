@@ -37,6 +37,8 @@ import { resolveEventThresholdEvent, resolveEventTimeLimitByUrgencyEvent } from 
 const ADVANTAGE_NORMAL_Event: AdvantageStateEvent = "normal";
 const AI_AUTO_EXPLODE_EVENT_LIMIT_PER_ROUND_Event = 1;
 const loggedBlindOutcomeFallbackKeysEvent = new Set<string>();
+/** 模块级暗骰状态追踪列表（纯运行时，不持久化；聊天切换时自动清空）。 */
+let BLIND_HISTORY_RUNTIME_Event: BlindHistoryItemEvent[] = [];
 type ParseDiceExpressionFnEvent = (exprRaw: string) => {
   count: number;
   sides: number;
@@ -553,11 +555,15 @@ function ensureBlindGuidanceQueueEvent(meta: DiceMetaEvent): BlindGuidanceEvent[
  * 返回：
  *   BlindHistoryItemEvent[]：可写入的暗骰历史列表。
  */
-function ensureBlindHistoryEvent(meta: DiceMetaEvent): BlindHistoryItemEvent[] {
-  if (!Array.isArray(meta.blindHistory)) {
-    meta.blindHistory = [];
-  }
-  return meta.blindHistory;
+function ensureBlindHistoryEvent(_meta: DiceMetaEvent): BlindHistoryItemEvent[] {
+  return BLIND_HISTORY_RUNTIME_Event;
+}
+
+/**
+ * 功能：清空模块级暗骰运行时历史列表（聊天切换时调用）。
+ */
+export function clearBlindHistoryRuntimeEvent(): void {
+  BLIND_HISTORY_RUNTIME_Event = [];
 }
 
 /**
@@ -785,22 +791,19 @@ function appendBlindHistoryItemEvent(meta: DiceMetaEvent, item: BlindHistoryItem
 }
 
 /**
- * 功能：把一条暗骰历史同时写入运行时列表与聊天级记录表。
+ * 功能：把一条暗骰历史写入运行时列表。
  * 参数：
  *   meta：运行时骰子元数据。
  *   item：暗骰历史条目。
- *   persistBlindHistoryRecordEvent：聊天级记录写入函数。
  * 返回：
  *   void
  */
 function appendBlindHistoryItemAndPersistEvent(
   meta: DiceMetaEvent,
   item: BlindHistoryItemEvent,
-  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
 ): void {
   const normalized = normalizeBlindHistoryItemEvent(item);
   appendBlindHistoryItemEvent(meta, normalized);
-  persistBlindHistoryRecordEvent?.(normalized);
 }
 
 /**
@@ -819,7 +822,6 @@ export function appendBlindHistoryFromRecordEvent(
   record: EventRollRecordEvent,
   origin: BlindHistoryItemEvent["origin"] = "event_blind",
   revealMode: TriggerPackRevealModeEvent = "delayed",
-  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
 ): void {
   if (record.visibility !== "blind" && record.source !== "blind_manual_roll") return;
   appendBlindHistoryItemAndPersistEvent(meta, {
@@ -839,7 +841,7 @@ export function appendBlindHistoryFromRecordEvent(
     revealMode,
     state: revealMode === "instant" ? "consumed" : "queued",
     consumedAt: revealMode === "instant" ? record.rolledAt : undefined,
-  }, persistBlindHistoryRecordEvent);
+  });
 }
 
 /**
@@ -853,7 +855,6 @@ export function appendBlindHistoryFromRecordEvent(
 export function appendBlindHistoryFromGuidanceEvent(
   meta: DiceMetaEvent,
   item: BlindGuidanceEvent,
-  persistBlindHistoryRecordEvent?: (item: BlindHistoryItemEvent) => void
 ): void {
   appendBlindHistoryItemAndPersistEvent(meta, {
     rollId: item.rollId,
@@ -877,7 +878,7 @@ export function appendBlindHistoryFromGuidanceEvent(
     archivedAt: item.archivedAt,
     dedupeKey: item.dedupeKey,
     state: resolveBlindGuidanceStateEvent(item),
-  }, persistBlindHistoryRecordEvent);
+  });
 }
 
 function enqueueBlindGuidanceFromRecordEvent(
@@ -1133,11 +1134,6 @@ export interface InvalidatePendingRoundFloorDepsEvent {
   saveMetadataSafeEvent: () => void;
 }
 
-export interface InvalidateSummaryHistoryFloorDepsEvent {
-  getDiceMetaEvent: () => DiceMetaEvent;
-  saveMetadataSafeEvent: () => void;
-}
-
 /**
  * 功能：按楼层清除当前未归档轮次中的事件、掷骰记录与计时器。
  * @param assistantMsgId 当前楼层对应的助手消息标识。
@@ -1251,65 +1247,6 @@ export function invalidatePendingRoundFloorEvent(
   if (isPendingRoundEmptyEvent(round)) {
     meta.pendingRound = undefined;
   }
-  deps.saveMetadataSafeEvent();
-  return true;
-}
-
-/**
- * 功能：按楼层清除历史轮次中的旧事件与旧骰子结果。
- * @param assistantMsgId 当前楼层对应的助手消息标识。
- * @param deps 历史楼层失效依赖。
- * @returns 若实际清除了任意历史状态则返回 `true`，否则返回 `false`。
- */
-export function invalidateSummaryHistoryFloorEvent(
-  assistantMsgId: string,
-  deps: InvalidateSummaryHistoryFloorDepsEvent
-): boolean {
-  const floorKey = buildAssistantFloorKeyEvent(assistantMsgId);
-  if (!floorKey) return false;
-
-  const meta = deps.getDiceMetaEvent();
-  const history = Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [];
-  if (history.length === 0) return false;
-
-  let changed = false;
-  const nextHistory = history
-    .map((snapshot) => {
-      if (!snapshot) return snapshot;
-      const nextEvents = Array.isArray(snapshot.events)
-        ? snapshot.events.filter((event) => {
-            if (!event?.sourceAssistantMsgId) return true;
-            return !isSameAssistantFloorEvent(event.sourceAssistantMsgId, assistantMsgId);
-          })
-        : [];
-      const nextSourceAssistantMsgIds = Array.isArray(snapshot.sourceAssistantMsgIds)
-        ? snapshot.sourceAssistantMsgIds.filter((item) => !isSameAssistantFloorEvent(item, assistantMsgId))
-        : [];
-
-      if (
-        nextEvents.length !== (Array.isArray(snapshot.events) ? snapshot.events.length : 0)
-        || nextSourceAssistantMsgIds.length !== (Array.isArray(snapshot.sourceAssistantMsgIds) ? snapshot.sourceAssistantMsgIds.length : 0)
-      ) {
-        changed = true;
-      }
-
-      if (nextEvents.length <= 0 && nextSourceAssistantMsgIds.length <= 0) {
-        return null;
-      }
-
-      return {
-        ...snapshot,
-        events: nextEvents,
-        eventsCount: nextEvents.length,
-        rolledCount: nextEvents.filter((event) => event?.rollId || event?.resultSource).length,
-        sourceAssistantMsgIds: nextSourceAssistantMsgIds,
-      };
-    })
-    .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot != null);
-
-  if (!changed) return false;
-
-  meta.summaryHistory = nextHistory;
   deps.saveMetadataSafeEvent();
   return true;
 }
@@ -1753,7 +1690,6 @@ export function sweepTimeoutFailuresEvent(deps: SweepTimeoutFailuresDepsEvent): 
 export interface PerformEventRollByIdDepsEvent {
   sweepTimeoutFailuresEvent: () => boolean;
   getDiceMetaEvent: () => DiceMetaEvent;
-  appendBlindHistoryRecordEvent: (item: BlindHistoryItemEvent) => void;
   ensureRoundEventTimersSyncedEvent: (round: PendingRoundEvent) => void;
   recordTimeoutFailureIfNeededEvent: (
     round: PendingRoundEvent,
@@ -2076,7 +2012,6 @@ export async function performInteractiveTriggerRollEvent(
     record,
     "interactive_blind",
     revealMode,
-    deps.appendBlindHistoryRecordEvent
   );
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);
@@ -2274,7 +2209,6 @@ async function executeManualEventRollEvent(
     record,
     "event_blind",
     "delayed",
-    deps.appendBlindHistoryRecordEvent
   );
   if (settings.enableDynamicResultGuidance) {
     enqueueResultGuidanceFromRecordEvent(meta, event, record);

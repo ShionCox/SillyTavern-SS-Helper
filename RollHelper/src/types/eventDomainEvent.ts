@@ -66,6 +66,111 @@ export interface TriggerPackEvent {
   items: TriggerPackItemEvent[];
 }
 
+export interface RollHelperFloorTriggerLifecycleEvent {
+  hydratedFrom: "markup" | "metadata";
+  sanitizedAt: number;
+  lastSourceKind: string;
+}
+
+export interface RollHelperFloorContentEvent {
+  raw: string;
+  processed: string;
+}
+
+export interface RollHelperFloorTriggersEvent {
+  interactive: InteractiveTriggerEvent[];
+  triggerPack: TriggerPackEvent | null;
+  lifecycle: RollHelperFloorTriggerLifecycleEvent;
+}
+
+export interface RollHelperFloorEventDiceEvent {
+  events: DiceEventSpecEvent[];
+  publicRolls: EventRollRecordEvent[];
+  blindRolls: EventRollRecordEvent[];
+}
+
+export interface RollHelperFloorRecordEvent {
+  floorId: number;
+  messageId: number;
+  role: "assistant";
+  createdAt: number;
+  updatedAt: number;
+  content: RollHelperFloorContentEvent;
+  triggers: RollHelperFloorTriggersEvent;
+  eventDice: RollHelperFloorEventDiceEvent;
+  statusRefs: string[];
+  roundRefs: string[];
+}
+
+export interface RollHelperRoundSummaryCacheEvent {
+  eventsCount: number;
+  rolledCount: number;
+}
+
+export interface RollHelperRoundRecordEvent {
+  roundId: string;
+  status: "open" | "closed";
+  openedAt: number;
+  closedAt: number | null;
+  floorIds: number[];
+  eventRefs: string[];
+  rollRefs: string[];
+  summaryCache: RollHelperRoundSummaryCacheEvent;
+}
+
+export interface RollHelperRoundsStateEvent {
+  order: string[];
+  records: Record<string, RollHelperRoundRecordEvent>;
+}
+
+export interface RollHelperSkillsStateEvent {
+  activePresetId: string;
+  currentSkillTableText: string;
+  presetStore: SkillPresetStoreEvent;
+  updatedAt: number;
+}
+
+export interface RollHelperStatusRecordEvent {
+  statusId: string;
+  sourceFloorId: number;
+  createdAt: number;
+  updatedAt: number;
+  data: ActiveStatusEvent;
+}
+
+export interface RollHelperCurrentStatusesStateEvent {
+  activeStatusIds: string[];
+  snapshot: ActiveStatusEvent[];
+  updatedAt: number;
+}
+
+export interface RollHelperStatusesStateEvent {
+  order: string[];
+  records: Record<string, RollHelperStatusRecordEvent>;
+  current: RollHelperCurrentStatusesStateEvent;
+}
+
+export interface RollHelperChatMetaEvent {
+  schemaVersion: number;
+  updatedAt: number;
+  openRoundId: string | null;
+  lastProcessedFloorId: number | null;
+  lastUserMessageId: number | null;
+}
+
+export interface RollHelperChatRecordEvent {
+  meta: RollHelperChatMetaEvent;
+  floorOrder: number[];
+  floors: Record<string, RollHelperFloorRecordEvent>;
+  rounds: RollHelperRoundsStateEvent;
+  skills: RollHelperSkillsStateEvent;
+  statuses: RollHelperStatusesStateEvent;
+}
+
+export interface RollHelperChatDatabaseEvent {
+  chatData: Record<string, RollHelperChatRecordEvent>;
+}
+
 export interface EventTimerStateEvent {
   offeredAt: number;
   deadlineAt: number | null;
@@ -481,8 +586,6 @@ export interface DiceMetaEvent {
   outboundResultGuidance?: OutboundResultGuidanceCacheEvent;
   // 仅保留当前仍有效轮次/楼层可注入到下一次 prompt 的暗骰引导。
   pendingBlindGuidanceQueue?: BlindGuidanceEvent[];
-  // 当前聊天已发生过的暗骰历史，仅用于 UI 列表展示，不保存真实结果。
-  blindHistory?: BlindHistoryItemEvent[];
   // 当前 user prompt 已构造出的暗骰引导缓存，仅用于避免同一次 prompt 重复拼装。
   outboundBlindGuidance?: OutboundBlindGuidanceCacheEvent;
   pendingPassiveDiscoveries?: PassiveDiscoveryEvent[];
@@ -490,10 +593,7 @@ export interface DiceMetaEvent {
   passiveDiscoveriesCache?: Record<string, PassiveDiscoveryEvent>;
   lastPassiveContextHash?: string;
   selectionFallbackState?: SelectionFallbackStateEvent;
-  summaryHistory?: RoundSummarySnapshotEvent[];
   lastPromptUserMsgId?: string;
-  // 记录最近一次 generation 后处理过的助手消息版本，避免重复清洗同一版本。
-  lastProcessedAssistantMsgId?: string;
 }
 
 export interface SelectionFallbackStateEvent {

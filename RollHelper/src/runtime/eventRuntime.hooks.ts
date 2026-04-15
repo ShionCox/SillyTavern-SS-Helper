@@ -27,16 +27,21 @@ import {
   simpleHashEvent as simpleHashCoreEvent,
 } from "../core/utilsEvent";
 import {
+  getActiveChatIdEvent as getActiveChatIdStoreEvent,
+  getCurrentChatDataEvent as getCurrentChatDataStoreEvent,
   getDiceMetaEvent as getDiceMetaStoreMetaEvent,
   getSettingsEvent as getSettingsStoreEvent,
   getLastBaseRollEvent as getLastBaseRollStoreEvent,
   getLastBaseRollTotalEvent as getLastBaseRollTotalStoreEvent,
+  loadCurrentChatDatabaseEvent as loadCurrentChatDatabaseStoreEvent,
   loadChatScopedStateIntoRuntimeEvent as loadChatScopedStateIntoRuntimeStoreEvent,
+  removeAssistantFloorEvent as removeAssistantFloorStoreEvent,
   persistChatSafeEvent as persistChatSafeStoreEvent,
   resolveSkillModifierBySkillNameEvent as resolveSkillModifierBySkillNameStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
-  appendBlindHistoryRecordEvent as appendBlindHistoryRecordStoreEvent,
+  setLastUserMessageIdEvent as setLastUserMessageIdStoreEvent,
+  upsertAssistantFloorEvent as upsertAssistantFloorStoreEvent,
 } from "../settings/storeEvent";
 import {
   bindInteractiveTriggerDomEventsEvent as bindInteractiveTriggerDomEventsModuleEvent,
@@ -75,7 +80,6 @@ import {
   getLatestRollRecordForEvent,
   handlePromptReadyEvent,
   invalidatePendingRoundFloorEvent,
-  invalidateSummaryHistoryFloorEvent,
   mergeEventsIntoPendingRoundEvent,
   normalizeCompareOperatorEvent,
   parseEventEnvelopesEvent,
@@ -162,6 +166,7 @@ function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
   return refreshAllWidgetsFromStateModuleEvent({
     getLiveContextEvent: getLiveContextCoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    getCurrentChatDataEvent: getCurrentChatDataStoreEvent,
     buildEventListCardEvent,
     buildEventRollResultCardEvent,
     getLatestRollRecordForEvent,
@@ -220,7 +225,6 @@ const rollDepsEvent = {
   buildEventRollResultCardEvent,
   saveLastRoll: saveLastRollStoreEvent,
   saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
-  appendBlindHistoryRecordEvent: appendBlindHistoryRecordStoreEvent,
 };
 
 /**
@@ -304,6 +308,8 @@ function buildEventHooksDepsEvent() {
     getLiveContextEvent: getLiveContextCoreEvent,
     eventSource: getTavernEventSourceEvent() ?? undefined,
     event_types: getTavernEventTypesEvent() ?? undefined,
+    getActiveChatIdEvent: getActiveChatIdStoreEvent,
+    getCurrentChatDataEvent: getCurrentChatDataStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     isAssistantMessageEvent: isAssistantMessageModuleEvent,
     buildAssistantMessageIdEvent,
@@ -325,15 +331,18 @@ function buildEventHooksDepsEvent() {
     persistChatSafeEvent: persistChatSafeStoreEvent,
     mergeEventsIntoPendingRoundEvent,
     invalidatePendingRoundFloorEvent,
-    invalidateSummaryHistoryFloorEvent,
     autoRollEventsByAiModeEvent,
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     sweepTimeoutFailuresEvent,
     refreshCountdownDomEvent,
+    loadCurrentChatDatabaseEvent: loadCurrentChatDatabaseStoreEvent,
     loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
+    removeAssistantFloorEvent: removeAssistantFloorStoreEvent,
     enhanceInteractiveTriggersInDomEvent,
     enhanceAssistantRawSourceButtonsEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+    setLastUserMessageIdEvent: setLastUserMessageIdStoreEvent,
+    upsertAssistantFloorEvent: upsertAssistantFloorStoreEvent,
   };
 }
 
@@ -341,7 +350,6 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
   const normalizedReason = String(reason || "").toLowerCase();
   if (normalizedReason !== "chat_reset") {
     const meta = getDiceMetaStoreMetaEvent();
-    delete meta.lastProcessedAssistantMsgId;
     delete meta.selectionFallbackState;
     return;
   }
@@ -353,8 +361,10 @@ function clearDiceMetaEventState(reason = "chat_reset"): void {
 }
 
 function resetAssistantProcessedStateEvent(): void {
-  const meta = getDiceMetaStoreMetaEvent();
-  delete meta.lastProcessedAssistantMsgId;
+  const chatData = getCurrentChatDataStoreEvent();
+  if (chatData?.meta) {
+    chatData.meta.lastProcessedFloorId = null;
+  }
 }
 
 function enhanceInteractiveTriggersInDomEvent(): void {
@@ -370,6 +380,7 @@ export function bindEventButtonsEvent(): void {
     refreshAllWidgetsFromStateEvent: refreshAllWidgetsFromStateWiredEvent,
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
+    getCurrentChatDataEvent: getCurrentChatDataStoreEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
     loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
     getLiveContextEvent: getLiveContextCoreEvent,

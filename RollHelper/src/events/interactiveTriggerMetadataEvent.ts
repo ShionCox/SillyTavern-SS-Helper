@@ -10,10 +10,10 @@ import type {
   TriggerPackRevealModeEvent,
 } from "../types/eventDomainEvent";
 import { normalizeDifficultyLevelEvent } from "./parserEvent";
-
-export const RH_TRIGGER_METADATA_KEY_Event = "rollhelper_interactive_triggers_v1";
-export const RH_TRIGGER_PACK_METADATA_KEY_Event = "rollhelper_trigger_pack_v1";
-export const RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event = "rollhelper_interactive_triggers_source_state_v1";
+import {
+  getAssistantFloorRecordByMessageEvent,
+  mutateAssistantFloorRecordByMessageEvent,
+} from "../settings/storeEvent";
 
 const RH_TRIGGER_REGEX_Event = /<rh-trigger\b([^>]*)>([\s\S]*?)<\/rh-trigger>/gi;
 const TRIGGER_PACK_BLOCK_REGEX_Event = /```(?:triggerjson|triggerpack|json|rolljson)?\s*([\s\S]*?)```/gi;
@@ -129,6 +129,13 @@ function parseTriggerAttributesEvent(attrText: string): Record<string, string> {
   return result;
 }
 
+function getMessageTextFieldEvent(record: Record<string, unknown>): string {
+  if (typeof record.mes === "string") return record.mes;
+  if (typeof record.content === "string") return record.content;
+  if (typeof record.text === "string") return record.text;
+  return "";
+}
+
 function getActiveSwipeRecordEvent(message: TavernMessageEvent): Record<string, unknown> | null {
   const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
   const swipes = (message as any)?.swipes;
@@ -137,77 +144,6 @@ function getActiveSwipeRecordEvent(message: TavernMessageEvent): Record<string, 
   }
   const activeSwipe = swipes[swipeId];
   return activeSwipe && typeof activeSwipe === "object" ? activeSwipe as Record<string, unknown> : null;
-}
-
-function hasActiveSwipeScopeEvent(message: TavernMessageEvent | undefined): boolean {
-  if (!message || typeof message !== "object") return false;
-  const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
-  const swipes = (message as any)?.swipes;
-  return Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length;
-}
-
-function getMessageExtraContainerEvent(
-  message: TavernMessageEvent,
-  create = false
-): Record<string, unknown> | null {
-  if (!message || typeof message !== "object") return null;
-  const record = message as Record<string, unknown>;
-  let extra = record.extra;
-  if (!extra || typeof extra !== "object") {
-    if (!create) return null;
-    extra = {};
-    record.extra = extra;
-  }
-  return extra as Record<string, unknown>;
-}
-
-function deleteInteractiveTriggerMetadataKeysEvent(container: Record<string, unknown> | null | undefined): void {
-  if (!container) return;
-  delete container[RH_TRIGGER_METADATA_KEY_Event];
-  delete container[RH_TRIGGER_PACK_METADATA_KEY_Event];
-  delete container[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
-}
-
-export function getActiveSwipeExtraContainerEvent(
-  message: TavernMessageEvent,
-  create = false
-): Record<string, unknown> | null {
-  const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
-  if (!Number.isFinite(swipeId) || swipeId < 0) return null;
-
-  const record = message as Record<string, unknown>;
-  let swipeInfo = record.swipe_info;
-  if (!Array.isArray(swipeInfo)) {
-    if (!create) return null;
-    swipeInfo = [];
-    record.swipe_info = swipeInfo;
-  }
-
-  while ((swipeInfo as unknown[]).length <= swipeId) {
-    (swipeInfo as unknown[]).push({});
-  }
-
-  let infoRecord = (swipeInfo as unknown[])[swipeId];
-  if (!infoRecord || typeof infoRecord !== "object") {
-    if (!create) return null;
-    infoRecord = {};
-    (swipeInfo as unknown[])[swipeId] = infoRecord;
-  }
-
-  let extra = (infoRecord as Record<string, unknown>).extra;
-  if (!extra || typeof extra !== "object") {
-    if (!create) return null;
-    extra = {};
-    (infoRecord as Record<string, unknown>).extra = extra;
-  }
-  return extra as Record<string, unknown>;
-}
-
-function getMessageTextFieldEvent(record: Record<string, unknown>): string {
-  if (typeof record.mes === "string") return record.mes;
-  if (typeof record.content === "string") return record.content;
-  if (typeof record.text === "string") return record.text;
-  return "";
 }
 
 export function getActiveMessageTextEvent(message: TavernMessageEvent | undefined): string {
@@ -371,50 +307,30 @@ export function getMessageInteractiveTriggersEvent(message: TavernMessageEvent |
   if (!message || typeof message !== "object") return [];
   const pack = getMessageTriggerPackEvent(message);
   const packItems = new Map((pack?.items || []).map((item) => [item.sid, item]));
-  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
-    ? [getActiveSwipeExtraContainerEvent(message, false)]
-    : [getMessageExtraContainerEvent(message, false)];
-  for (const container of containers) {
-    const raw = container?.[RH_TRIGGER_METADATA_KEY_Event];
-    if (!Array.isArray(raw)) continue;
-    return raw
-      .map((item) => normalizeInteractiveTriggerEvent(item))
-      .map((item) => {
-        if (!item) return null;
-        const sourceId = normalizeInlineTextEvent(item.triggerPackSourceId || item.sourceId || item.label);
-        return mergeTriggerWithPackItemEvent(item, packItems.get(sourceId));
-      })
-      .filter((item): item is InteractiveTriggerEvent => Boolean(item));
-  }
-  return [];
+  const floor = getAssistantFloorRecordByMessageEvent(message, false);
+  const raw = Array.isArray(floor?.triggers?.interactive) ? floor?.triggers?.interactive : [];
+  return raw
+    .map((item) => normalizeInteractiveTriggerEvent(item))
+    .map((item) => {
+      if (!item) return null;
+      const sourceId = normalizeInlineTextEvent(item.triggerPackSourceId || item.sourceId || item.label);
+      return mergeTriggerWithPackItemEvent(item, packItems.get(sourceId));
+    })
+    .filter((item): item is InteractiveTriggerEvent => Boolean(item));
 }
 
 export function getMessageTriggerPackEvent(message: TavernMessageEvent | undefined): TriggerPackEvent | null {
   if (!message || typeof message !== "object") return null;
-  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
-    ? [getActiveSwipeExtraContainerEvent(message, false)]
-    : [getMessageExtraContainerEvent(message, false)];
-  for (const container of containers) {
-    const normalized = normalizeTriggerPackEvent(container?.[RH_TRIGGER_PACK_METADATA_KEY_Event]);
-    if (normalized) return normalized;
-  }
-  return null;
+  const floor = getAssistantFloorRecordByMessageEvent(message, false);
+  return normalizeTriggerPackEvent(floor?.triggers?.triggerPack ?? null);
 }
 
 export function getMessageInteractiveTriggerLifecycleMetaEvent(
   message: TavernMessageEvent | undefined
 ): InteractiveTriggerMetadataLifecycleMetaEvent | null {
   if (!message || typeof message !== "object") return null;
-  const containers: Array<Record<string, unknown> | null> = hasActiveSwipeScopeEvent(message)
-    ? [getActiveSwipeExtraContainerEvent(message, false)]
-    : [getMessageExtraContainerEvent(message, false)];
-  for (const container of containers) {
-    const normalized = normalizeInteractiveTriggerLifecycleMetaEvent(
-      container?.[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event]
-    );
-    if (normalized) return normalized;
-  }
-  return null;
+  const floor = getAssistantFloorRecordByMessageEvent(message, false);
+  return normalizeInteractiveTriggerLifecycleMetaEvent(floor?.triggers?.lifecycle ?? null);
 }
 
 export function setMessageInteractiveTriggersEvent(
@@ -443,25 +359,11 @@ export function setMessageInteractiveTriggersEvent(
     occurrenceIndex: Number.isFinite(Number(trigger.occurrenceIndex)) ? Math.max(0, Math.floor(Number(trigger.occurrenceIndex))) : 0,
   }));
 
-  if (hasActiveSwipeScopeEvent(message)) {
-    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
-    if (!swipeExtra) return;
-    if (serialized.length > 0) {
-      swipeExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
-    } else {
-      delete swipeExtra[RH_TRIGGER_METADATA_KEY_Event];
-    }
-    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
-    return;
-  }
-
-  const messageExtra = getMessageExtraContainerEvent(message, true);
-  if (!messageExtra) return;
-  if (serialized.length > 0) {
-    messageExtra[RH_TRIGGER_METADATA_KEY_Event] = serialized;
-  } else {
-    delete messageExtra[RH_TRIGGER_METADATA_KEY_Event];
-  }
+  void mutateAssistantFloorRecordByMessageEvent(message, (floor) => {
+    floor.triggers.interactive = serialized
+      .map((item) => normalizeInteractiveTriggerEvent(item))
+      .filter((item): item is InteractiveTriggerEvent => Boolean(item));
+  });
 }
 
 export function setMessageTriggerPackEvent(
@@ -492,25 +394,9 @@ export function setMessageTriggerPackEvent(
       }
     : null;
 
-  if (hasActiveSwipeScopeEvent(message)) {
-    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
-    if (!swipeExtra) return;
-    if (serialized) {
-      swipeExtra[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
-    } else {
-      delete swipeExtra[RH_TRIGGER_PACK_METADATA_KEY_Event];
-    }
-    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
-    return;
-  }
-
-  const messageExtra = getMessageExtraContainerEvent(message, true);
-  if (!messageExtra) return;
-  if (serialized) {
-    messageExtra[RH_TRIGGER_PACK_METADATA_KEY_Event] = serialized;
-  } else {
-    delete messageExtra[RH_TRIGGER_PACK_METADATA_KEY_Event];
-  }
+  void mutateAssistantFloorRecordByMessageEvent(message, (floor) => {
+    floor.triggers.triggerPack = serialized;
+  });
 }
 
 export function setMessageInteractiveTriggerLifecycleMetaEvent(
@@ -524,25 +410,19 @@ export function setMessageInteractiveTriggerLifecycleMetaEvent(
         lastSourceKind: normalizeInteractiveTriggerMetadataSourceStateEvent(meta.lastSourceKind),
       }
     : null;
-  if (hasActiveSwipeScopeEvent(message)) {
-    const swipeExtra = getActiveSwipeExtraContainerEvent(message, true);
-    if (!swipeExtra) return;
-    if (serialized) {
-      swipeExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event] = serialized;
-    } else {
-      delete swipeExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
-    }
-    deleteInteractiveTriggerMetadataKeysEvent(getMessageExtraContainerEvent(message, false));
-    return;
-  }
-
-  const messageExtra = getMessageExtraContainerEvent(message, true);
-  if (!messageExtra) return;
-  if (serialized) {
-    messageExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event] = serialized;
-  } else {
-    delete messageExtra[RH_TRIGGER_METADATA_SOURCE_STATE_KEY_Event];
-  }
+  void mutateAssistantFloorRecordByMessageEvent(message, (floor) => {
+    floor.triggers.lifecycle = serialized
+      ? {
+          hydratedFrom: serialized.hydratedFrom,
+          sanitizedAt: serialized.sanitizedAt,
+          lastSourceKind: serialized.lastSourceKind,
+        }
+      : {
+          hydratedFrom: "markup",
+          sanitizedAt: 0,
+          lastSourceKind: "display_text",
+        };
+  });
 }
 
 function parseTriggerPackMetadataFromTextEvent(text: string): {

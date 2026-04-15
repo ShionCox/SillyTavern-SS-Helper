@@ -104,7 +104,6 @@ import {
   loadStatusesForChatKeyEvent as loadStatusesForChatKeyStoreEvent,
   saveLastRoll as saveLastRollStoreEvent,
   saveMetadataSafeEvent as saveMetadataSafeStoreEvent,
-  appendBlindHistoryRecordEvent as appendBlindHistoryRecordStoreEvent,
   saveStatusesForChatKeyEvent as saveStatusesForChatKeyStoreEvent,
   saveSkillPresetStoreEvent as saveSkillPresetStoreStoreEvent,
   setActiveStatusesEvent as setActiveStatusesStoreEvent,
@@ -380,7 +379,6 @@ export function registerBaseMacrosAndCommandsEvent(): void {
     resolveSkillModifierBySkillNameEvent: resolveSkillModifierBySkillNameStoreEvent,
     createIdEvent: createIdCoreEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
-    appendBlindHistoryRecordEvent: appendBlindHistoryRecordStoreEvent,
     playDiceRevealOnlyEvent: playDiceRevealOnlyCoreEvent,
   });
 }

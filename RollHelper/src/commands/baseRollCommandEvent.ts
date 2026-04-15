@@ -28,20 +28,6 @@ export interface BaseRollCommandDepsEvent {
   resolveSkillModifierBySkillNameEvent: (skillName: string, settings?: DicePluginSettingsEvent) => number;
   createIdEvent: (prefix: string) => string;
   saveMetadataSafeEvent: () => void;
-  appendBlindHistoryRecordEvent: (item: {
-    rollId: string;
-    roundId?: string;
-    eventId: string;
-    eventTitle: string;
-    skill: string;
-    diceExpr: string;
-    targetLabel: string;
-    rolledAt: number;
-    source: "manual_roll" | "blind_manual_roll" | "ai_auto_roll" | "passive_check" | "timeout_auto_fail";
-    origin?: "slash_broll" | "event_blind" | "interactive_blind";
-    sourceAssistantMsgId?: string;
-    note?: string;
-  }) => void;
   playDiceRevealOnlyEvent?: () => Promise<void>;
 }
 
@@ -158,7 +144,6 @@ export function registerBaseMacrosAndCommandsEvent(
     resolveSkillModifierBySkillNameEvent,
     createIdEvent,
     saveMetadataSafeEvent,
-    appendBlindHistoryRecordEvent,
     playDiceRevealOnlyEvent,
   } = deps;
 
@@ -351,7 +336,7 @@ export function registerBaseMacrosAndCommandsEvent(
             appendToConsoleEvent(enqueueResult.reason || "暗骰当前无法加入叙事引导。", "warn");
             return "";
           }
-          appendBlindHistoryFromGuidanceEvent(meta, blindItem, appendBlindHistoryRecordEvent);
+          appendBlindHistoryFromGuidanceEvent(meta, blindItem);
           saveMetadataSafeEvent();
           appendToConsoleEvent(`暗骰已记录：${skillName || expr}${targetLabel ? ` → ${targetLabel}` : ""}`);
           if (settings.blindUiWarnInConsole) {

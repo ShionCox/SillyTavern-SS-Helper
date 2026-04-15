@@ -130,11 +130,27 @@ export function createRoundSummarySnapshotEvent(
   };
 }
 
-export function ensureSummaryHistoryEvent(meta: DiceMetaEvent): RoundSummarySnapshotEvent[] {
-  if (!Array.isArray(meta.summaryHistory)) {
-    meta.summaryHistory = [];
-  }
-  return meta.summaryHistory;
+/** 模块级历史摘要运行时列表（纯运行时缓存，从 chatData 重建；聊天切换时自动清空）。 */
+let SUMMARY_HISTORY_RUNTIME_Event: RoundSummarySnapshotEvent[] = [];
+
+export function ensureSummaryHistoryEvent(_meta: DiceMetaEvent): RoundSummarySnapshotEvent[] {
+  return SUMMARY_HISTORY_RUNTIME_Event;
+}
+
+/** 获取当前运行时历史摘要列表引用。 */
+export function getSummaryHistoryRuntimeEvent(): RoundSummarySnapshotEvent[] {
+  return SUMMARY_HISTORY_RUNTIME_Event;
+}
+
+/** 用给定数组替换运行时历史摘要并返回引用。 */
+export function setSummaryHistoryRuntimeEvent(history: RoundSummarySnapshotEvent[]): RoundSummarySnapshotEvent[] {
+  SUMMARY_HISTORY_RUNTIME_Event = history;
+  return SUMMARY_HISTORY_RUNTIME_Event;
+}
+
+/** 清空运行时历史摘要列表。 */
+export function clearSummaryHistoryRuntimeEvent(): void {
+  SUMMARY_HISTORY_RUNTIME_Event = [];
 }
 
 export function trimSummaryHistoryEvent(

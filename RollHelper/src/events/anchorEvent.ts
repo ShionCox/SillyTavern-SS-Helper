@@ -3,11 +3,13 @@ import type {
   DiceMetaEvent,
   EventRollRecordEvent,
   PendingRoundEvent,
+  RollHelperChatRecordEvent,
   RoundSummaryEventItemEvent,
   RoundSummarySnapshotEvent,
   TavernMessageEvent,
 } from "../types/eventDomainEvent";
 import type { DiceResult } from "../types/diceEvent";
+import { buildMinimalSummaryItemEvent } from "../settings/storeEvent";
 import { logger } from "../../index";
 
 const WIDGET_CONTAINER_CLASS_Event = "st-rh-widget-container";
@@ -16,6 +18,7 @@ const WIDGET_CONTAINER_ATTR_Event = "data-rh-widget";
 export interface AnchorDepsEvent {
   getLiveContextEvent: () => { chat?: TavernMessageEvent[] } | null;
   getDiceMetaEvent: () => DiceMetaEvent;
+  getCurrentChatDataEvent: () => RollHelperChatRecordEvent;
   buildEventListCardEvent: (round: PendingRoundEvent) => string;
   buildEventRollResultCardEvent: (
     event: DiceEventSpecEvent,
@@ -394,21 +397,20 @@ function mountHistoryRoundWidgetsEvent(
 }
 
 /**
- * 功能：判断当前待处理轮次是否已经被归档到历史摘要中。
+ * 功能：判断当前待处理轮次是否已经被归档到 chatData 的已关闭轮次中。
  * 参数：
  *   round：当前待处理轮次。
- *   summaryHistory：历史轮次摘要列表。
+ *   chatData：当前聊天 chatData 记录。
  * 返回：
- *   boolean：若历史中已存在同 roundId 的快照则返回 true。
+ *   boolean：若 chatData.rounds 中已存在同 roundId 且状态为 closed 的记录则返回 true。
  */
 function isPendingRoundArchivedEvent(
   round: PendingRoundEvent | undefined,
-  summaryHistory: RoundSummarySnapshotEvent[] | undefined
+  chatData: RollHelperChatRecordEvent | null | undefined
 ): boolean {
-  if (!round || !Array.isArray(summaryHistory) || summaryHistory.length === 0) {
-    return false;
-  }
-  return summaryHistory.some((snapshot) => String(snapshot?.roundId ?? "") === String(round.roundId ?? ""));
+  if (!round || !chatData?.rounds?.records) return false;
+  const existing = chatData.rounds.records[round.roundId];
+  return !!existing && existing.status === "closed";
 }
 
 /**
@@ -435,11 +437,12 @@ export function refreshAllWidgetsFromStateEvent(
   const liveCtx = deps.getLiveContextEvent();
   const chat = liveCtx?.chat as TavernMessageEvent[] | undefined;
   const meta = deps.getDiceMetaEvent();
+  const chatData = deps.getCurrentChatDataEvent();
 
   const shouldMountPendingRound =
     !!meta.pendingRound &&
     meta.pendingRound.events.length > 0 &&
-    !isPendingRoundArchivedEvent(meta.pendingRound, meta.summaryHistory);
+    !isPendingRoundArchivedEvent(meta.pendingRound, chatData);
 
   if (shouldMountPendingRound) {
     result.hasPendingRound = true;
@@ -461,18 +464,49 @@ export function refreshAllWidgetsFromStateEvent(
     }
   }
 
-  if (Array.isArray(meta.summaryHistory)) {
-    for (const snapshot of meta.summaryHistory) {
-      if (!snapshot.events || snapshot.events.length <= 0) continue;
-      const historyResult = mountHistoryRoundWidgetsEvent(snapshot, chat, deps);
-      if (historyResult.hasRestorableWidgets) {
-        result.hasHistoryWidgets = true;
+  const closedRoundIds = (chatData?.rounds?.order || []).filter(
+    (id) => chatData?.rounds?.records?.[id]?.status === "closed"
+  );
+  for (const roundId of closedRoundIds) {
+    const roundRec = chatData.rounds.records[roundId];
+    if (!roundRec) continue;
+    const floorIds = roundRec.floorIds || [];
+    const snapshotEvents: RoundSummaryEventItemEvent[] = [];
+    const sourceAssistantMsgIds: string[] = [];
+    for (const fid of floorIds) {
+      const floor = chatData.floors?.[String(fid)];
+      if (!floor?.eventDice) continue;
+      for (const event of floor.eventDice.events || []) {
+        const allRolls = [
+          ...(floor.eventDice.publicRolls || []),
+          ...(floor.eventDice.blindRolls || []),
+        ];
+        const record = allRolls.find((r) => r.eventId === event.id) ?? null;
+        snapshotEvents.push(buildMinimalSummaryItemEvent(event, record));
+        if (event.sourceAssistantMsgId && !sourceAssistantMsgIds.includes(event.sourceAssistantMsgId)) {
+          sourceAssistantMsgIds.push(event.sourceAssistantMsgId);
+        }
       }
-      if (historyResult.mountedCount > 0) {
-        result.historyWidgetsMounted = true;
-      }
-      result.mountedWidgetCount += historyResult.mountedCount;
     }
+    if (snapshotEvents.length === 0) continue;
+
+    const snapshot: RoundSummarySnapshotEvent = {
+      roundId: roundRec.roundId,
+      openedAt: roundRec.openedAt,
+      closedAt: roundRec.closedAt ?? Date.now(),
+      eventsCount: snapshotEvents.length,
+      rolledCount: snapshotEvents.filter((e) => e.rollId || e.resultSource).length,
+      events: snapshotEvents,
+      sourceAssistantMsgIds,
+    };
+    const historyResult = mountHistoryRoundWidgetsEvent(snapshot, chat, deps);
+    if (historyResult.hasRestorableWidgets) {
+      result.hasHistoryWidgets = true;
+    }
+    if (historyResult.mountedCount > 0) {
+      result.historyWidgetsMounted = true;
+    }
+    result.mountedWidgetCount += historyResult.mountedCount;
   }
 
   if (result.hasPendingRound || result.hasHistoryWidgets) {
@@ -486,7 +520,7 @@ export function refreshAllWidgetsFromStateEvent(
       chatDomReady: result.chatDomReady,
       pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound.events.length : 0,
       pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound.rolls.length : 0,
-      summaryHistoryCount: Array.isArray(meta.summaryHistory) ? meta.summaryHistory.length : 0,
+      closedRoundCount: closedRoundIds.length,
     });
   }
 

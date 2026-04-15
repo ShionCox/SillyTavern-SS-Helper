@@ -3,6 +3,7 @@ import type {
   DiceEventSpecEvent,
   DiceMetaEvent,
   PendingRoundEvent,
+  RollHelperChatRecordEvent,
   TavernMessageEvent,
   EventRollRecordEvent,
   RoundSummarySnapshotEvent,
@@ -44,7 +45,6 @@ import {
 } from "./hooksEvent";
 import {
   invalidatePendingRoundFloorEvent,
-  invalidateSummaryHistoryFloorEvent,
 } from "./roundEvent";
 
 type HooksTestDepsBundleEvent = {
@@ -328,7 +328,6 @@ function buildMetaEvent(assistantMsgId: string): DiceMetaEvent {
         source: "manual_editor",
       },
     ],
-    summaryHistory: [summarySnapshot],
   };
 }
 
@@ -387,10 +386,21 @@ function buildDepsBundleEvent(
     return nextRound;
   });
 
+  const stubChatData: RollHelperChatRecordEvent = {
+    meta: { schemaVersion: 1, updatedAt: 0, openRoundId: null, lastProcessedFloorId: null, lastUserMessageId: null },
+    floorOrder: [],
+    floors: {},
+    rounds: { order: [], records: {} },
+    skills: { activePresetId: "", currentSkillTableText: "", presetStore: { presets: {} }, updatedAt: 0 },
+    statuses: { order: [], records: {}, current: { snapshot: [], appliedAt: 0 } },
+  };
+
   const deps: RuntimeEventHooksDepsEvent = {
     getLiveContextEvent: (): any => ({ chat }),
     eventSource: {},
     event_types: undefined,
+    getActiveChatIdEvent: (): string => "test-chat-id",
+    getCurrentChatDataEvent: (): RollHelperChatRecordEvent => stubChatData,
     getSettingsEvent: () => ({
       enabled: true,
       eventApplyScope: "all" as const,
@@ -431,18 +441,16 @@ function buildDepsBundleEvent(
       getDiceMetaEvent: (): DiceMetaEvent => meta,
       saveMetadataSafeEvent: saveMetadataSpy,
     }),
-    invalidateSummaryHistoryFloorEvent: (assistantMsgId: string): boolean => invalidateSummaryHistoryFloorEvent(assistantMsgId, {
-      getDiceMetaEvent: (): DiceMetaEvent => meta,
-      saveMetadataSafeEvent: saveMetadataSpy,
-    }),
     autoRollEventsByAiModeEvent: autoRollSpy,
     sweepTimeoutFailuresEvent: (): boolean => false,
     refreshCountdownDomEvent: (): void => undefined,
+    loadCurrentChatDatabaseEvent: async (): Promise<void> => undefined,
     loadChatScopedStateIntoRuntimeEvent: async (): Promise<void> => undefined,
     refreshAllWidgetsFromStateEvent: (): void => undefined,
     enhanceInteractiveTriggersInDomEvent: (): void => undefined,
     enhanceAssistantRawSourceButtonsEvent: (): void => undefined,
     saveMetadataSafeEvent: saveMetadataSpy,
+    setLastUserMessageIdEvent: async (): Promise<void> => undefined,
   };
 
   return {
@@ -469,8 +477,6 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     });
 
     expect(meta.pendingRound).toBeUndefined();
-    expect(meta.summaryHistory).toBeUndefined();
-    expect(meta.blindHistory).toBeUndefined();
     expect(saveMetadataSafeEvent).not.toHaveBeenCalled();
   });
 
@@ -562,7 +568,6 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(cleaned.changedUi).toBe(false);
     expect(cleaned.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
     expect(meta.pendingRound).toBeUndefined();
-    expect(meta.summaryHistory).toEqual([]);
     expect(meta.pendingResultGuidanceQueue).toEqual([]);
     expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["invalidated"]);
     expect(mergeEventsSpy).not.toHaveBeenCalled();
@@ -598,7 +603,6 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
     expect(meta.pendingRound?.events.map((item) => item.sourceAssistantMsgId)).toEqual([newAssistantMsgId]);
     expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
-    expect(meta.summaryHistory).toEqual([]);
     expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
     expect(autoRollSpy).toHaveBeenCalledTimes(1);
     expect(persistChatSpy).toHaveBeenCalled();
@@ -620,7 +624,6 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(result.changedUi).toBe(true);
     expect(result.rebuiltFloorKeys).toEqual([]);
     expect(meta.pendingRound).toBeDefined();
-    expect(meta.summaryHistory).toHaveLength(1);
     expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["queued"]);
     expect(mergeEventsSpy).not.toHaveBeenCalled();
     expect(autoRollSpy).not.toHaveBeenCalled();
@@ -640,9 +643,7 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(meta.pendingRound).toBeUndefined();
     expect(meta.pendingResultGuidanceQueue).toEqual([]);
     expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["invalidated"]);
-    expect(meta.summaryHistory).toEqual([]);
     expect(meta.activeStatuses?.map((item) => item.name)).toEqual(["手动状态"]);
-    expect(meta.lastProcessedAssistantMsgId).toBe(newAssistantMsgId);
     expect(mergeEventsSpy).not.toHaveBeenCalled();
     expect(autoRollSpy).not.toHaveBeenCalled();
   });
@@ -663,11 +664,9 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
     expect(meta.pendingRound?.sourceFloorKey).toBe("assistant:floor-1");
     expect(meta.pendingRound?.instanceToken).toBe("rinst_new");
-    expect(meta.summaryHistory).toEqual([]);
     expect(meta.activeStatuses?.map((item) => item.name)).toEqual(["手动状态"]);
     expect(meta.pendingResultGuidanceQueue).toEqual([]);
     expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["invalidated"]);
-    expect(meta.lastProcessedAssistantMsgId).toBe(newAssistantMsgId);
     expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
     expect(autoRollSpy).toHaveBeenCalledTimes(1);
   });
@@ -682,7 +681,6 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(result.changedData).toBe(true);
     expect(result.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
     expect(meta.pendingRound).toBeUndefined();
-    expect(meta.summaryHistory).toEqual([]);
     expect(mergeEventsSpy).not.toHaveBeenCalled();
     expect(autoRollSpy).not.toHaveBeenCalled();
   });

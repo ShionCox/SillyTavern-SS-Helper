@@ -1,7 +1,6 @@
 import { stripRollHelperArtifactsEvent } from '../../../SDK/tavern';
 import { logger } from "../../index";
 import {
-    getActiveSwipeExtraContainerEvent,
     getMessageInteractiveTriggersEvent,
     getMessageInteractiveTriggerLifecycleMetaEvent,
     getMessageTriggerPackEvent,
@@ -12,10 +11,10 @@ import {
     stripInteractiveTriggerMarkupFromTextEvent,
 } from "./interactiveTriggerMetadataEvent";
 import type { DiceEventSpecEvent, InteractiveTriggerEvent, TavernMessageEvent, TriggerPackEvent } from "../types/eventDomainEvent";
-
-const RH_ORIGINAL_SOURCE_KEY_Event = "rollhelper_original_source_v1";
-const RH_ORIGINAL_SOURCE_ENABLED_KEY_Event = "rollhelper_original_source_enabled_v1";
-const RH_ORIGINAL_SOURCE_META_KEY_Event = "rollhelper_original_source_meta_v1";
+import {
+    getAssistantFloorRecordByMessageEvent,
+    mutateAssistantFloorRecordByMessageEvent,
+} from "../settings/storeEvent";
 
 export type AssistantOriginalSourceMetaEvent = {
     source: "host" | "plugin_snapshot" | "fallback";
@@ -101,46 +100,10 @@ export function stripRollJsonBlocks(text: string): string {
         .trim();
 }
 
-function getMessageExtraContainerEvent(message: TavernMessageEvent, create = false): Record<string, unknown> | null {
-    if (!message || typeof message !== "object") return null;
-    const record = message as Record<string, unknown>;
-    let extra = record.extra;
-    if (!extra || typeof extra !== "object") {
-        if (!create) return null;
-        extra = {};
-        record.extra = extra;
-    }
-    return extra as Record<string, unknown>;
-}
-
-function getAssistantOriginalSourceContainerEvent(
-    message: TavernMessageEvent,
-    create = false
-): Record<string, unknown> | null {
-    const swipeId = Number((message as any)?.swipe_id ?? (message as any)?.swipeId);
-    if (Number.isFinite(swipeId) && swipeId >= 0) {
-        return getActiveSwipeExtraContainerEvent(message, create);
-    }
-    return getMessageExtraContainerEvent(message, create);
-}
-
 function clearAssistantOriginalSourceMetaEvent(message: TavernMessageEvent): boolean {
-    const container = getAssistantOriginalSourceContainerEvent(message, false);
-    if (!container) return false;
-    let changed = false;
-    if (RH_ORIGINAL_SOURCE_KEY_Event in container) {
-        delete container[RH_ORIGINAL_SOURCE_KEY_Event];
-        changed = true;
-    }
-    if (RH_ORIGINAL_SOURCE_ENABLED_KEY_Event in container) {
-        delete container[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event];
-        changed = true;
-    }
-    if (RH_ORIGINAL_SOURCE_META_KEY_Event in container) {
-        delete container[RH_ORIGINAL_SOURCE_META_KEY_Event];
-        changed = true;
-    }
-    return changed;
+    return mutateAssistantFloorRecordByMessageEvent(message, (floor) => {
+        floor.content.raw = "";
+    });
 }
 
 function setAssistantOriginalSourceMetaEvent(
@@ -154,29 +117,10 @@ function setAssistantOriginalSourceMetaEvent(
     if (!normalizedEnabled) {
         return clearAssistantOriginalSourceMetaEvent(message);
     }
-    const container = getAssistantOriginalSourceContainerEvent(message, true);
-    if (!container) return false;
-    let changed = false;
-    const previousText = String(container[RH_ORIGINAL_SOURCE_KEY_Event] ?? "");
-    const previousEnabled = container[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event] === true;
-    if (previousText !== normalizedText) {
-        container[RH_ORIGINAL_SOURCE_KEY_Event] = normalizedText;
-        changed = true;
-    }
-    if (!previousEnabled) {
-        container[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event] = true;
-        changed = true;
-    }
-    const previousMeta = container[RH_ORIGINAL_SOURCE_META_KEY_Event];
-    if (meta) {
-        const nextMetaJson = JSON.stringify(meta);
-        const previousMetaJson = previousMeta == null ? "" : JSON.stringify(previousMeta);
-        if (previousMetaJson !== nextMetaJson) {
-            container[RH_ORIGINAL_SOURCE_META_KEY_Event] = meta;
-            changed = true;
-        }
-    }
-    return changed;
+    void meta;
+    return mutateAssistantFloorRecordByMessageEvent(message, (floor) => {
+        floor.content.raw = normalizedText;
+    });
 }
 
 export function rememberAssistantOriginalSourceTextEvent(
@@ -194,21 +138,23 @@ export function resetAssistantSwipeRuntimeStateEvent(message: TavernMessageEvent
 
 export function getPersistedAssistantOriginalSourceTextEvent(message: TavernMessageEvent | undefined): string {
     if (!message || typeof message !== "object") return "";
-    const container = getAssistantOriginalSourceContainerEvent(message, false);
-    const enabled = container?.[RH_ORIGINAL_SOURCE_ENABLED_KEY_Event] === true;
-    const text = String(container?.[RH_ORIGINAL_SOURCE_KEY_Event] ?? "");
-    if (enabled && text.trim()) return text;
-    return "";
+    return String(getAssistantFloorRecordByMessageEvent(message, false)?.content.raw ?? "").trim();
 }
 
 export function getPersistedAssistantOriginalSourceMetaEvent(
     message: TavernMessageEvent | undefined
 ): AssistantOriginalSourceMetaEvent | null {
     if (!message || typeof message !== "object") return null;
-    const container = getAssistantOriginalSourceContainerEvent(message, false);
-    const meta = container?.[RH_ORIGINAL_SOURCE_META_KEY_Event];
-    if (!meta || typeof meta !== "object") return null;
-    return meta as AssistantOriginalSourceMetaEvent;
+    const rawText = String(getAssistantFloorRecordByMessageEvent(message, false)?.content.raw ?? "").trim();
+    if (!rawText) return null;
+    return {
+        source: "plugin_snapshot",
+        capturedAt: 0,
+        richnessScore: 0,
+        containsRollJson: stripRollJsonBlocks(rawText) !== rawText,
+        containsEventEnvelope: /"type"\s*:\s*"dice_events"/i.test(rawText) || /<eventjson>/i.test(rawText),
+        containsInteractiveTrigger: /<rh-trigger\b/i.test(rawText) || /"type"\s*:\s*"trigger_pack"/i.test(rawText),
+    };
 }
 
 type AssistantOriginalSourceCandidateDepsEvent = Pick<

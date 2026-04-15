@@ -55,7 +55,6 @@ import {
   formatRollRecordSummaryEvent as formatRollRecordSummaryModuleEvent,
   getLatestRollRecordForEvent as getLatestRollRecordForModuleEvent,
   invalidatePendingRoundFloorEvent as invalidatePendingRoundFloorModuleEvent,
-  invalidateSummaryHistoryFloorEvent as invalidateSummaryHistoryFloorModuleEvent,
   mergeEventsIntoPendingRoundEvent as mergeEventsIntoPendingRoundModuleEvent,
   recordTimeoutFailureIfNeededEvent as recordTimeoutFailureIfNeededModuleEvent,
   resolveTriggeredOutcomeEvent as resolveTriggeredOutcomeModuleEvent,
@@ -180,18 +179,6 @@ export function buildAssistantFloorKeyEvent(assistantMsgId: string): string | nu
  */
 export function invalidatePendingRoundFloorEvent(assistantMsgId: string): boolean {
   return invalidatePendingRoundFloorModuleEvent(assistantMsgId, {
-    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
-    saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
-  });
-}
-
-/**
- * 功能：按楼层清除历史轮次中的旧事件与旧骰子结果。
- * @param assistantMsgId 当前楼层对应的助手消息标识。
- * @returns 若实际清除了历史楼层状态则返回 `true`，否则返回 `false`。
- */
-export function invalidateSummaryHistoryFloorEvent(assistantMsgId: string): boolean {
-  return invalidateSummaryHistoryFloorModuleEvent(assistantMsgId, {
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
   });

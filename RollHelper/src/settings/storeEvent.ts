@@ -1,10 +1,21 @@
 import type { DiceResult } from "../types/diceEvent";
 import type {
   ActiveStatusEvent,
-  BlindHistoryItemEvent,
+  DiceEventSpecEvent,
   DiceMetaEvent,
   DicePluginSettingsEvent,
+  EventRollRecordEvent,
   PendingRoundEvent,
+  RollHelperChatDatabaseEvent,
+  RollHelperChatMetaEvent,
+  RollHelperChatRecordEvent,
+  RollHelperCurrentStatusesStateEvent,
+  RollHelperFloorRecordEvent,
+  RollHelperFloorTriggersEvent,
+  RollHelperRoundRecordEvent,
+  RollHelperSkillsStateEvent,
+  RollHelperStatusesStateEvent,
+  RoundSummaryEventItemEvent,
   RoundSummarySnapshotEvent,
   SkillEditorRowDraftEvent,
   SkillPresetEvent,
@@ -24,8 +35,6 @@ import {
   listSdkPluginChatStateSummaries as listSdkPluginChatStateSummariesAsync,
   patchSdkChatShared,
   ensureSdkChatDocument,
-  appendSdkPluginChatRecord,
-  querySdkPluginChatRecords,
   flushSdkChatDataNow,
 } from "../../../SDK/db";
 import {
@@ -49,7 +58,8 @@ import {
 } from "../core/runtimeContextEvent";
 // 旧 V2 persistence 已移除，迁移由 SDK/db 层一次性处理
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
-import { normalizeBlindHistoryItemEvent } from "../events/roundEvent";
+import { setSummaryHistoryRuntimeEvent, clearSummaryHistoryRuntimeEvent } from "../events/summaryEvent";
+import { clearBlindHistoryRuntimeEvent } from "../events/roundEvent";
 import { createIdEvent } from "../core/utilsEvent";
 import {
   AI_SUPPORTED_DICE_SIDES_Event,
@@ -77,68 +87,7 @@ interface ScopedSettingsCacheEvent {
 let SETTINGS_CACHE_Event: ScopedSettingsCacheEvent | null = null;
 let SETTINGS_STORE_SUBSCRIBED_Event = false;
 
-interface RollHelperChatScopedStateEvent {
-  skillPresetStoreText: string;
-  activeStatuses: ActiveStatusEvent[];
-  lastBaseRoll: DiceResult | null;
-  pendingRound: PendingRoundEvent | null;
-  summaryHistory: RoundSummarySnapshotEvent[];
-  blindHistory: BlindHistoryItemEvent[];
-}
-
-/**
- * 功能：从聊天级持久化状态中恢复最近一次已处理的助手消息标识。
- * 参数：
- *   state：当前聊天级持久化状态快照。
- * 返回：
- *   string | undefined：最近一次已处理的助手消息标识；不存在时返回 undefined。
- */
-function resolveLastProcessedAssistantMsgIdFromStateEvent(
-  state: RollHelperChatScopedStateEvent
-): string | undefined {
-  const pendingRound = state.pendingRound;
-  if (pendingRound) {
-    const pendingMsgIds = Array.isArray(pendingRound.sourceAssistantMsgIds)
-      ? pendingRound.sourceAssistantMsgIds
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean)
-      : [];
-    if (pendingMsgIds.length > 0) {
-      return pendingMsgIds[pendingMsgIds.length - 1];
-    }
-    const pendingEventMsgIds = Array.isArray(pendingRound.events)
-      ? pendingRound.events
-          .map((event) => String(event?.sourceAssistantMsgId ?? "").trim())
-          .filter(Boolean)
-      : [];
-    if (pendingEventMsgIds.length > 0) {
-      return pendingEventMsgIds[pendingEventMsgIds.length - 1];
-    }
-  }
-
-  const history = Array.isArray(state.summaryHistory) ? state.summaryHistory : [];
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const snapshot = history[index];
-    const snapshotMsgIds = Array.isArray(snapshot?.sourceAssistantMsgIds)
-      ? snapshot.sourceAssistantMsgIds
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean)
-      : [];
-    if (snapshotMsgIds.length > 0) {
-      return snapshotMsgIds[snapshotMsgIds.length - 1];
-    }
-    const eventMsgIds = Array.isArray(snapshot?.events)
-      ? snapshot.events
-          .map((item) => String(item?.sourceAssistantMsgId ?? "").trim())
-          .filter(Boolean)
-      : [];
-    if (eventMsgIds.length > 0) {
-      return eventMsgIds[eventMsgIds.length - 1];
-    }
-  }
-
-  return undefined;
-}
+// 旧 RollHelperChatScopedStateEvent 已移除，数据来源统一由 chatData (v3) 提供。
 
 var syncSettingsUiCallbackEvent: () => void = () => { };
 
@@ -149,6 +98,9 @@ export function setSyncSettingsUiCallbackEvent(callback: () => void): void {
 let ACTIVE_CHAT_KEY_Event = "";
 let ACTIVE_CHAT_SCOPE_Event: SdkTavernScopeLocatorEvent | null = null;
 let CHAT_SCOPED_LOAD_TOKEN_Event = 0;
+const CHAT_DATA_SCHEMA_VERSION_Event = 1;
+let ACTIVE_CHAT_ID_V3_Event = "";
+let ACTIVE_CHAT_DATA_V3_Event: RollHelperChatRecordEvent | null = null;
 
 /**
  * 功能：把 AI 可用骰式配置规范化为受支持的骰面列表文本。
@@ -196,18 +148,14 @@ const RUNTIME_DICE_META_Event: DiceMetaEvent = {
   pendingResultGuidanceQueue: [],
   outboundResultGuidance: undefined,
   pendingBlindGuidanceQueue: [],
-  blindHistory: [],
   outboundBlindGuidance: undefined,
   pendingPassiveDiscoveries: [],
   outboundPassiveDiscovery: undefined,
   passiveDiscoveriesCache: {},
   lastPassiveContextHash: undefined,
   selectionFallbackState: undefined,
-  summaryHistory: [],
   lastPromptUserMsgId: undefined,
-  lastProcessedAssistantMsgId: undefined,
 };
-const BLIND_RESULTS_COLLECTION_Event = "blind_results";
 
 /**
  * 功能：解析当前聊天的结构化主键。
@@ -229,160 +177,850 @@ function resolveCurrentChatKeyEvent(): string {
 }
 
 /**
- * 功能：将技能预设写入当前聊天级存储。
- * @param skillPresetStoreText 技能预设文本
- * @returns 无返回值
+ * 功能：解析当前聊天的官方 chatId，作为 v3 数据结构的唯一聊天主键。
+ * 返回：
+ *   string：官方 chatId；不可用时返回空字符串。
  */
-function normalizeChatScopedStatePayloadEvent(
-  source: Partial<RollHelperChatScopedStateEvent>,
-  fallbackSkillTableText: string
-): RollHelperChatScopedStateEvent {
+function resolveCurrentOfficialChatIdEvent(): string {
+  const liveCtx = getLiveContextEvent();
+  const runtimeChatId = String(liveCtx?.chatId ?? liveCtx?.chat_id ?? "").trim();
+  if (runtimeChatId) {
+    ACTIVE_CHAT_ID_V3_Event = runtimeChatId;
+    return runtimeChatId;
+  }
+  const scope = getTavernContextSnapshotEvent();
+  const scopedChatId = String(scope?.currentChatId ?? "").trim();
+  ACTIVE_CHAT_ID_V3_Event = scopedChatId;
+  return scopedChatId;
+}
+
+function normalizeFloorIdEvent(raw: unknown): number | null {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+function buildDefaultChatSkillsStateEvent(
+  fallbackSkillTableText: string,
+  now = Date.now()
+): RollHelperSkillsStateEvent {
+  const settings = getSettingsEvent();
   const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-    typeof source.skillPresetStoreText === "string" ? source.skillPresetStoreText : "",
+    settings.skillPresetStoreText,
     fallbackSkillTableText
   );
-  const normalizedStore =
-    parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
+  const presetStore =
+    parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent(now);
   return {
-    skillPresetStoreText: JSON.stringify(normalizedStore, null, 2),
-    activeStatuses: normalizeActiveStatusesFromEvent(source.activeStatuses),
-    lastBaseRoll: source.lastBaseRoll ?? null,
-    pendingRound: source.pendingRound ?? null,
-    summaryHistory: Array.isArray(source.summaryHistory) ? source.summaryHistory : [],
-    blindHistory: normalizeBlindHistoryItemsEvent(source.blindHistory),
+    activePresetId: String(presetStore.activePresetId ?? "").trim() || SKILL_PRESET_DEFAULT_ID_Event,
+    currentSkillTableText: syncActivePresetToSkillTableTextEvent(presetStore, settings.skillTableText || fallbackSkillTableText),
+    presetStore,
+    updatedAt: now,
   };
 }
 
-function mergeBlindHistoryItemsEvent(
-  primary: unknown,
-  secondary: unknown
-): BlindHistoryItemEvent[] {
-  const merged = new Map<string, BlindHistoryItemEvent>();
-  for (const item of normalizeBlindHistoryItemsEvent(secondary)) {
-    if (!item.rollId) continue;
-    merged.set(item.rollId, item);
+function buildDefaultCurrentStatusesStateEvent(now = Date.now()): RollHelperCurrentStatusesStateEvent {
+  return {
+    activeStatusIds: [],
+    snapshot: [],
+    updatedAt: now,
+  };
+}
+
+function buildDefaultStatusesStateEvent(now = Date.now()): RollHelperStatusesStateEvent {
+  return {
+    order: [],
+    records: {},
+    current: buildDefaultCurrentStatusesStateEvent(now),
+  };
+}
+
+function buildDefaultChatMetaEvent(now = Date.now()): RollHelperChatMetaEvent {
+  return {
+    schemaVersion: CHAT_DATA_SCHEMA_VERSION_Event,
+    updatedAt: now,
+    openRoundId: null,
+    lastProcessedFloorId: null,
+    lastUserMessageId: null,
+  };
+}
+
+function buildDefaultChatRecordEvent(
+  _chatId: string,
+  fallbackSkillTableText: string,
+  now = Date.now()
+): RollHelperChatRecordEvent {
+  return {
+    meta: buildDefaultChatMetaEvent(now),
+    floorOrder: [],
+    floors: {},
+    rounds: {
+      order: [],
+      records: {},
+    },
+    skills: buildDefaultChatSkillsStateEvent(fallbackSkillTableText, now),
+    statuses: buildDefaultStatusesStateEvent(now),
+  };
+}
+
+function normalizeFloorTriggersStateEvent(source: unknown): RollHelperFloorTriggersEvent {
+  const raw = source && typeof source === "object" && !Array.isArray(source)
+    ? source as Partial<RollHelperFloorTriggersEvent>
+    : {};
+  return {
+    interactive: Array.isArray(raw.interactive) ? raw.interactive : [],
+    triggerPack: raw.triggerPack ?? null,
+    lifecycle: {
+      hydratedFrom: raw.lifecycle?.hydratedFrom === "metadata" ? "metadata" : "markup",
+      sanitizedAt: Number(raw.lifecycle?.sanitizedAt) || 0,
+      lastSourceKind: String(raw.lifecycle?.lastSourceKind ?? "raw_source"),
+    },
+  };
+}
+
+function normalizeChatRecordEvent(
+  source: unknown,
+  chatId: string,
+  fallbackSkillTableText: string
+): RollHelperChatRecordEvent {
+  const now = Date.now();
+  const raw = source && typeof source === "object" && !Array.isArray(source)
+    ? source as Partial<RollHelperChatRecordEvent>
+    : {};
+  const next = buildDefaultChatRecordEvent(chatId, fallbackSkillTableText, now);
+  const floorsSource = raw.floors && typeof raw.floors === "object" && !Array.isArray(raw.floors)
+    ? raw.floors
+    : {};
+  const floors: Record<string, RollHelperFloorRecordEvent> = {};
+  const floorOrder = new Set<number>();
+
+  for (const [rawKey, rawFloor] of Object.entries(floorsSource)) {
+    if (!rawFloor || typeof rawFloor !== "object" || Array.isArray(rawFloor)) continue;
+    const floorSource = rawFloor as Partial<RollHelperFloorRecordEvent>;
+    const floorId = normalizeFloorIdEvent(floorSource.floorId ?? floorSource.messageId ?? rawKey);
+    if (floorId == null) continue;
+    floorOrder.add(floorId);
+    floors[String(floorId)] = {
+      floorId,
+      messageId: floorId,
+      role: "assistant",
+      createdAt: Number(floorSource.createdAt) || now,
+      updatedAt: Number(floorSource.updatedAt) || now,
+      content: {
+        raw: String(floorSource.content?.raw ?? ""),
+        processed: String(floorSource.content?.processed ?? ""),
+      },
+      triggers: normalizeFloorTriggersStateEvent(floorSource.triggers),
+      eventDice: {
+        events: Array.isArray(floorSource.eventDice?.events) ? floorSource.eventDice.events : [],
+        publicRolls: Array.isArray(floorSource.eventDice?.publicRolls) ? floorSource.eventDice.publicRolls : [],
+        blindRolls: Array.isArray(floorSource.eventDice?.blindRolls) ? floorSource.eventDice.blindRolls : [],
+      },
+      statusRefs: Array.isArray(floorSource.statusRefs)
+        ? floorSource.statusRefs.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
+      roundRefs: Array.isArray(floorSource.roundRefs)
+        ? floorSource.roundRefs.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
+    };
   }
-  for (const item of normalizeBlindHistoryItemsEvent(primary)) {
-    if (!item.rollId) continue;
-    merged.set(item.rollId, item);
+
+  const presetStore =
+    parseSkillPresetStoreTextEvent(
+      normalizeSkillPresetStoreTextForSettingsEvent(
+        JSON.stringify((raw.skills?.presetStore ?? null) || {}, null, 2),
+        fallbackSkillTableText
+      )
+    ) ?? buildDefaultSkillPresetStoreEvent(now);
+  const normalizedStatuses = normalizeActiveStatusesFromEvent(raw.statuses?.current?.snapshot);
+
+  return {
+    meta: {
+      schemaVersion: CHAT_DATA_SCHEMA_VERSION_Event,
+      updatedAt: Number(raw.meta?.updatedAt) || now,
+      openRoundId: String(raw.meta?.openRoundId ?? "").trim() || null,
+      lastProcessedFloorId: normalizeFloorIdEvent(raw.meta?.lastProcessedFloorId),
+      lastUserMessageId: normalizeFloorIdEvent(raw.meta?.lastUserMessageId),
+    },
+    floorOrder: Array.from(
+      new Set([
+        ...(
+          Array.isArray(raw.floorOrder)
+            ? raw.floorOrder.map((item) => normalizeFloorIdEvent(item)).filter((item): item is number => item != null)
+            : []
+        ),
+        ...Array.from(floorOrder),
+      ])
+    ).sort((left, right) => left - right),
+    floors,
+    rounds: {
+      order: Array.isArray(raw.rounds?.order)
+        ? raw.rounds.order.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
+      records: raw.rounds?.records && typeof raw.rounds.records === "object" && !Array.isArray(raw.rounds.records)
+        ? raw.rounds.records as Record<string, RollHelperRoundRecordEvent>
+        : {},
+    },
+    skills: {
+      activePresetId: String(raw.skills?.activePresetId ?? presetStore.activePresetId ?? SKILL_PRESET_DEFAULT_ID_Event).trim() || SKILL_PRESET_DEFAULT_ID_Event,
+      currentSkillTableText: typeof raw.skills?.currentSkillTableText === "string"
+        ? raw.skills.currentSkillTableText
+        : syncActivePresetToSkillTableTextEvent(presetStore, fallbackSkillTableText),
+      presetStore,
+      updatedAt: Number(raw.skills?.updatedAt) || now,
+    },
+    statuses: {
+      order: Array.isArray(raw.statuses?.order)
+        ? raw.statuses.order.map((item) => String(item ?? "").trim()).filter(Boolean)
+        : [],
+      records: raw.statuses?.records && typeof raw.statuses.records === "object" && !Array.isArray(raw.statuses.records)
+        ? raw.statuses.records as RollHelperStatusesStateEvent["records"]
+        : {},
+      current: {
+        activeStatusIds: Array.isArray(raw.statuses?.current?.activeStatusIds)
+          ? raw.statuses.current.activeStatusIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+          : [],
+        snapshot: normalizedStatuses,
+        updatedAt: Number(raw.statuses?.current?.updatedAt) || now,
+      },
+    },
+  };
+}
+
+function normalizeChatDatabasePayloadEvent(
+  source: unknown,
+  chatId: string,
+  fallbackSkillTableText: string
+): RollHelperChatDatabaseEvent {
+  const raw = source && typeof source === "object" && !Array.isArray(source)
+    ? source as Partial<RollHelperChatDatabaseEvent>
+    : {};
+  const rawChatData = raw.chatData && typeof raw.chatData === "object" && !Array.isArray(raw.chatData)
+    ? raw.chatData
+    : {};
+  return {
+    chatData: {
+      [chatId]: normalizeChatRecordEvent(rawChatData?.[chatId], chatId, fallbackSkillTableText),
+    },
+  };
+}
+
+function buildSkillsStateFromSettingsEvent(now = Date.now()): RollHelperSkillsStateEvent {
+  const settings = getSettingsEvent();
+  const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
+    settings.skillPresetStoreText,
+    settings.skillTableText
+  );
+  const presetStore =
+    parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent(now);
+  return {
+    activePresetId: String(presetStore.activePresetId ?? "").trim() || SKILL_PRESET_DEFAULT_ID_Event,
+    currentSkillTableText: syncActivePresetToSkillTableTextEvent(presetStore, settings.skillTableText),
+    presetStore,
+    updatedAt: now,
+  };
+}
+
+function buildCurrentStatusesStateFromRuntimeEvent(now = Date.now()): RollHelperCurrentStatusesStateEvent {
+  const normalized = normalizeActiveStatusesFromEvent(getDiceMetaEvent().activeStatuses);
+  const activeStatusIds = normalized.map((status, index) => {
+    const createdAt = Number(status.createdAt) || 0;
+    const nameKey = normalizeStatusNameKeyEvent(status.name || `status_${index}`);
+    return `status:${nameKey}:${createdAt}:${index}`;
+  });
+  return {
+    activeStatusIds,
+    snapshot: normalized,
+    updatedAt: now,
+  };
+}
+
+function buildRoundRecordFromPendingRoundEvent(
+  round: PendingRoundEvent,
+  lastProcessedFloorId: number | null
+): RollHelperRoundRecordEvent {
+  const floorIds = new Set<number>();
+  if (lastProcessedFloorId != null) {
+    floorIds.add(lastProcessedFloorId);
   }
-  return Array.from(merged.values())
-    .sort((left, right) => Number(left.rolledAt || 0) - Number(right.rolledAt || 0))
-    .slice(-200);
+  return {
+    roundId: String(round.roundId ?? "").trim(),
+    status: round.status === "closed" ? "closed" : "open",
+    openedAt: Number(round.openedAt) || Date.now(),
+    closedAt: round.status === "closed" ? Date.now() : null,
+    floorIds: Array.from(floorIds),
+    eventRefs: Array.isArray(round.events)
+      ? round.events.map((event) => `${lastProcessedFloorId ?? "unknown"}:${String(event?.id ?? "").trim()}`).filter(Boolean)
+      : [],
+    rollRefs: Array.isArray(round.rolls)
+      ? round.rolls.map((record) => `${lastProcessedFloorId ?? "unknown"}:${String(record?.rollId ?? "").trim()}`).filter(Boolean)
+      : [],
+    summaryCache: {
+      eventsCount: Array.isArray(round.events) ? round.events.length : 0,
+      rolledCount: Array.isArray(round.rolls) ? round.rolls.length : 0,
+    },
+  };
+}
+
+async function syncCurrentChatDataFromRuntimeEvent(reason = "runtime_sync"): Promise<void> {
+  const chatId = getActiveChatIdEvent();
+  if (!chatId) return;
+  const now = Date.now();
+  const currentStatuses = buildCurrentStatusesStateFromRuntimeEvent(now);
+  const meta = getDiceMetaEvent();
+  await writeChatDatabaseByChatIdEvent(chatId, (previous) => {
+    // 保留已有 rounds（含已关闭回合），只更新当前 open round
+    const nextRecords = { ...(previous.rounds.records ?? {}) };
+    const nextOrder = [...(previous.rounds.order ?? [])];
+    if (meta.pendingRound?.roundId) {
+      const roundId = String(meta.pendingRound.roundId).trim();
+      if (roundId) {
+        nextRecords[roundId] = buildRoundRecordFromPendingRoundEvent(
+          meta.pendingRound,
+          previous.meta.lastProcessedFloorId
+        );
+        if (!nextOrder.includes(roundId)) {
+          nextOrder.push(roundId);
+        }
+        // 从 floor.roundRefs 补充 floorIds
+        for (const floorId of previous.floorOrder) {
+          const floor = previous.floors[String(floorId)];
+          if (!floor) continue;
+          for (const ref of floor.roundRefs) {
+            if (String(ref ?? "").trim() !== roundId) continue;
+            const existing = nextRecords[roundId];
+            if (existing && !existing.floorIds.includes(floorId)) {
+              existing.floorIds = [...existing.floorIds, floorId].sort((a, b) => a - b);
+            }
+          }
+        }
+      }
+    }
+    return {
+      ...previous,
+      meta: {
+        ...previous.meta,
+        updatedAt: now,
+        openRoundId: meta.pendingRound?.status === "open"
+          ? String(meta.pendingRound?.roundId ?? "").trim() || null
+          : null,
+      },
+      skills: buildSkillsStateFromSettingsEvent(now),
+      rounds: {
+        order: Array.from(new Set(nextOrder)).filter(Boolean),
+        records: nextRecords,
+      },
+      statuses: {
+        ...previous.statuses,
+        current: currentStatuses,
+      },
+    };
+  });
+  traceStoreRuntimeEvent("syncCurrentChatDataFromRuntimeEvent", {
+    reason,
+    chatId,
+    floorCount: getCurrentChatDataEvent().floorOrder.length,
+    roundCount: getCurrentChatDataEvent().rounds.order.length,
+    activeStatusCount: getCurrentChatDataEvent().statuses.current.snapshot.length,
+  });
 }
 
 /**
- * 功能：规范化聊天级暗骰历史列表，确保字段安全且不泄露真实结果。
- * 参数：
- *   source：原始暗骰历史列表。
- * 返回：
- *   BlindHistoryItemEvent[]：可用于运行时与持久化的暗骰历史列表。
+ * 功能：从 chatData 的 open round + floors 重建 PendingRoundEvent，用于桥接旧运行时。
  */
-function normalizeBlindHistoryItemsEvent(source: unknown): BlindHistoryItemEvent[] {
-  if (!Array.isArray(source)) return [];
-  return source
-    .map((item): BlindHistoryItemEvent | null => {
-      if (!item || typeof item !== "object") return null;
-      const normalized = normalizeBlindHistoryItemEvent(item as BlindHistoryItemEvent);
-      return normalized.rollId ? normalized : null;
-    })
-    .filter((item): item is BlindHistoryItemEvent => Boolean(item))
-    .slice(-200);
+function reconstructPendingRoundFromChatDataEvent(
+  chatRecord: RollHelperChatRecordEvent
+): PendingRoundEvent | undefined {
+  const openRoundId = chatRecord.meta.openRoundId;
+  if (!openRoundId) return undefined;
+  const roundRecord = chatRecord.rounds.records[openRoundId];
+  if (!roundRecord || roundRecord.status !== "open") return undefined;
+
+  const events: import("../types/eventDomainEvent").DiceEventSpecEvent[] = [];
+  const rolls: import("../types/eventDomainEvent").EventRollRecordEvent[] = [];
+  const sourceAssistantMsgIds: string[] = [];
+
+  for (const floorId of roundRecord.floorIds) {
+    const floor = chatRecord.floors[String(floorId)];
+    if (!floor) continue;
+    events.push(...(floor.eventDice?.events ?? []));
+    rolls.push(...(floor.eventDice?.publicRolls ?? []));
+    sourceAssistantMsgIds.push(`assistant_idx:${floorId}:${floor.createdAt || 0}`);
+  }
+
+  return {
+    roundId: roundRecord.roundId,
+    instanceToken: roundRecord.roundId,
+    status: "open",
+    events,
+    rolls,
+    eventTimers: {},
+    sourceAssistantMsgIds,
+    openedAt: roundRecord.openedAt,
+  };
 }
 
-async function readChatScopedStateByKeyEvent(chatKey: string): Promise<RollHelperChatScopedStateEvent> {
+/**
+ * 功能：从 chatData 的 closed rounds + floors 重建 RoundSummarySnapshotEvent[]，
+ *       填充到运行时摘要历史列表中供 promptEvent / interactiveTriggersEvent 使用。
+ */
+function rebuildSummaryHistoryRuntimeFromChatDataEvent(
+  chatRecord: RollHelperChatRecordEvent
+): RoundSummarySnapshotEvent[] {
+  const snapshots: RoundSummarySnapshotEvent[] = [];
+  for (const roundId of chatRecord.rounds.order) {
+    const roundRec = chatRecord.rounds.records[roundId];
+    if (!roundRec || roundRec.status !== "closed") continue;
+    const events: RoundSummaryEventItemEvent[] = [];
+    const sourceAssistantMsgIds: string[] = [];
+    for (const floorId of roundRec.floorIds ?? []) {
+      const floor = chatRecord.floors[String(floorId)];
+      if (!floor?.eventDice) continue;
+      const allRolls: EventRollRecordEvent[] = [
+        ...(floor.eventDice.publicRolls ?? []),
+        ...(floor.eventDice.blindRolls ?? []),
+      ];
+      for (const event of floor.eventDice.events ?? []) {
+        const record = allRolls.find((r) => r.eventId === event.id) ?? null;
+        events.push(buildMinimalSummaryItemEvent(event, record));
+        if (event.sourceAssistantMsgId && !sourceAssistantMsgIds.includes(event.sourceAssistantMsgId)) {
+          sourceAssistantMsgIds.push(event.sourceAssistantMsgId);
+        }
+      }
+    }
+    if (events.length === 0) continue;
+    snapshots.push({
+      roundId: roundRec.roundId,
+      openedAt: roundRec.openedAt,
+      closedAt: roundRec.closedAt ?? Date.now(),
+      eventsCount: events.length,
+      rolledCount: events.filter((e) => e.rollId || e.resultSource).length,
+      events,
+      sourceAssistantMsgIds,
+    });
+  }
+  return snapshots;
+}
+
+/** 从楼层数据最小化构建一条 RoundSummaryEventItemEvent。 */
+export function buildMinimalSummaryItemEvent(
+  event: DiceEventSpecEvent,
+  record: EventRollRecordEvent | null
+): RoundSummaryEventItemEvent {
+  return {
+    id: event.id,
+    title: event.title,
+    desc: event.desc,
+    targetLabel: event.targetLabel,
+    skill: event.skill,
+    checkDice: event.checkDice,
+    compare: (event.compare as any) ?? ">=",
+    dc: Number.isFinite(event.dc) ? Number(event.dc) : 0,
+    difficulty: event.difficulty,
+    dcSource: event.dcSource,
+    dcReason: String(event.dcReason || ""),
+    rollMode: event.rollMode === "auto" ? "auto" : "manual",
+    advantageState: record?.advantageStateApplied ?? event.advantageState ?? "normal",
+    urgency: event.urgency,
+    timeLimit: event.timeLimit ?? "none",
+    status: record ? (record.source === "timeout_auto_fail" ? "timeout" : "done") : "pending",
+    resultSource: record?.source ?? null,
+    visibility: record?.visibility,
+    revealMode: record?.revealMode === "instant" ? "instant" : "delayed",
+    total: record && Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : null,
+    skillModifierApplied: Number(record?.skillModifierApplied ?? 0),
+    statusModifierApplied: Number(record?.statusModifierApplied ?? 0),
+    baseModifierUsed: Number(record?.baseModifierUsed ?? 0),
+    finalModifierUsed: Number(record?.finalModifierUsed ?? 0),
+    success: record ? record.success : null,
+    marginToDc: typeof record?.marginToDc === "number" ? record.marginToDc : null,
+    resultGrade: (record?.resultGrade as any) ?? null,
+    outcomeKind: "none",
+    outcomeText: "",
+    explosionTriggered: record?.result?.explosionTriggered ?? false,
+    sourceAssistantMsgId: event.sourceAssistantMsgId,
+    rollId: record?.rollId,
+    rolledAt: record?.rolledAt,
+    targetLabelUsed: record?.targetLabelUsed,
+    statusModifiersApplied: record?.statusModifiersApplied ? [...record.statusModifiersApplied] : undefined,
+    explodePolicyApplied: record?.explodePolicyApplied,
+    rollsSnapshot: record?.result
+      ? {
+          rolls: Array.isArray(record.result.rolls) ? [...record.result.rolls] : [],
+          modifier: Number(record.result.modifier) || 0,
+          total: Number(record.result.total) || 0,
+          rawTotal: Number(record.result.rawTotal) || 0,
+          count: Number(record.result.count) || 0,
+          sides: Number(record.result.sides) || 0,
+          exploding: record.result.exploding,
+          explosionTriggered: record.result.explosionTriggered,
+        }
+      : undefined,
+  };
+}
+
+async function readChatDatabaseByChatIdEvent(chatId: string): Promise<RollHelperChatDatabaseEvent> {
   const fallbackSkillTableText = getSettingsEvent().skillTableText;
   const row = await readSdkPluginChatStateAsync(
     SDK_SETTINGS_NAMESPACE_Event,
-    chatKey
+    chatId
   );
-  return normalizeChatScopedStatePayloadEvent(row?.state as Partial<RollHelperChatScopedStateEvent> ?? {}, fallbackSkillTableText);
+  return normalizeChatDatabasePayloadEvent(row?.state, chatId, fallbackSkillTableText);
 }
 
-async function writeChatScopedStateByKeyEvent(
-  chatKey: string,
+async function writeChatDatabaseByChatIdEvent(
+  chatId: string,
   patchOrNext:
-    | Partial<RollHelperChatScopedStateEvent>
-    | ((previous: RollHelperChatScopedStateEvent) => Partial<RollHelperChatScopedStateEvent>)
-): Promise<RollHelperChatScopedStateEvent> {
+    | Partial<RollHelperChatRecordEvent>
+    | ((previous: RollHelperChatRecordEvent) => Partial<RollHelperChatRecordEvent> | RollHelperChatRecordEvent)
+): Promise<RollHelperChatRecordEvent> {
   const fallbackSkillTableText = getSettingsEvent().skillTableText;
-  const previous = await readChatScopedStateByKeyEvent(chatKey);
+  const previousDatabase = await readChatDatabaseByChatIdEvent(chatId);
+  const previous = previousDatabase.chatData[chatId] ?? buildDefaultChatRecordEvent(chatId, fallbackSkillTableText);
   const patch = typeof patchOrNext === "function" ? patchOrNext(previous) : patchOrNext;
-  const nextPayload = normalizeChatScopedStatePayloadEvent(
+  const next = normalizeChatRecordEvent(
     {
       ...previous,
       ...(patch ?? {}),
+      meta: {
+        ...(previous.meta ?? buildDefaultChatMetaEvent()),
+        ...((patch as Partial<RollHelperChatRecordEvent> | undefined)?.meta ?? {}),
+        updatedAt: Date.now(),
+      },
     },
+    chatId,
     fallbackSkillTableText
   );
-
-  await writeSdkPluginChatStateAsync(SDK_SETTINGS_NAMESPACE_Event, chatKey, nextPayload as unknown as Record<string, unknown>, {
-    summary: {
-      activeStatusCount: nextPayload.activeStatuses.length,
+  const nextState: RollHelperChatDatabaseEvent = {
+    chatData: {
+      [chatId]: next,
     },
-  });
-  return nextPayload;
+  };
+  await writeSdkPluginChatStateAsync(
+    SDK_SETTINGS_NAMESPACE_Event,
+    chatId,
+    nextState as unknown as Record<string, unknown>,
+    {
+      schemaVersion: CHAT_DATA_SCHEMA_VERSION_Event,
+      summary: {
+        floorCount: next.floorOrder.length,
+        roundCount: next.rounds.order.length,
+        statusCount: next.statuses.order.length,
+      },
+    }
+  );
+  ACTIVE_CHAT_ID_V3_Event = chatId;
+  ACTIVE_CHAT_DATA_V3_Event = next;
+  return next;
 }
 
-function persistSkillPresetStoreToChatScopedEvent(skillPresetStoreText: string): void {
-  const chatKey = resolveCurrentChatKeyEvent();
-  if (!chatKey) return;
-  void writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
-    ...previous,
-    skillPresetStoreText,
-  })).catch((error) => {
-    logger.warn(`聊天级技能持久化失败，chatKey=${chatKey}`, error);
+export function getActiveChatIdEvent(): string {
+  if (ACTIVE_CHAT_ID_V3_Event) return ACTIVE_CHAT_ID_V3_Event;
+  return resolveCurrentOfficialChatIdEvent();
+}
+
+export function getCurrentChatDataEvent(): RollHelperChatRecordEvent {
+  const chatId = getActiveChatIdEvent();
+  const fallbackSkillTableText = getSettingsEvent().skillTableText;
+  if (!chatId) {
+    return buildDefaultChatRecordEvent("", fallbackSkillTableText);
+  }
+  if (!ACTIVE_CHAT_DATA_V3_Event || ACTIVE_CHAT_ID_V3_Event !== chatId) {
+    ACTIVE_CHAT_DATA_V3_Event = buildDefaultChatRecordEvent(chatId, fallbackSkillTableText);
+    ACTIVE_CHAT_ID_V3_Event = chatId;
+  }
+  return ACTIVE_CHAT_DATA_V3_Event;
+}
+
+export function resolveAssistantFloorIdByMessageEvent(message: unknown): number | null {
+  const liveCtx = getLiveContextEvent();
+  const chat = Array.isArray(liveCtx?.chat) ? liveCtx.chat : [];
+  const directIndex = chat.findIndex((item) => item === message);
+  if (directIndex >= 0) {
+    return directIndex;
+  }
+  const explicitIndex = Number((message as any)?.mesid ?? (message as any)?.messageId ?? (message as any)?.message_id);
+  if (Number.isInteger(explicitIndex) && explicitIndex >= 0) {
+    return explicitIndex;
+  }
+  return null;
+}
+
+export function getAssistantFloorRecordByMessageEvent(
+  message: unknown,
+  create = false
+): RollHelperFloorRecordEvent | null {
+  const floorId = resolveAssistantFloorIdByMessageEvent(message);
+  if (floorId == null) return null;
+  const current = getCurrentChatDataEvent();
+  const existing = current.floors[String(floorId)];
+  if (existing) return existing;
+  if (!create) return null;
+  const created: RollHelperFloorRecordEvent = {
+    floorId,
+    messageId: floorId,
+    role: "assistant",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    content: {
+      raw: "",
+      processed: "",
+    },
+    triggers: {
+      interactive: [],
+      triggerPack: null,
+      lifecycle: {
+        hydratedFrom: "markup",
+        sanitizedAt: 0,
+        lastSourceKind: "raw_source",
+      },
+    },
+    eventDice: {
+      events: [],
+      publicRolls: [],
+      blindRolls: [],
+    },
+    statusRefs: [],
+    roundRefs: [],
+  };
+  current.floors[String(floorId)] = created;
+  current.floorOrder = Array.from(new Set([...(current.floorOrder ?? []), floorId])).sort((left, right) => left - right);
+  current.meta.updatedAt = Date.now();
+  current.meta.lastProcessedFloorId = floorId;
+  return created;
+}
+
+export function mutateAssistantFloorRecordByMessageEvent(
+  message: unknown,
+  mutator: (floor: RollHelperFloorRecordEvent) => void
+): boolean {
+  const floor = getAssistantFloorRecordByMessageEvent(message, true);
+  if (!floor) return false;
+  const before = JSON.stringify(floor);
+  mutator(floor);
+  floor.updatedAt = Date.now();
+  const current = getCurrentChatDataEvent();
+  current.meta.updatedAt = floor.updatedAt;
+  current.meta.lastProcessedFloorId = floor.floorId;
+  return JSON.stringify(floor) !== before;
+}
+
+export async function loadCurrentChatDatabaseEvent(reason = "init"): Promise<void> {
+  const chatId = resolveCurrentOfficialChatIdEvent();
+  if (!chatId) {
+    ACTIVE_CHAT_ID_V3_Event = "";
+    ACTIVE_CHAT_DATA_V3_Event = null;
+    return;
+  }
+  const database = await readChatDatabaseByChatIdEvent(chatId);
+  ACTIVE_CHAT_ID_V3_Event = chatId;
+  ACTIVE_CHAT_DATA_V3_Event = database.chatData[chatId] ?? buildDefaultChatRecordEvent(chatId, getSettingsEvent().skillTableText);
+  traceStoreRuntimeEvent("loadCurrentChatDatabaseEvent.loaded", {
+    reason,
+    chatId,
+    floorCount: ACTIVE_CHAT_DATA_V3_Event.floorOrder.length,
+    roundCount: ACTIVE_CHAT_DATA_V3_Event.rounds.order.length,
+    statusCount: ACTIVE_CHAT_DATA_V3_Event.statuses.order.length,
   });
+}
+
+export async function ensureCurrentChatRecordEvent(): Promise<RollHelperChatRecordEvent> {
+  const chatId = getActiveChatIdEvent();
+  if (!chatId) {
+    return buildDefaultChatRecordEvent("", getSettingsEvent().skillTableText);
+  }
+  const current = getCurrentChatDataEvent();
+  await writeChatDatabaseByChatIdEvent(chatId, current);
+  return getCurrentChatDataEvent();
+}
+
+export async function saveCurrentChatDataEvent(): Promise<void> {
+  const chatId = getActiveChatIdEvent();
+  if (!chatId || !ACTIVE_CHAT_DATA_V3_Event) return;
+  await writeChatDatabaseByChatIdEvent(chatId, ACTIVE_CHAT_DATA_V3_Event);
+}
+
+export async function setLastUserMessageIdEvent(messageId: unknown): Promise<void> {
+  const normalizedMessageId = normalizeFloorIdEvent(messageId);
+  const chatId = getActiveChatIdEvent();
+  if (!chatId || normalizedMessageId == null) return;
+  await writeChatDatabaseByChatIdEvent(chatId, (previous) => ({
+    ...previous,
+    meta: {
+      ...previous.meta,
+      lastUserMessageId: normalizedMessageId,
+    },
+  }));
+}
+
+export async function upsertAssistantFloorEvent(
+  floor: Partial<RollHelperFloorRecordEvent> & {
+    floorId: number;
+    messageId?: number;
+  }
+): Promise<RollHelperFloorRecordEvent | null> {
+  const floorId = normalizeFloorIdEvent(floor.floorId ?? floor.messageId);
+  const chatId = getActiveChatIdEvent();
+  if (!chatId || floorId == null) return null;
+  let nextFloor: RollHelperFloorRecordEvent | null = null;
+  await writeChatDatabaseByChatIdEvent(chatId, (previous) => {
+    const existing = previous.floors[String(floorId)];
+    const createdAt = Number(existing?.createdAt) || Date.now();
+    nextFloor = {
+      floorId,
+      messageId: floorId,
+      role: "assistant",
+      createdAt,
+      updatedAt: Date.now(),
+      content: {
+        raw: String(floor.content?.raw ?? existing?.content.raw ?? ""),
+        processed: String(floor.content?.processed ?? existing?.content.processed ?? ""),
+      },
+      triggers: {
+        interactive: Array.isArray(floor.triggers?.interactive) ? floor.triggers.interactive : (existing?.triggers.interactive ?? []),
+        triggerPack: floor.triggers?.triggerPack ?? existing?.triggers.triggerPack ?? null,
+        lifecycle: {
+          hydratedFrom: floor.triggers?.lifecycle?.hydratedFrom === "metadata" ? "metadata" : (existing?.triggers.lifecycle.hydratedFrom ?? "markup"),
+          sanitizedAt: Number(floor.triggers?.lifecycle?.sanitizedAt) || Number(existing?.triggers.lifecycle.sanitizedAt) || 0,
+          lastSourceKind: String(floor.triggers?.lifecycle?.lastSourceKind ?? existing?.triggers.lifecycle.lastSourceKind ?? "raw_source"),
+        },
+      },
+      eventDice: {
+        events: Array.isArray(floor.eventDice?.events) ? floor.eventDice.events : (existing?.eventDice.events ?? []),
+        publicRolls: Array.isArray(floor.eventDice?.publicRolls) ? floor.eventDice.publicRolls : (existing?.eventDice.publicRolls ?? []),
+        blindRolls: Array.isArray(floor.eventDice?.blindRolls) ? floor.eventDice.blindRolls : (existing?.eventDice.blindRolls ?? []),
+      },
+      statusRefs: Array.isArray(floor.statusRefs) ? floor.statusRefs : (existing?.statusRefs ?? []),
+      roundRefs: Array.isArray(floor.roundRefs) ? floor.roundRefs : (existing?.roundRefs ?? []),
+    };
+    return {
+      ...previous,
+      meta: {
+        ...previous.meta,
+        lastProcessedFloorId: floorId,
+      },
+      floorOrder: Array.from(new Set([...(previous.floorOrder ?? []), floorId])).sort((left, right) => left - right),
+      floors: {
+        ...(previous.floors ?? {}),
+        [String(floorId)]: nextFloor,
+      },
+    };
+  });
+  return nextFloor;
+}
+
+export async function removeAssistantFloorEvent(floorIdRaw: unknown): Promise<boolean> {
+  const floorId = normalizeFloorIdEvent(floorIdRaw);
+  const chatId = getActiveChatIdEvent();
+  if (!chatId || floorId == null) return false;
+  let changed = false;
+  await writeChatDatabaseByChatIdEvent(chatId, (previous) => {
+    if (!previous.floors[String(floorId)]) {
+      return previous;
+    }
+    changed = true;
+    const nextFloors = { ...(previous.floors ?? {}) };
+    delete nextFloors[String(floorId)];
+    const nextRounds = { ...(previous.rounds.records ?? {}) };
+    const nextRoundOrder: string[] = [];
+    for (const roundId of previous.rounds.order ?? []) {
+      const round = nextRounds[roundId];
+      if (!round) continue;
+      const filteredFloorIds = (round.floorIds ?? []).filter((item) => item !== floorId);
+      const filteredEventRefs = (round.eventRefs ?? []).filter((item) => !String(item).startsWith(`${floorId}:`));
+      const filteredRollRefs = (round.rollRefs ?? []).filter((item) => !String(item).startsWith(`${floorId}:`));
+      if (filteredFloorIds.length <= 0 && filteredEventRefs.length <= 0 && filteredRollRefs.length <= 0) {
+        delete nextRounds[roundId];
+        continue;
+      }
+      nextRounds[roundId] = {
+        ...round,
+        floorIds: filteredFloorIds,
+        eventRefs: filteredEventRefs,
+        rollRefs: filteredRollRefs,
+      };
+      nextRoundOrder.push(roundId);
+    }
+    const nextStatusRecords = { ...(previous.statuses.records ?? {}) };
+    const nextStatusOrder: string[] = [];
+    for (const statusId of previous.statuses.order ?? []) {
+      const status = nextStatusRecords[statusId];
+      if (!status || Number(status.sourceFloorId) === floorId) {
+        delete nextStatusRecords[statusId];
+        continue;
+      }
+      nextStatusOrder.push(statusId);
+    }
+    return {
+      ...previous,
+      meta: {
+        ...previous.meta,
+        lastProcessedFloorId:
+          previous.meta.lastProcessedFloorId === floorId
+            ? null
+            : previous.meta.lastProcessedFloorId,
+        openRoundId:
+          previous.meta.openRoundId && !nextRounds[previous.meta.openRoundId]
+            ? null
+            : previous.meta.openRoundId,
+      },
+      floorOrder: (previous.floorOrder ?? []).filter((item) => item !== floorId),
+      floors: nextFloors,
+      rounds: {
+        order: nextRoundOrder,
+        records: nextRounds,
+      },
+      statuses: {
+        ...previous.statuses,
+        order: nextStatusOrder,
+        records: nextStatusRecords,
+      },
+    };
+  });
+  return changed;
 }
 
 /**
- * 功能：将完整运行时状态写入当前聊天级存储，并同步 shared.signals。
- * @returns 无返回值
+ * 功能：将完整运行时状态同步到 chatData (v3)，并写入 shared.signals。
+ * 旧 chat-scoped 写入路径已移除。
  */
 function persistRuntimeStateToChatScopedEvent(): void {
-  const chatKey = resolveCurrentChatKeyEvent();
-  if (!chatKey) return;
+  const chatId = getActiveChatIdEvent();
+  if (!chatId) return;
   const meta = RUNTIME_DICE_META_Event;
   void (async () => {
     try {
-      await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
-        ...previous,
-        activeStatuses: normalizeActiveStatusesFromEvent(meta.activeStatuses),
-        lastBaseRoll: meta.lastBaseRoll ?? null,
-        pendingRound: meta.pendingRound ?? null,
-        summaryHistory: Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [],
-        blindHistory: normalizeBlindHistoryItemsEvent(meta.blindHistory),
-      }));
+      await syncCurrentChatDataFromRuntimeEvent("persist_runtime_state");
       // 写入公共区 shared.signals
       const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
-      if (scope) {
+      const chatKey = resolveCurrentChatKeyEvent();
+      if (scope && chatKey) {
         await ensureSdkChatDocument(chatKey, {
           tavernInstanceId: scope.tavernInstanceId,
           scopeType: scope.scopeType,
           scopeId: scope.scopeId,
           chatId: scope.currentChatId,
         });
-      }
-      await patchSdkChatShared(chatKey, {
-        signals: {
-          stx_rollhelper: {
-            lastRollSummary: meta.lastBaseRoll ? `${meta.lastBaseRoll.expr} = ${meta.lastBaseRoll.total}` : null,
-            hasPendingRound: !!meta.pendingRound,
-            activeStatusCount: meta.activeStatuses.length,
+        await patchSdkChatShared(chatKey, {
+          signals: {
+            stx_rollhelper: {
+              lastRollSummary: meta.lastBaseRoll ? `${meta.lastBaseRoll.expr} = ${meta.lastBaseRoll.total}` : null,
+              hasPendingRound: !!getCurrentChatDataEvent().meta.openRoundId,
+              activeStatusCount: Array.isArray(meta.activeStatuses) ? meta.activeStatuses.length : 0,
+            },
           },
-        },
-      });
+        });
+      }
       await flushSdkChatDataNow();
+      const chatDataSnapshot = getCurrentChatDataEvent();
       traceStoreRuntimeEvent("persistRuntimeStateToChatScopedEvent", {
-        chatKey,
-        pendingRoundId: meta.pendingRound?.roundId ?? null,
-        pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound?.events.length : 0,
-        pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound?.rolls.length : 0,
-        summaryHistoryCount: Array.isArray(meta.summaryHistory) ? meta.summaryHistory.length : 0,
-        blindHistoryCount: Array.isArray(meta.blindHistory) ? meta.blindHistory.length : 0,
+        chatId,
+        openRoundId: chatDataSnapshot.meta.openRoundId ?? null,
+        floorCount: chatDataSnapshot.floorOrder.length,
+        roundCount: chatDataSnapshot.rounds.order.length,
       });
     } catch (error) {
-      logger.warn(`运行时状态持久化失败，chatKey=${chatKey}`, error);
+      logger.warn(`运行时状态持久化失败，chatId=${chatId}`, error);
     }
   })();
 }
@@ -454,17 +1092,37 @@ export async function listHostChatsForCurrentScopeEvent(): Promise<HostChatListI
 }
 
 export async function loadStatusesForChatKeyEvent(chatKey: string): Promise<ActiveStatusEvent[]> {
-  const state = await readChatScopedStateByKeyEvent(chatKey);
-  return normalizeActiveStatusesFromEvent(state.activeStatuses);
+  // 尝试通过 chatData (v3) 读取状态
+  try {
+    const database = await readChatDatabaseByChatIdEvent(chatKey);
+    const record = database.chatData[chatKey];
+    if (record) {
+      return normalizeActiveStatusesFromEvent(record.statuses.current.snapshot);
+    }
+  } catch { /* 降级旧路径 */ }
+  return [];
 }
 
 export async function saveStatusesForChatKeyEvent(
   chatKey: string,
   statuses: ActiveStatusEvent[]
 ): Promise<void> {
-  await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+  const normalized = normalizeActiveStatusesFromEvent(statuses);
+  const now = Date.now();
+  await writeChatDatabaseByChatIdEvent(chatKey, (previous) => ({
     ...previous,
-    activeStatuses: normalizeActiveStatusesFromEvent(statuses),
+    statuses: {
+      ...previous.statuses,
+      current: {
+        activeStatusIds: normalized.map((status, index) => {
+          const createdAt = Number(status.createdAt) || 0;
+          const nameKey = normalizeStatusNameKeyEvent(status.name || `status_${index}`);
+          return `status:${nameKey}:${createdAt}:${index}`;
+        }),
+        snapshot: normalized,
+        updatedAt: now,
+      },
+    },
   }));
 }
 
@@ -521,21 +1179,44 @@ export async function cleanupUnusedChatStatesForCurrentTavernEvent(
 
 export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Promise<void> {
   const token = ++CHAT_SCOPED_LOAD_TOKEN_Event;
-  const chatKey = resolveCurrentChatKeyEvent();
-  if (!chatKey) return;
+  const chatId = resolveCurrentOfficialChatIdEvent();
+  resolveCurrentChatKeyEvent(); // 保持 ACTIVE_CHAT_KEY_Event 同步
+  if (!chatId) return;
   try {
-    const row = await readSdkPluginChatStateAsync(
-      SDK_SETTINGS_NAMESPACE_Event,
-      chatKey
-    );
-    const rawState = row?.state as Partial<RollHelperChatScopedStateEvent> | undefined;
-    const state = normalizeChatScopedStatePayloadEvent(rawState ?? {}, getSettingsEvent().skillTableText);
-    const hasBlindHistoryInState = Array.isArray((rawState as Partial<RollHelperChatScopedStateEvent> | undefined)?.blindHistory);
+    await loadCurrentChatDatabaseEvent(reason);
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
+    const chatRecord = getCurrentChatDataEvent();
+
+    // 从 chatData (v3) 恢复运行时 DiceMetaEvent —— 仅恢复运行时瞬态字段，
+    // pendingRound / summaryHistory / blindHistory / lastProcessedAssistantMsgId
+    // 不再从 chatData 反序列化；业务代码直接读 chatData。
+    const meta = getDiceMetaEvent();
+    meta.activeStatuses = normalizeActiveStatusesFromEvent(chatRecord.statuses.current.snapshot);
+    meta.pendingRound = reconstructPendingRoundFromChatDataEvent(chatRecord);
+    // 从 chatData 闭合轮次重建运行时摘要历史列表
+    setSummaryHistoryRuntimeEvent(rebuildSummaryHistoryRuntimeFromChatDataEvent(chatRecord));
+    // 暗骰历史为纯运行时状态，聊天切换时直接清空
+    clearBlindHistoryRuntimeEvent();
+    meta.outboundSummary = undefined;
+    meta.pendingResultGuidanceQueue = [];
+    meta.outboundResultGuidance = undefined;
+    meta.pendingBlindGuidanceQueue = [];
+    meta.outboundBlindGuidance = undefined;
+    meta.pendingPassiveDiscoveries = [];
+    meta.outboundPassiveDiscovery = undefined;
+    meta.passiveDiscoveriesCache = {};
+    meta.lastPassiveContextHash = undefined;
+    meta.selectionFallbackState = undefined;
+    meta.lastPromptUserMsgId = undefined;
+    meta.lastBaseRoll = undefined;
+
+    // 从 chatData skills 恢复技能配置
     const settings = getSettingsEvent();
+    const chatSkills = chatRecord.skills;
     const normalizedStoreText = normalizeSkillPresetStoreTextForSettingsEvent(
-      state.skillPresetStoreText
+      JSON.stringify(chatSkills.presetStore ?? {}, null, 2),
+      chatSkills.currentSkillTableText || settings.skillTableText
     );
     const normalizedStore =
       parseSkillPresetStoreTextEvent(normalizedStoreText) ?? buildDefaultSkillPresetStoreEvent();
@@ -545,55 +1226,15 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
       settings.skillTableText
     );
 
-    const meta = getDiceMetaEvent();
-    meta.activeStatuses = normalizeActiveStatusesFromEvent(state.activeStatuses);
-    meta.pendingRound = state.pendingRound ?? undefined;
-    meta.summaryHistory = Array.isArray(state.summaryHistory) ? state.summaryHistory : [];
-    meta.outboundSummary = undefined;
-    meta.pendingResultGuidanceQueue = [];
-    meta.outboundResultGuidance = undefined;
-    meta.pendingBlindGuidanceQueue = [];
-    const legacyBlindHistory = await loadBlindHistoryForChatKeyEvent(chatKey);
-    const mergedBlindHistory = hasBlindHistoryInState
-      ? mergeBlindHistoryItemsEvent(state.blindHistory, legacyBlindHistory)
-      : legacyBlindHistory;
-    meta.blindHistory = mergedBlindHistory;
-    meta.outboundBlindGuidance = undefined;
-    meta.pendingPassiveDiscoveries = [];
-    meta.outboundPassiveDiscovery = undefined;
-    meta.passiveDiscoveriesCache = {};
-    meta.lastPassiveContextHash = undefined;
-    meta.selectionFallbackState = undefined;
-    meta.lastPromptUserMsgId = undefined;
-    meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
-    meta.lastBaseRoll = state.lastBaseRoll ?? undefined;
-    const shouldPersistMigratedBlindHistory =
-      (!hasBlindHistoryInState && mergedBlindHistory.length > 0)
-      || (hasBlindHistoryInState && JSON.stringify(mergedBlindHistory) !== JSON.stringify(state.blindHistory));
     traceStoreRuntimeEvent("loadChatScopedStateIntoRuntimeEvent.loaded", {
       reason,
-      chatKey,
-      pendingRoundId: state.pendingRound?.roundId ?? null,
-      pendingEventCount: Array.isArray(state.pendingRound?.events) ? state.pendingRound.events.length : 0,
-      pendingRollCount: Array.isArray(state.pendingRound?.rolls) ? state.pendingRound.rolls.length : 0,
-      summaryHistoryCount: Array.isArray(state.summaryHistory) ? state.summaryHistory.length : 0,
-      blindHistoryInState: hasBlindHistoryInState,
-      blindHistoryStateCount: Array.isArray(state.blindHistory) ? state.blindHistory.length : 0,
-      blindHistoryLegacyCount: legacyBlindHistory.length,
-      blindHistoryMergedCount: mergedBlindHistory.length,
-      migratedBlindHistory: shouldPersistMigratedBlindHistory,
+      chatId,
+      pendingRoundId: meta.pendingRound?.roundId ?? null,
+      pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound.events.length : 0,
+      pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound.rolls.length : 0,
+      floorCount: chatRecord.floorOrder.length,
+      roundCount: chatRecord.rounds.order.length,
     });
-    if (shouldPersistMigratedBlindHistory) {
-      await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
-        ...previous,
-        blindHistory: mergedBlindHistory,
-      }));
-      await flushSdkChatDataNow();
-      traceStoreRuntimeEvent("loadChatScopedStateIntoRuntimeEvent.migrated_blind_history", {
-        chatKey,
-        mergedBlindHistoryCount: mergedBlindHistory.length,
-      });
-    }
     let wroteSettings = false;
     if (
       settings.skillPresetStoreText !== nextSkillPresetStoreText ||
@@ -612,7 +1253,7 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
       syncSettingsUiCallbackEvent();
     }
   } catch (error) {
-    logger.warn(`聊天级状态装载失败，已降级默认 (${reason}) chatKey=${chatKey}`, error);
+    logger.warn(`聊天级状态装载失败，已降级默认 (${reason}) chatId=${chatId}`, error);
     const settings = getSettingsEvent();
     const defaultStore = buildDefaultSkillPresetStoreEvent();
     const nextSkillPresetStoreText = JSON.stringify(defaultStore, null, 2);
@@ -620,12 +1261,12 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     const meta = getDiceMetaEvent();
     meta.activeStatuses = [];
     meta.pendingRound = undefined;
-    meta.summaryHistory = [];
+    clearSummaryHistoryRuntimeEvent();
+    clearBlindHistoryRuntimeEvent();
     meta.outboundSummary = undefined;
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
     meta.pendingBlindGuidanceQueue = [];
-    meta.blindHistory = [];
     meta.outboundBlindGuidance = undefined;
     meta.pendingPassiveDiscoveries = [];
     meta.outboundPassiveDiscovery = undefined;
@@ -633,7 +1274,6 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.lastPassiveContextHash = undefined;
     meta.selectionFallbackState = undefined;
     meta.lastPromptUserMsgId = undefined;
-    meta.lastProcessedAssistantMsgId = undefined;
     meta.lastBaseRoll = undefined;
 
     let wroteSettings = false;
@@ -669,14 +1309,6 @@ export function saveLastRoll(result: DiceResult): void {
   const meta = getDiceMetaEvent();
   meta.lastBaseRoll = result;
   saveMetadataSafeEvent();
-  // 追加到 chat_plugin_records
-  const chatKey = getActiveChatKeyEvent();
-  if (chatKey) {
-    void appendSdkPluginChatRecord(SDK_SETTINGS_NAMESPACE_Event, chatKey, 'roll_results', {
-      recordId: createIdEvent('roll'),
-      payload: result as unknown as Record<string, unknown>,
-    }).catch(() => {});
-  }
 }
 
 export function getChatMetadataRootEvent(): Record<string, any> {
@@ -692,53 +1324,11 @@ export function getDiceMetaEvent(): DiceMetaEvent {
   if (!Array.isArray(RUNTIME_DICE_META_Event.activeStatuses)) {
     RUNTIME_DICE_META_Event.activeStatuses = [];
   }
-  if (!Array.isArray(RUNTIME_DICE_META_Event.blindHistory)) {
-    RUNTIME_DICE_META_Event.blindHistory = [];
-  }
   return RUNTIME_DICE_META_Event;
 }
 
 export function saveMetadataSafeEvent(): void {
   persistRuntimeStateToChatScopedEvent();
-}
-
-/**
- * 功能：向聊天级记录表追加一条暗骰历史。
- * 参数：
- *   item：暗骰历史条目。
- * 返回：
- *   Promise<void>：写入完成后结束。
- */
-export async function appendBlindHistoryRecordEvent(item: BlindHistoryItemEvent): Promise<void> {
-  const chatKey = getActiveChatKeyEvent();
-  const normalizedItems = normalizeBlindHistoryItemsEvent([item]);
-  const normalized = normalizedItems[0];
-  if (!chatKey || !normalized?.rollId) return;
-  await appendSdkPluginChatRecord(SDK_SETTINGS_NAMESPACE_Event, chatKey, BLIND_RESULTS_COLLECTION_Event, {
-    recordId: normalized.rollId,
-    ts: normalized.rolledAt,
-    payload: normalized as unknown as Record<string, unknown>,
-  });
-}
-
-/**
- * 功能：从聊天级记录表加载当前聊天的暗骰历史。
- * 参数：
- *   chatKey：目标聊天主键。
- * 返回：
- *   Promise<BlindHistoryItemEvent[]>：规范化后的暗骰历史列表。
- */
-async function loadBlindHistoryForChatKeyEvent(chatKey: string): Promise<BlindHistoryItemEvent[]> {
-  if (!chatKey) return [];
-  try {
-    const rows = await querySdkPluginChatRecords(SDK_SETTINGS_NAMESPACE_Event, chatKey, BLIND_RESULTS_COLLECTION_Event, {
-      order: "asc",
-    });
-    return normalizeBlindHistoryItemsEvent(rows.map((row) => row.payload));
-  } catch (error) {
-    logger.warn(`暗骰记录装载失败，chatKey=${chatKey}`, error);
-    return [];
-  }
 }
 
 function normalizeSettingsThemeCompatEvent(raw: unknown): RollHelperSettingsThemeEvent {
@@ -1129,11 +1719,14 @@ export function updateSettingsEvent(patch: Partial<DicePluginSettingsEvent>): vo
   writeSettingsForCurrentScopeEvent(
     nextTheme == null
       ? restPatch
-      : {
+        : {
           ...restPatch,
           theme: nextTheme,
         }
   );
+  void syncCurrentChatDataFromRuntimeEvent("settings_updated").catch((error) => {
+    logger.warn("同步新聊天数据中的技能/状态配置失败", error);
+  });
 }
 
 export function normalizeSkillPresetNameKeyEvent(raw: string): string {
@@ -1363,7 +1956,7 @@ export function saveSkillPresetStoreEvent(store: SkillPresetStoreEvent): void {
     skillPresetStoreText: savedStoreText,
     skillTableText: activeSkillTableText,
   });
-  persistSkillPresetStoreToChatScopedEvent(savedStoreText);
+  // 技能预设通过 updateSettingsEvent -> syncCurrentChatDataFromRuntimeEvent 自动同步到 chatData
 }
 
 export function buildSkillDraftSnapshotEvent(rows: SkillEditorRowDraftEvent[]): string {

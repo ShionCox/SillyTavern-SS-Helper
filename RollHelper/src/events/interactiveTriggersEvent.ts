@@ -5,6 +5,7 @@ import type {
   DiceMetaEvent,
   DicePluginSettingsEvent,
   EventRollRecordEvent,
+  RollHelperChatRecordEvent,
   RollVisibilityEvent,
   InteractiveTriggerEvent,
   SelectionFallbackLimitModeEvent,
@@ -16,6 +17,7 @@ import {
   getMessageInteractiveTriggersEvent,
 } from "./interactiveTriggerMetadataEvent";
 import { formatResultGradeLabelEvent } from "./roundEvent";
+import { getSummaryHistoryRuntimeEvent } from "./summaryEvent";
 
 const TRIGGER_STYLE_ID_Event = "st-rh-inline-trigger-style";
 const TRIGGER_SIGNATURE_ATTR_Event = "data-rh-trigger-signature";
@@ -189,7 +191,7 @@ function findResolvedTriggerStateEvent(
     }
   }
 
-  const summaryHistory = Array.isArray(meta?.summaryHistory) ? meta.summaryHistory : [];
+  const summaryHistory = getSummaryHistoryRuntimeEvent();
   for (let snapshotIndex = summaryHistory.length - 1; snapshotIndex >= 0; snapshotIndex -= 1) {
     const snapshot = summaryHistory[snapshotIndex];
     const events = Array.isArray(snapshot?.events) ? snapshot.events : [];

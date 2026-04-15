@@ -252,7 +252,6 @@ describe("roundEvent 并发保护", () => {
     const result = await performInteractiveTriggerRollEvent(trigger, {
       sweepTimeoutFailuresEvent: (): boolean => false,
       getDiceMetaEvent: (): DiceMetaEvent => meta,
-      appendBlindHistoryRecordEvent: (): void => undefined,
       ensureRoundEventTimersSyncedEvent: (): void => undefined,
       recordTimeoutFailureIfNeededEvent: (): EventRollRecordEvent | null => null,
       saveMetadataSafeEvent: (): void => undefined,
