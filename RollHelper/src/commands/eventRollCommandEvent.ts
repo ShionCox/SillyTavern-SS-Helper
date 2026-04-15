@@ -119,8 +119,9 @@ function buildEventListTextEvent(
   deps.ensureRoundEventTimersSyncedEvent(round);
 
   const lines: string[] = [];
+  const visibleEvents = round.events.filter((event) => !event.hiddenFromCurrentEventList);
   lines.push(`当前轮次: ${round.roundId}`);
-  lines.push(`事件数量: ${round.events.length}`);
+  lines.push(`事件数量: ${visibleEvents.length}`);
   lines.push(`状态系统: ${settings.enableStatusSystem ? "开启" : "关闭"}`);
   if (settings.enableStatusSystem) {
     if (activeStatuses.length <= 0) {
@@ -134,7 +135,7 @@ function buildEventListTextEvent(
     }
   }
 
-  for (const event of round.events) {
+  for (const event of visibleEvents) {
     const state = deps.getEventRuntimeViewStateEvent(round, event);
     const skillMod = deps.resolveSkillModifierBySkillNameEvent(event.skill, settings);
     const statusPreview = formatStatusPreviewForEventLineEvent(settings, activeStatuses, event.skill);

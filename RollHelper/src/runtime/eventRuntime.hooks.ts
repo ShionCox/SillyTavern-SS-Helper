@@ -47,7 +47,6 @@ import {
   buildAssistantMessageIdEvent as buildAssistantMessageIdModuleEvent,
   clearDiceMetaEventState as clearDiceMetaEventStateModuleEvent,
   enhanceAssistantRawSourceButtonsEvent as enhanceAssistantRawSourceButtonsModuleEvent,
-  rebuildAssistantFloorLifecycleEvent as rebuildAssistantFloorLifecycleModuleEvent,
   registerEventHooksEvent as registerEventHooksModuleEvent,
   sanitizeAssistantMessageEventBlocksEvent as sanitizeAssistantMessageEventBlocksModuleEvent,
   sanitizeCurrentChatEventBlocksEvent as sanitizeCurrentChatEventBlocksModuleEvent,
@@ -187,11 +186,12 @@ function shouldRetryInitialWidgetRestoreEvent(result: RefreshAllWidgetsResultEve
  * @returns 无返回值。
  */
 export function restoreRuntimeUiFromStateEvent(retry = 0): void {
-  void rebuildAssistantFloorLifecycleModuleEvent({
-    reason: "hydrate_restore",
-    deps: buildEventHooksDepsEvent(),
-  });
+  hideEventCodeBlocksInDomModuleEvent();
+  sweepTimeoutFailuresEvent();
+  refreshCountdownDomEvent();
   const refreshResult = refreshAllWidgetsFromStateWiredEvent();
+  enhanceInteractiveTriggersInDomEvent();
+  enhanceAssistantRawSourceButtonsEvent();
 
   if (!shouldRetryInitialWidgetRestoreEvent(refreshResult)) {
     return;
@@ -371,6 +371,9 @@ export function bindEventButtonsEvent(): void {
     getSettingsEvent: getSettingsStoreEvent,
     getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     saveMetadataSafeEvent: saveMetadataSafeStoreEvent,
+    loadChatScopedStateIntoRuntimeEvent: loadChatScopedStateIntoRuntimeStoreEvent,
+    getLiveContextEvent: getLiveContextCoreEvent,
+    buildAssistantMessageIdEvent,
   });
   bindInteractiveTriggerDomEventsModuleEvent({
     getSettingsEvent: getSettingsStoreEvent,

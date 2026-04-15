@@ -214,6 +214,7 @@ export interface DiceEventSpecEvent {
   dcReason?: string;
   outcomes?: EventOutcomesEvent;
   sourceAssistantMsgId?: string;
+  hiddenFromCurrentEventList?: boolean;
 }
 
 export interface EventRollRecordEvent {
@@ -255,6 +256,13 @@ export interface PendingRoundEvent {
   roundId: string;
   instanceToken: string;
   status: "open" | "closed";
+  processingLock?: {
+    reason: "assistant_finalize";
+    phase?: "committing" | "ready_for_ui";
+    acquiredAt: number;
+    assistantMsgId?: string;
+    floorKey?: string;
+  };
   events: DiceEventSpecEvent[];
   rolls: EventRollRecordEvent[];
   eventTimers: Record<string, EventTimerStateEvent>;

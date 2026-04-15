@@ -222,6 +222,19 @@ function findResolvedTriggerStateEvent(
   };
 }
 
+export function resolveInteractiveTriggerResolvedStateEvent(
+  trigger: InteractiveTriggerEvent,
+  meta: DiceMetaEvent | null | undefined
+): {
+  resolved: boolean;
+  statusLabel: string;
+  visibility: RollVisibilityEvent | "public";
+  resultGrade?: EventRollRecordEvent["resultGrade"];
+  feedbackText?: string;
+} {
+  return findResolvedTriggerStateEvent(trigger, meta);
+}
+
 /**
  * 功能：构建交互触发节点的 tooltip 文本。
  * @param payload 当前交互触发。

@@ -686,6 +686,7 @@ export function buildEventListCardEvent(
   const activeStatuses = ensureActiveStatusesEvent(meta);
   deps.ensureRoundEventTimersSyncedEvent(round);
   const visibleEvents = round.events.filter((event) => {
+    if (event.hiddenFromCurrentEventList) return false;
     const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
     if (!isBlindResultRecordEvent(lastRecord)) return true;
     return settings.blindEventCardVisibilityMode === "placeholder";

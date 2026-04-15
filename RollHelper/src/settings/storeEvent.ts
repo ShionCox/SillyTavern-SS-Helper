@@ -68,6 +68,7 @@ import {
 
 const LOCAL_METADATA_FALLBACK_Event: Record<string, any> = {};
 const STORE_THEME_TRACE_PREFIX_Event = "[SS-Helper][StoreThemeTrace]";
+const STORE_RUNTIME_TRACE_PREFIX_Event = "[SS-Helper][StoreRuntimeTrace]";
 let SETTINGS_STORE_Event: ReturnType<typeof createSdkPluginSettingsStore<DicePluginSettingsEvent>> | null = null;
 interface ScopedSettingsCacheEvent {
   scopeKey: string;
@@ -82,6 +83,7 @@ interface RollHelperChatScopedStateEvent {
   lastBaseRoll: DiceResult | null;
   pendingRound: PendingRoundEvent | null;
   summaryHistory: RoundSummarySnapshotEvent[];
+  blindHistory: BlindHistoryItemEvent[];
 }
 
 /**
@@ -175,6 +177,14 @@ function traceStoreThemeEvent(message: string, payload?: unknown): void {
   logger.info(`${STORE_THEME_TRACE_PREFIX_Event} ${message}`, payload);
 }
 
+function traceStoreRuntimeEvent(message: string, payload?: unknown): void {
+  if (payload === undefined) {
+    logger.info(`${STORE_RUNTIME_TRACE_PREFIX_Event} ${message}`);
+    return;
+  }
+  logger.info(`${STORE_RUNTIME_TRACE_PREFIX_Event} ${message}`, payload);
+}
+
 /**
  * 运行时状态——仅存于内存中，聊天切换时从 chat-scoped store 加载。
  * 不再写入宿主 chat_metadata。
@@ -239,7 +249,26 @@ function normalizeChatScopedStatePayloadEvent(
     lastBaseRoll: source.lastBaseRoll ?? null,
     pendingRound: source.pendingRound ?? null,
     summaryHistory: Array.isArray(source.summaryHistory) ? source.summaryHistory : [],
+    blindHistory: normalizeBlindHistoryItemsEvent(source.blindHistory),
   };
+}
+
+function mergeBlindHistoryItemsEvent(
+  primary: unknown,
+  secondary: unknown
+): BlindHistoryItemEvent[] {
+  const merged = new Map<string, BlindHistoryItemEvent>();
+  for (const item of normalizeBlindHistoryItemsEvent(secondary)) {
+    if (!item.rollId) continue;
+    merged.set(item.rollId, item);
+  }
+  for (const item of normalizeBlindHistoryItemsEvent(primary)) {
+    if (!item.rollId) continue;
+    merged.set(item.rollId, item);
+  }
+  return Array.from(merged.values())
+    .sort((left, right) => Number(left.rolledAt || 0) - Number(right.rolledAt || 0))
+    .slice(-200);
 }
 
 /**
@@ -322,6 +351,7 @@ function persistRuntimeStateToChatScopedEvent(): void {
         lastBaseRoll: meta.lastBaseRoll ?? null,
         pendingRound: meta.pendingRound ?? null,
         summaryHistory: Array.isArray(meta.summaryHistory) ? meta.summaryHistory : [],
+        blindHistory: normalizeBlindHistoryItemsEvent(meta.blindHistory),
       }));
       // 写入公共区 shared.signals
       const scope = ACTIVE_CHAT_SCOPE_Event ?? getTavernContextSnapshotEvent();
@@ -341,6 +371,15 @@ function persistRuntimeStateToChatScopedEvent(): void {
             activeStatusCount: meta.activeStatuses.length,
           },
         },
+      });
+      await flushSdkChatDataNow();
+      traceStoreRuntimeEvent("persistRuntimeStateToChatScopedEvent", {
+        chatKey,
+        pendingRoundId: meta.pendingRound?.roundId ?? null,
+        pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound?.events.length : 0,
+        pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound?.rolls.length : 0,
+        summaryHistoryCount: Array.isArray(meta.summaryHistory) ? meta.summaryHistory.length : 0,
+        blindHistoryCount: Array.isArray(meta.blindHistory) ? meta.blindHistory.length : 0,
       });
     } catch (error) {
       logger.warn(`运行时状态持久化失败，chatKey=${chatKey}`, error);
@@ -485,7 +524,13 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
   const chatKey = resolveCurrentChatKeyEvent();
   if (!chatKey) return;
   try {
-    const state = await readChatScopedStateByKeyEvent(chatKey);
+    const row = await readSdkPluginChatStateAsync(
+      SDK_SETTINGS_NAMESPACE_Event,
+      chatKey
+    );
+    const rawState = row?.state as Partial<RollHelperChatScopedStateEvent> | undefined;
+    const state = normalizeChatScopedStatePayloadEvent(rawState ?? {}, getSettingsEvent().skillTableText);
+    const hasBlindHistoryInState = Array.isArray((rawState as Partial<RollHelperChatScopedStateEvent> | undefined)?.blindHistory);
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
     const settings = getSettingsEvent();
@@ -508,7 +553,11 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.pendingResultGuidanceQueue = [];
     meta.outboundResultGuidance = undefined;
     meta.pendingBlindGuidanceQueue = [];
-    meta.blindHistory = await loadBlindHistoryForChatKeyEvent(chatKey);
+    const legacyBlindHistory = await loadBlindHistoryForChatKeyEvent(chatKey);
+    const mergedBlindHistory = hasBlindHistoryInState
+      ? mergeBlindHistoryItemsEvent(state.blindHistory, legacyBlindHistory)
+      : legacyBlindHistory;
+    meta.blindHistory = mergedBlindHistory;
     meta.outboundBlindGuidance = undefined;
     meta.pendingPassiveDiscoveries = [];
     meta.outboundPassiveDiscovery = undefined;
@@ -518,6 +567,33 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     meta.lastPromptUserMsgId = undefined;
     meta.lastProcessedAssistantMsgId = resolveLastProcessedAssistantMsgIdFromStateEvent(state);
     meta.lastBaseRoll = state.lastBaseRoll ?? undefined;
+    const shouldPersistMigratedBlindHistory =
+      (!hasBlindHistoryInState && mergedBlindHistory.length > 0)
+      || (hasBlindHistoryInState && JSON.stringify(mergedBlindHistory) !== JSON.stringify(state.blindHistory));
+    traceStoreRuntimeEvent("loadChatScopedStateIntoRuntimeEvent.loaded", {
+      reason,
+      chatKey,
+      pendingRoundId: state.pendingRound?.roundId ?? null,
+      pendingEventCount: Array.isArray(state.pendingRound?.events) ? state.pendingRound.events.length : 0,
+      pendingRollCount: Array.isArray(state.pendingRound?.rolls) ? state.pendingRound.rolls.length : 0,
+      summaryHistoryCount: Array.isArray(state.summaryHistory) ? state.summaryHistory.length : 0,
+      blindHistoryInState: hasBlindHistoryInState,
+      blindHistoryStateCount: Array.isArray(state.blindHistory) ? state.blindHistory.length : 0,
+      blindHistoryLegacyCount: legacyBlindHistory.length,
+      blindHistoryMergedCount: mergedBlindHistory.length,
+      migratedBlindHistory: shouldPersistMigratedBlindHistory,
+    });
+    if (shouldPersistMigratedBlindHistory) {
+      await writeChatScopedStateByKeyEvent(chatKey, (previous) => ({
+        ...previous,
+        blindHistory: mergedBlindHistory,
+      }));
+      await flushSdkChatDataNow();
+      traceStoreRuntimeEvent("loadChatScopedStateIntoRuntimeEvent.migrated_blind_history", {
+        chatKey,
+        mergedBlindHistoryCount: mergedBlindHistory.length,
+      });
+    }
     let wroteSettings = false;
     if (
       settings.skillPresetStoreText !== nextSkillPresetStoreText ||

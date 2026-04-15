@@ -38,8 +38,9 @@ vi.mock("../settings/skillEditorUiEvent", () => ({
 
 import {
   buildAssistantMessageIdEvent,
+  clearDiceMetaEventState,
   rebuildAssistantFloorLifecycleEvent,
-  reconcileAllTrackedAssistantFloorsEvent,
+  reconcileTrackedAssistantFloorsEvent,
 } from "./hooksEvent";
 import {
   invalidatePendingRoundFloorEvent,
@@ -66,30 +67,26 @@ function installMinimalDocumentEvent(): void {
 }
 
 /**
- * 功能：为指定消息安装最小 Thinking DOM 桩对象，便于模拟宿主在生成阶段显示推理头部。
+ * 功能：为指定消息安装带卡片挂件的最小 DOM 桩对象，便于断言生成阶段是否错误移除了卡片。
  * @param messageIndex 助手消息索引。
- * @param headerText Thinking 头部文本。
- * @param duration 已完成时长；为空表示仍在思考中。
- * @returns void：无返回值。
+ * @param widgetCount 需要挂载的卡片数量。
+ * @returns 可用于读取已移除卡片数量的访问器。
  */
-function installThinkingDocumentEvent(
+function installWidgetDocumentEvent(
   messageIndex: number,
-  headerText: string,
-  duration?: string
-): void {
-  const header = {
-    dataset: duration ? { duration } : {},
-    textContent: headerText,
-  } as unknown as HTMLElement;
-  const details = {
-    dataset: duration ? { duration } : {},
-  } as unknown as HTMLElement;
-  const mesElement = {
-    querySelector: (selector: string): HTMLElement | null => {
-      if (selector === ".mes_reasoning_header_title") return header;
-      if (selector === ".mes_reasoning_details") return details;
-      return null;
+  widgetCount = 1
+): { getRemovedCount: () => number } {
+  let removedCount = 0;
+  const widgets = Array.from({ length: Math.max(0, widgetCount) }, () => ({
+    remove: (): void => {
+      removedCount += 1;
     },
+  })) as unknown as HTMLElement[];
+  const mesElement = {
+    querySelector: (): HTMLElement | null => null,
+    querySelectorAll: (selector: string): HTMLElement[] => (
+      selector === ".st-rh-widget-container" ? widgets : []
+    ),
   } as unknown as HTMLElement;
   const chatRoot = {
     querySelector: (selector: string): HTMLElement | null => {
@@ -107,6 +104,9 @@ function installThinkingDocumentEvent(
   testGlobal.document = {
     getElementById: (id: string): HTMLElement | null => (id === "chat" ? chatRoot : null),
   } as unknown as Document;
+  return {
+    getRemovedCount: (): number => removedCount,
+  };
 }
 
 /**
@@ -458,8 +458,23 @@ beforeEach(() => {
   installMinimalDocumentEvent();
 });
 
-describe("reconcileAllTrackedAssistantFloorsEvent", () => {
-  it("流式阶段构建助手消息标识时，优先使用当前显示文本，不触发稳定原文回读", () => {
+describe("reconcileTrackedAssistantFloorsEvent", () => {
+  it("chat_reset 只清空运行时，不会把暗骰历史立即持久化成空", () => {
+    const meta = buildMetaEvent("assistant:floor-1:v1:hash-old");
+    const saveMetadataSafeEvent = vi.fn();
+
+    clearDiceMetaEventState("chat_reset", {
+      getDiceMetaEvent: (): DiceMetaEvent => meta,
+      saveMetadataSafeEvent,
+    });
+
+    expect(meta.pendingRound).toBeUndefined();
+    expect(meta.summaryHistory).toBeUndefined();
+    expect(meta.blindHistory).toBeUndefined();
+    expect(saveMetadataSafeEvent).not.toHaveBeenCalled();
+  });
+
+  it("构建助手消息标识时，优先使用当前显示文本，不触发稳定原文回读", () => {
     const stableGetter = vi.fn((): string => {
       throw new Error("不应在当前场景读取稳定原文");
     });
@@ -486,74 +501,129 @@ describe("reconcileAllTrackedAssistantFloorsEvent", () => {
     expect(assistantMsgId).toContain("assistant_idx:2");
   });
 
-  it("重新生成进入占位态时，会立即清理当前楼层的旧卡片", async () => {
-    const oldAssistantMsgId = "assistant_idx:2:swipe_3:hash-old";
-    const currentMessage = buildAssistantMessageEvent("assistant_idx:2:swipe_4:hash-new", "旧正文仍在显示");
-    const meta = buildMetaEvent(oldAssistantMsgId);
+  it("type=normal 的 generation_started 只建立生成会话，不会清理当前卡片 UI", async () => {
+    const widgetDoc = installWidgetDocumentEvent(0, 1);
+    const currentMessage = buildAssistantMessageEvent("assistant:floor-1:v1:hash-old", "旧正文仍在显示");
+    const meta = buildMetaEvent("assistant:floor-1:v1:hash-old");
     const chat = [currentMessage];
-    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+    const { deps } = buildDepsBundleEvent(meta, chat);
 
     const started = await rebuildAssistantFloorLifecycleEvent({
       reason: "generation_started",
-      target: { msg: currentMessage, index: 0 },
+      eventArgs: ["normal"],
       deps,
     });
 
     expect(started.changedData).toBe(false);
-    expect(meta.pendingRound).toBeDefined();
+    expect(started.changedUi).toBe(false);
+    expect(started.rebuiltFloorKeys).toEqual([]);
+    expect(widgetDoc.getRemovedCount()).toBe(0);
+  });
 
-    currentMessage.mes = "...";
+  it("type=swipe 的 generation_started 会立即清理当前楼层卡片 UI", async () => {
+    const widgetDoc = installWidgetDocumentEvent(0, 1);
+    const currentMessage = buildAssistantMessageEvent("assistant:floor-1:v1:hash-old", "旧正文仍在显示");
+    const meta = buildMetaEvent("assistant:floor-1:v1:hash-old");
+    const chat = [currentMessage];
+    const { deps } = buildDepsBundleEvent(meta, chat);
 
-    const result = await rebuildAssistantFloorLifecycleEvent({
-      reason: "message_swiped",
-      target: { msg: currentMessage, index: 0 },
+    const started = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["swipe"],
       deps,
     });
 
-    expect(result.changedData).toBe(true);
-    expect(result.changedUi).toBe(true);
-    expect(result.rebuiltFloorKeys).toEqual(["assistant_idx:2"]);
+    expect(started.changedData).toBe(false);
+    expect(started.changedUi).toBe(true);
+    expect(started.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
+    expect(widgetDoc.getRemovedCount()).toBe(1);
+  });
+
+  it("MESSAGE_RECEIVED 只清理当前楼层旧数据，不会提前挂新事件或自动掷骰", async () => {
+    const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
+    const newAssistantMsgId = "assistant:floor-1:v2:hash-new";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [buildAssistantMessageEvent(newAssistantMsgId, "楼层已刷新 [event:new_event]")];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["regenerate"],
+      deps,
+    });
+
+    const cleaned = await rebuildAssistantFloorLifecycleEvent({
+      reason: "message_received_cleanup",
+      eventArgs: [0],
+      deps,
+    });
+
+    expect(cleaned.changedData).toBe(true);
+    expect(cleaned.changedUi).toBe(false);
+    expect(cleaned.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
     expect(meta.pendingRound).toBeUndefined();
     expect(meta.summaryHistory).toEqual([]);
-    expect(meta.activeStatuses?.map((item) => item.name)).toEqual(["手动状态"]);
     expect(meta.pendingResultGuidanceQueue).toEqual([]);
     expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["invalidated"]);
     expect(mergeEventsSpy).not.toHaveBeenCalled();
     expect(autoRollSpy).not.toHaveBeenCalled();
   });
 
-  it("重新生成后稍晚进入 Thinking 态时，会通过延迟探测清理旧卡片", async () => {
-    vi.useFakeTimers();
-    try {
-      const oldAssistantMsgId = "assistant_idx:2:swipe_3:hash-old";
-      const currentMessage = buildAssistantMessageEvent("assistant_idx:2:swipe_4:hash-new", "旧正文仍在显示");
-      const meta = buildMetaEvent(oldAssistantMsgId);
-      const chat = [currentMessage];
-      const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+  it("GENERATION_ENDED 统一完成 sanitize、事件接管和 UI 刷新", async () => {
+    const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
+    const newAssistantMsgId = "assistant:floor-1:v2:hash-new";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [buildAssistantMessageEvent(newAssistantMsgId, "楼层已刷新 [event:new_event]")];
+    const { deps, autoRollSpy, mergeEventsSpy, persistChatSpy, saveMetadataSpy } = buildDepsBundleEvent(meta, chat);
 
-      const started = await rebuildAssistantFloorLifecycleEvent({
-        reason: "generation_started",
-        target: { msg: currentMessage, index: 0 },
-        deps,
-      });
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["normal"],
+      deps,
+    });
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "message_received_cleanup",
+      eventArgs: [0],
+      deps,
+    });
 
-      expect(started.changedData).toBe(false);
-      expect(meta.pendingRound).toBeDefined();
+    const finalized = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_ended_finalize",
+      deps,
+    });
 
-      installThinkingDocumentEvent(0, "Thinking...");
-      await vi.advanceTimersByTimeAsync(150);
+    expect(finalized.changedData).toBe(true);
+    expect(finalized.changedUi).toBe(true);
+    expect(finalized.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
+    expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
+    expect(meta.pendingRound?.events.map((item) => item.sourceAssistantMsgId)).toEqual([newAssistantMsgId]);
+    expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
+    expect(meta.summaryHistory).toEqual([]);
+    expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
+    expect(autoRollSpy).toHaveBeenCalledTimes(1);
+    expect(persistChatSpy).toHaveBeenCalled();
+    expect(saveMetadataSpy).toHaveBeenCalled();
+  });
 
-      expect(meta.pendingRound).toBeUndefined();
-      expect(meta.summaryHistory).toEqual([]);
-      expect(meta.activeStatuses?.map((item) => item.name)).toEqual(["手动状态"]);
-      expect(meta.pendingResultGuidanceQueue).toEqual([]);
-      expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["invalidated"]);
-      expect(mergeEventsSpy).not.toHaveBeenCalled();
-      expect(autoRollSpy).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-      installMinimalDocumentEvent();
-    }
+  it("hydrate_restore 只恢复 UI，不会在刷新时破坏已有 pendingRound", async () => {
+    const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [buildAssistantMessageEvent(oldAssistantMsgId, "恢复后的正文")];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    const result = await rebuildAssistantFloorLifecycleEvent({
+      reason: "hydrate_restore",
+      deps,
+    });
+
+    expect(result.changedData).toBe(false);
+    expect(result.changedUi).toBe(true);
+    expect(result.rebuiltFloorKeys).toEqual([]);
+    expect(meta.pendingRound).toBeDefined();
+    expect(meta.summaryHistory).toHaveLength(1);
+    expect(meta.pendingBlindGuidanceQueue?.map((item) => item.state)).toEqual(["queued"]);
+    expect(mergeEventsSpy).not.toHaveBeenCalled();
+    expect(autoRollSpy).not.toHaveBeenCalled();
   });
 
   it("当前楼层重生成且不再包含事件时，会清除旧楼层的结果与历史", async () => {
@@ -563,7 +633,7 @@ describe("reconcileAllTrackedAssistantFloorsEvent", () => {
     const chat = [buildAssistantMessageEvent(newAssistantMsgId, "这是一段不包含事件的新正文")];
     const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
 
-    const result = await reconcileAllTrackedAssistantFloorsEvent("message_edited", deps);
+    const result = await reconcileTrackedAssistantFloorsEvent("message_edited", deps);
 
     expect(result.changedData).toBe(true);
     expect(result.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
@@ -584,7 +654,7 @@ describe("reconcileAllTrackedAssistantFloorsEvent", () => {
     const chat = [buildAssistantMessageEvent(newAssistantMsgId, "楼层已刷新 [event:new_event]")];
     const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
 
-    const result = await reconcileAllTrackedAssistantFloorsEvent("message_edited", deps);
+    const result = await reconcileTrackedAssistantFloorsEvent("message_edited", deps);
 
     expect(result.changedData).toBe(true);
     expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
@@ -607,7 +677,7 @@ describe("reconcileAllTrackedAssistantFloorsEvent", () => {
     const meta = buildMetaEvent(oldAssistantMsgId);
     const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, []);
 
-    const result = await reconcileAllTrackedAssistantFloorsEvent("message_deleted", deps);
+    const result = await reconcileTrackedAssistantFloorsEvent("message_deleted", deps);
 
     expect(result.changedData).toBe(true);
     expect(result.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);

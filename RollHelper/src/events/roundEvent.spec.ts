@@ -7,11 +7,13 @@ import type {
   EventRollRecordEvent,
   CompareOperatorEvent,
   PendingRoundEvent,
+  InteractiveTriggerEvent,
 } from "../types/eventDomainEvent";
 import {
   autoRollEventsByAiModeEvent,
   invalidatePendingRoundFloorEvent,
   mergeEventsIntoPendingRoundEvent,
+  performInteractiveTriggerRollEvent,
   type MergeEventsIntoPendingRoundDepsEvent,
 } from "./roundEvent";
 import { hideDiceBoxPresentationEvent } from "../core/diceBox";
@@ -216,6 +218,76 @@ beforeEach(() => {
 });
 
 describe("roundEvent 并发保护", () => {
+  it("交互暗骰会保留结算记录，但不加入当前事件列表展示", async () => {
+    const meta: DiceMetaEvent = {};
+    const settings = {
+      ...buildSettingsEvent(),
+      enableBlindRoll: true,
+      defaultBlindSkillsText: "观察",
+    };
+    const trigger: InteractiveTriggerEvent = {
+      triggerId: "trigger_blind_1",
+      label: "门后的动静",
+      action: "观察",
+      skill: "观察",
+      blind: true,
+      sourceMessageId: "assistant_idx:3:swipe_1:hash_new",
+      sourceFloorKey: "assistant_idx:3",
+      sourceId: "noise_behind_door",
+      occurrenceIndex: 0,
+      textRange: null,
+      dcHint: 10,
+      difficulty: "normal",
+      loreType: "线索",
+      note: "测试暗骰",
+      diceExpr: "1d20",
+      compare: ">=",
+      revealMode: "delayed",
+      triggerPackSourceId: "pack_1",
+      triggerPackSuccessText: "你捕捉到了异常。",
+      triggerPackFailureText: "你没能确认异常来源。",
+      triggerPackExplodeText: "你立刻锁定了异常源头。",
+    };
+
+    const result = await performInteractiveTriggerRollEvent(trigger, {
+      sweepTimeoutFailuresEvent: (): boolean => false,
+      getDiceMetaEvent: (): DiceMetaEvent => meta,
+      appendBlindHistoryRecordEvent: (): void => undefined,
+      ensureRoundEventTimersSyncedEvent: (): void => undefined,
+      recordTimeoutFailureIfNeededEvent: (): EventRollRecordEvent | null => null,
+      saveMetadataSafeEvent: (): void => undefined,
+      getLatestRollRecordForEvent: (round: PendingRoundEvent, eventId: string): EventRollRecordEvent | null =>
+        round.rolls.find((record) => record.eventId === eventId) ?? null,
+      refreshAllWidgetsFromStateEvent: (): void => undefined,
+      refreshCountdownDomEvent: (): void => undefined,
+      rollDiceEvent: async (): Promise<DiceResult> => buildDiceResultEvent(),
+      parseDiceExpression: (): { count: number; sides: number; modifier: number; explode: boolean } => ({
+        count: 1,
+        sides: 20,
+        modifier: 0,
+        explode: false,
+      }),
+      getSettingsEvent: (): DicePluginSettingsEvent => settings,
+      resolveSkillModifierBySkillNameEvent: (): number => 0,
+      applySkillModifierToDiceResultEvent: (diceResult: DiceResult) => ({
+        result: diceResult,
+        baseModifierUsed: 0,
+        finalModifierUsed: 0,
+      }),
+      saveLastRoll: (): void => undefined,
+      normalizeCompareOperatorEvent: (): CompareOperatorEvent => ">=",
+      evaluateSuccessEvent: (total: number, _compare: CompareOperatorEvent, dc: number | null): boolean =>
+        total >= Number(dc ?? 0),
+      createIdEvent: (prefix: string): string => `${prefix}_test`,
+    });
+
+    expect(result.event.hiddenFromCurrentEventList).toBe(true);
+    expect(meta.pendingRound?.events).toHaveLength(1);
+    expect(meta.pendingRound?.events[0]?.hiddenFromCurrentEventList).toBe(true);
+    expect(meta.pendingRound?.rolls).toHaveLength(1);
+    expect(result.record.visibility).toBe("blind");
+  });
+
   it("楼层被清空后会直接移除空的 pendingRound", () => {
     const assistantMsgId = "assistant_idx:2:swipe_1:hash_old";
     const round: PendingRoundEvent = {

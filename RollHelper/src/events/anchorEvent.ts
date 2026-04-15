@@ -475,5 +475,20 @@ export function refreshAllWidgetsFromStateEvent(
     }
   }
 
+  if (result.hasPendingRound || result.hasHistoryWidgets) {
+    logger.info("[卡片恢复] refreshAllWidgetsFromStateEvent", {
+      pendingRoundId: meta.pendingRound?.roundId ?? null,
+      hasPendingRound: result.hasPendingRound,
+      pendingRoundMounted: result.pendingRoundMounted,
+      hasHistoryWidgets: result.hasHistoryWidgets,
+      historyWidgetsMounted: result.historyWidgetsMounted,
+      mountedWidgetCount: result.mountedWidgetCount,
+      chatDomReady: result.chatDomReady,
+      pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound.events.length : 0,
+      pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound.rolls.length : 0,
+      summaryHistoryCount: Array.isArray(meta.summaryHistory) ? meta.summaryHistory.length : 0,
+    });
+  }
+
   return result;
 }

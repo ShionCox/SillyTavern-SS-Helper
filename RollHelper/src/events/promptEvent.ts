@@ -30,6 +30,7 @@ import { buildSdkChatKeyEvent } from "../../../SDK/tavern/chatkey";
 import { AI_SUPPORTED_DICE_SIDES_Event } from "../settings/constantsEvent";
 import {
   buildAssistantFloorKeyEvent,
+  isPendingRoundProcessingLockedEvent,
   pruneExpiredBlindGuidanceQueueEvent,
   updateBlindHistoryStateByRollIdEvent,
 } from "./roundEvent";
@@ -432,26 +433,39 @@ function buildInteractiveTriggerProtocolBlockEvent(settings: DicePluginSettingsE
   lines.push("1. rh-trigger 只能写在最终剧情正文里，不能写进 rolljson/outcomes/desc/dc_reason。");
   lines.push("2. trigger_pack 只能输出 ```triggerjson，禁止 ```json。");
   lines.push("3. trigger_pack 可选，不是每轮必出。");
-  lines.push("4. triggerjson:");
+  lines.push("4. triggerjson 只填写 reveal=\"instant\" 的 trigger；如果某个 rh-trigger 的 reveal=\"delayed\"，就不要把它写进 triggerjson。");
+  lines.push("5. triggerjson:");
   lines.push("{");
   lines.push('  "type":"trigger_pack","version":"1",');
   lines.push('  "defaults":{"dice":"1d20","compare":">="},');
-  lines.push('  "items":[{"sid":"str","skill":"str","difficulty":"easy|normal|hard|extreme","reveal":"instant|delayed","success":"str","failure":"str","explode":"str?"}]');
+  lines.push('  "items":[{"sid":"str","skill":"str","difficulty":"easy|normal|hard|extreme","reveal":"instant","success":"str","failure":"str","explode":"str?","dice":"str?","compare":">=|>|<=|<?"}]');
   lines.push("}");
-  lines.push("5. sid 必须对应 rh-trigger 的 sourceId；success/failure/explode 必须简短。");
-  lines.push("6. 每轮最多 1~2 个 trigger_pack，只给关键情报 trigger 使用。");
-  lines.push('7. reveal="instant" 表示命中后立即给短反馈；reveal="delayed" 表示进入后续体现。');
-  lines.push(`8. ${blindSkillText} 这类暗骰技能适用时请写 blind="1"，且对应 outcomes 必须写全。`);
-  lines.push("9. 只标值得继续调查、判断或检定的短词或短短语，例如异响、痕迹、异味、可疑停顿、异常缝隙、被移动的物件、矛盾细节。");
-  lines.push("10. 不要标整句、纯氛围描写、普通修饰词、装饰性名词、已经没有后续调查价值的结论句。");
-  lines.push('11. 需要立刻支持玩家决策的信息优先 instant；潜行、欺骗、伏击、藏匿、是否暴露、是否被怀疑等结果优先 delayed。');
-  lines.push('12. rh-trigger 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" sourceId="clue_1">奇怪的响声</rh-trigger>');
+  lines.push("6. sid 必须对应 rh-trigger 的 sourceId；success/failure/explode 必须简短。");
+  lines.push("7. 每轮最多 1~2 个 trigger_pack，只给关键情报 trigger 使用。");
+  lines.push('8. rh-trigger 必须显式填写 reveal="instant|delayed"；不要省略 reveal。');
+  lines.push('9. reveal="instant" 表示命中后立即给短反馈，所以才需要写进 triggerjson；reveal="delayed" 表示进入后续体现，不写进 triggerjson。');
+  lines.push(`10. ${blindSkillText} 这类暗骰技能适用时请写 blind="1"；若同时需要即时反馈，才额外写入 triggerjson。`);
+  lines.push("11. 只标值得继续调查、判断或检定的短词或短短语，例如异响、痕迹、异味、可疑停顿、异常缝隙、被移动的物件、矛盾细节。");
+  lines.push("12. 不要标整句、纯氛围描写、普通修饰词、装饰性名词、已经没有后续调查价值的结论句。");
+  lines.push('13. 需要立刻支持玩家决策的信息优先 instant；潜行、欺骗、伏击、藏匿、是否暴露、是否被怀疑等结果优先 delayed。');
+  lines.push('14. rh-trigger 语法：<rh-trigger action="调查" skill="调查" difficulty="normal" reveal="instant" sourceId="clue_1">奇怪的响声</rh-trigger>');
   if (isVerbosePromptModeEvent(settings)) {
-    lines.push('13. 示例：<rh-trigger action="调查" skill="调查" difficulty="normal" sourceId="clue_1">奇怪的响声</rh-trigger>');
-    lines.push("14. rh-trigger 应落在正文里最值得继续追查的那个短词或短短语上，不要整句包裹，也不要在同一段中大量重复发光。");
-    lines.push("15. 调查、察觉、洞察、搜索、历史、聆听这类信息型检定优先 instant。");
-    lines.push("16. 潜行、欺骗、伏击、藏匿、伪装、是否暴露、是否被怀疑这类状态型检定优先 delayed。");
-    lines.push("17. 例如“奇怪的响声”“店主的停顿”“异常刮痕”适合 instant；“是否暴露”“是否被识破”适合 delayed。");
+    lines.push('15. instant 示例正文：门板后忽然传来一阵<rh-trigger action="调查" skill="调查" difficulty="normal" reveal="instant" sourceId="clue_sound_1">奇怪的响声</rh-trigger>。');
+    lines.push("16. instant 示例 triggerjson：");
+    lines.push("```triggerjson");
+    lines.push('{');
+    lines.push('  "type":"trigger_pack",');
+    lines.push('  "version":"1",');
+    lines.push('  "defaults":{"dice":"1d20","compare":">="},');
+    lines.push('  "items":[{"sid":"clue_sound_1","skill":"调查","difficulty":"normal","reveal":"instant","success":"你立刻听出声源来自门后。","failure":"你听见了声响，却暂时无法判断来源。","explode":"你不仅锁定了声源，还察觉到它在缓慢移动。","dice":"1d20","compare":">="}]');
+    lines.push('}');
+    lines.push("```");
+    lines.push('17. delayed 示例正文：她说到钥匙去向时出现了<rh-trigger action="洞察" skill="洞察" difficulty="hard" reveal="delayed" sourceId="suspect_pause_1" blind="1">短暂的停顿</rh-trigger>。');
+    lines.push("18. delayed 示例不要写进 triggerjson；让它只保留在正文 rh-trigger 中，后续通过暗骰与叙事体现。");
+    lines.push("19. rh-trigger 应落在正文里最值得继续追查的那个短词或短短语上，不要整句包裹，也不要在同一段中大量重复发光。");
+    lines.push("20. 调查、察觉、洞察、搜索、历史、聆听这类信息型检定优先 instant。");
+    lines.push("21. 潜行、欺骗、伏击、藏匿、伪装、是否暴露、是否被怀疑这类状态型检定优先 delayed。");
+    lines.push("22. 例如“奇怪的响声”“店主的停顿”“异常刮痕”适合 instant；“是否暴露”“是否被识破”适合 delayed。");
   }
   return normalizeBlockTextEvent(lines.join("\n"));
 }
@@ -1111,14 +1125,31 @@ export function handlePromptReadyEvent(
 
   const meta = deps.getDiceMetaEvent();
   const isSameUserPrompt = meta.lastPromptUserMsgId === userMsgId;
+  const pendingRoundProcessingLocked = isPendingRoundProcessingLockedEvent(meta.pendingRound, Date.now());
+  const shouldDeferPendingRoundTransition = !isSameUserPrompt && pendingRoundProcessingLocked;
   let changedMeta = false;
 
-  if (!isSameUserPrompt) {
+  if (meta.pendingRound?.processingLock && !pendingRoundProcessingLocked) {
+    delete meta.pendingRound.processingLock;
+    changedMeta = true;
+    logger.info("[回合暂存] 检测到过期的助手后处理锁，已自动释放");
+  }
+
+  if (!isSameUserPrompt && !shouldDeferPendingRoundTransition) {
     meta.lastPromptUserMsgId = userMsgId;
     changedMeta = true;
   }
 
-  if (!isSameUserPrompt && meta.pendingRound && Array.isArray(meta.pendingRound.events) && meta.pendingRound.events.length > 0) {
+  if (shouldDeferPendingRoundTransition) {
+    logger.info("[回合暂存] 当前轮次仍在助手后处理阶段，暂缓归档与关轮", {
+      roundId: meta.pendingRound?.roundId ?? null,
+      instanceToken: meta.pendingRound?.instanceToken ?? null,
+      floorKey: meta.pendingRound?.sourceFloorKey ?? null,
+      latestUserMsgId: userMsgId,
+    });
+  }
+
+  if (!isSameUserPrompt && !shouldDeferPendingRoundTransition && meta.pendingRound && Array.isArray(meta.pendingRound.events) && meta.pendingRound.events.length > 0) {
     const history = deps.ensureSummaryHistoryEvent(meta);
     const snapshot = deps.createRoundSummarySnapshotEvent(meta.pendingRound, Date.now());
     if (upsertRoundSnapshotToHistoryEvent(history, snapshot)) {
@@ -1136,7 +1167,7 @@ export function handlePromptReadyEvent(
     }
   }
 
-  if (!isSameUserPrompt && !settings.enableAiRoundControl && meta.pendingRound?.status === "open") {
+  if (!isSameUserPrompt && !shouldDeferPendingRoundTransition && !settings.enableAiRoundControl && meta.pendingRound?.status === "open") {
     meta.pendingRound.status = "closed";
     changedMeta = true;
     logger.info("已按“每轮模式”在用户发言后结束当前轮次");

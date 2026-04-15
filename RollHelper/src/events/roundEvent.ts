@@ -1447,6 +1447,27 @@ function isPendingRoundEmptyEvent(round: PendingRoundEvent | null | undefined): 
   );
 }
 
+const PENDING_ROUND_PROCESSING_LOCK_MAX_AGE_MS_Event = 15_000;
+
+/**
+ * 功能：判断未归档轮次是否仍处于助手后处理保护期，避免被新的 prompt 钩子提前归档。
+ * @param round 当前未归档轮次。
+ * @param now 当前时间戳。
+ * @param maxAgeMs 保护锁最大存活时间，默认 15 秒。
+ * @returns boolean：锁仍有效时返回 true。
+ */
+export function isPendingRoundProcessingLockedEvent(
+  round: PendingRoundEvent | null | undefined,
+  now = Date.now(),
+  maxAgeMs = PENDING_ROUND_PROCESSING_LOCK_MAX_AGE_MS_Event
+): boolean {
+  const lock = round?.processingLock;
+  if (!lock || lock.reason !== "assistant_finalize") return false;
+  const acquiredAt = Number(lock.acquiredAt);
+  if (!Number.isFinite(acquiredAt) || acquiredAt <= 0) return false;
+  return now - acquiredAt <= Math.max(1000, Math.floor(maxAgeMs));
+}
+
 /**
  * 功能：判断当前元数据里的未归档轮次是否仍然是指定的有效实例。
  * @param meta 当前骰子元数据。
@@ -1855,6 +1876,7 @@ function buildInteractiveTriggerEventSpecEvent(
       explode: explodeOutcomeText || undefined,
     },
     sourceAssistantMsgId: String(trigger.sourceMessageId || "").trim(),
+    hiddenFromCurrentEventList: Boolean(trigger.blind),
   };
 }
 
