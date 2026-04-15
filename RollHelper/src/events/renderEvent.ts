@@ -57,6 +57,17 @@ function isBlindResultRecordEvent(record: EventRollRecordEvent | null | undefine
   return record.visibility === "blind" || record.source === "blind_manual_roll";
 }
 
+/**
+ * 功能：判断当前事件是否仍应显示在事件列表里。
+ * @param event 事件定义。
+ * @returns 未隐藏且未结算时返回 true。
+ */
+function isEventVisibleInListEvent(event: DiceEventSpecEvent | null | undefined): boolean {
+  if (!event) return false;
+  if (event.listVisibility === "hidden") return false;
+  return !(Number.isFinite(Number(event.closedAt)) && Number(event.closedAt) > 0);
+}
+
 export function formatCountdownMsEvent(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -86,6 +97,9 @@ export function getEventRuntimeViewStateEvent(
   const settings = deps.getSettingsEvent();
   const record = deps.getLatestRollRecordForEvent(round, event.id);
   if (record) {
+    if (record.source === "skipped_manual_fail") {
+      return { text: "已跳过关闭", tone: "danger", locked: true };
+    }
     if (record.source === "timeout_auto_fail") {
       return { text: "已超时失败", tone: "danger", locked: true };
     }
@@ -685,12 +699,7 @@ export function buildEventListCardEvent(
   const meta = deps.getDiceMetaEvent();
   const activeStatuses = ensureActiveStatusesEvent(meta);
   deps.ensureRoundEventTimersSyncedEvent(round);
-  const visibleEvents = round.events.filter((event) => {
-    if (event.hiddenFromCurrentEventList) return false;
-    const lastRecord = deps.getLatestRollRecordForEvent(round, event.id);
-    if (!isBlindResultRecordEvent(lastRecord)) return true;
-    return settings.blindEventCardVisibilityMode === "placeholder";
-  });
+  const visibleEvents = round.events.filter((event) => isEventVisibleInListEvent(event));
   if (visibleEvents.length <= 0) return "";
   const buildItemHtmlByVariantEvent = (templateVariant: "desktop" | "mobile"): string =>
     visibleEvents
@@ -1421,7 +1430,9 @@ export function buildEventRollResultCardEvent(
   const statusColor = isBlindRecord ? "#7f6dff" : record.success === null ? "#ffdb78" : record.success ? "#52c41a" : "#ff4d4f";
 
   const sourceText =
-    record.source === "timeout_auto_fail"
+    record.source === "skipped_manual_fail"
+      ? "跳过关闭"
+      : record.source === "timeout_auto_fail"
       ? "超时检定"
       : record.source === "blind_manual_roll"
         ? "暗骰检定"
@@ -1447,7 +1458,7 @@ export function buildEventRollResultCardEvent(
     finalModifierUsed
   );
   const diceVisualBlock =
-    record.source === "timeout_auto_fail" || isBlindRecord
+    record.source === "timeout_auto_fail" || record.source === "skipped_manual_fail" || isBlindRecord
       ? ""
       : buildAnimatedDiceVisualBlockEvent(
         record.result,
@@ -1523,7 +1534,7 @@ export function buildEventRollResultCardEvent(
   );
   const collapsedCondition = `${record.compareUsed} ${String(record.dcUsed ?? "未设置")}`;
   const collapsedDiceVisualHtml =
-    record.source === "timeout_auto_fail" || isBlindRecord
+    record.source === "timeout_auto_fail" || record.source === "skipped_manual_fail" || isBlindRecord
       ? ""
       : buildFinalTotalDiceVisualEvent(
         Number.isFinite(Number(record.result.total)) ? Number(record.result.total) : 0,

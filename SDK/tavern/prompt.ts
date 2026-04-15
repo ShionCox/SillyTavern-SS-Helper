@@ -251,8 +251,9 @@ export function extractTavernMessageOriginalTextEvent(message: unknown): { text:
 
   // 优先从当前激活 swipe 读取
   if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
-    visibleText = typeof swipes[swipeId] === 'string' ? swipes[swipeId] : '';
-    source = `swipes[${swipeId}]`;
+    const swipeTextResult = extractTextFromUnknownRecordEvent(swipes[swipeId], `swipes[${swipeId}]`);
+    visibleText = String(swipeTextResult?.text ?? '');
+    source = swipeTextResult?.textSource || `swipes[${swipeId}]`;
 
     // swipe 级别的 reasoning 存在 swipe_info[swipeId].extra.reasoning
     if (Array.isArray(swipeInfo) && swipeId < swipeInfo.length) {
@@ -459,6 +460,14 @@ export function getTavernPromptMessageTextEvent(
   message: SdkTavernPromptMessageEvent | null | undefined
 ): string {
   if (!message || typeof message !== "object") return "";
+  const swipeId = Number(message.swipe_id ?? message.swipeId);
+  const swipes = message.swipes;
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    const swipeResult = extractTextFromUnknownRecordEvent(swipes[swipeId], `swipes[${swipeId}]`);
+    if (swipeResult && !swipeResult.isEmpty) {
+      return swipeResult.text;
+    }
+  }
   if (typeof message.content === "string") {
     return message.content;
   }

@@ -228,14 +228,50 @@ export function getAssistantOriginalSourceCandidateFromHostEvent(
   return String(result.text ?? "");
 }
 
-export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent | undefined): string {
+/**
+ * 功能：读取当前激活 swipe 的可见正文，兼容字符串与对象两种结构。
+ * @param message 助手消息对象。
+ * @returns 当前 swipe 的正文；不存在时返回空字符串。
+ */
+function getActiveSwipeVisibleTextEvent(message: TavernMessageEvent | undefined): string {
   if (!message || typeof message !== "object") return "";
   const swipeId = Number((message as any).swipe_id ?? (message as any).swipeId);
   const swipes = (message as any).swipes;
-  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
-    const swipeText = String(swipes[swipeId] ?? "");
-    if (swipeText.trim()) return swipeText;
+  if (!Array.isArray(swipes) || !Number.isFinite(swipeId) || swipeId < 0 || swipeId >= swipes.length) {
+    return "";
   }
+
+  const activeSwipe = swipes[swipeId];
+  if (typeof activeSwipe === "string" && activeSwipe.trim()) {
+    return activeSwipe;
+  }
+  if (!activeSwipe || typeof activeSwipe !== "object") {
+    return "";
+  }
+
+  const swipeRecord = activeSwipe as Record<string, unknown>;
+  const textCandidates = [
+    swipeRecord.mes,
+    swipeRecord.content,
+    swipeRecord.text,
+  ];
+  for (const candidate of textCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+/**
+ * 功能：读取助手消息当前优先参与事件解析的正文，优先使用激活 swipe。
+ * @param message 助手消息对象。
+ * @returns 当前优先正文。
+ */
+export function getPreferredAssistantSourceTextEvent(message: TavernMessageEvent | undefined): string {
+  if (!message || typeof message !== "object") return "";
+  const swipeText = getActiveSwipeVisibleTextEvent(message);
+  if (swipeText.trim()) return swipeText;
   if (typeof (message as any).mes === "string" && (message as any).mes.trim()) {
     return String((message as any).mes);
   }

@@ -127,6 +127,58 @@ function buildAssistantMessageEvent(
 }
 
 /**
+ * 功能：构造当前激活 swipe 为对象结构的测试消息。
+ * @param assistantMsgId 助手消息标识。
+ * @param swipeText 当前激活 swipe 的正文。
+ * @param baseText 消息本体正文。
+ * @returns TavernMessageEvent：测试消息对象。
+ */
+function buildAssistantMessageWithObjectSwipeEvent(
+  assistantMsgId: string,
+  swipeText: string,
+  baseText = ""
+): TavernMessageEvent {
+  return {
+    role: "assistant",
+    mes: baseText,
+    swipe_id: 0,
+    swipes: [
+      {
+        mes: swipeText,
+      },
+    ],
+    mockAssistantMsgId: assistantMsgId,
+  } as TavernMessageEvent;
+}
+
+/**
+ * 功能：统一读取测试消息当前生效正文，兼容对象型 swipe。
+ * @param message 测试消息对象。
+ * @returns string：当前生效正文。
+ */
+function getActiveAssistantMessageTextForTestEvent(message: TavernMessageEvent | undefined): string {
+  if (!message || typeof message !== "object") return "";
+  const swipeId = Number((message as any).swipe_id ?? (message as any).swipeId);
+  const swipes = (message as any).swipes;
+  if (Array.isArray(swipes) && Number.isFinite(swipeId) && swipeId >= 0 && swipeId < swipes.length) {
+    const activeSwipe = swipes[swipeId];
+    if (typeof activeSwipe === "string" && activeSwipe.trim()) {
+      return activeSwipe;
+    }
+    if (activeSwipe && typeof activeSwipe === "object") {
+      const swipeRecord = activeSwipe as Record<string, unknown>;
+      const textCandidates = [swipeRecord.mes, swipeRecord.content, swipeRecord.text];
+      for (const candidate of textCandidates) {
+        if (typeof candidate === "string" && candidate.trim()) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return String((message as any).mes ?? "");
+}
+
+/**
  * 功能：构造最小事件定义，便于在楼层对账测试中复用。
  * @param eventId 事件标识。
  * @param assistantMsgId 楼层对应的助手消息标识。
@@ -417,8 +469,12 @@ function buildDepsBundleEvent(
     },
     getStableAssistantOriginalSourceTextEvent: (): string => "",
     getHostOriginalSourceTextEvent: (): string => "",
-    getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined): string => String(message?.mes ?? ""),
-    getMessageTextEvent: (message: TavernMessageEvent | undefined): string => String(message?.mes ?? ""),
+    getPreferredAssistantSourceTextEvent: (message: TavernMessageEvent | undefined): string => (
+      getActiveAssistantMessageTextForTestEvent(message)
+    ),
+    getMessageTextEvent: (message: TavernMessageEvent | undefined): string => (
+      getActiveAssistantMessageTextForTestEvent(message)
+    ),
     parseEventEnvelopesEvent: (text: string) => ({
       events: parseEventsFromTextEvent(text),
       ranges: [],
@@ -464,6 +520,7 @@ function buildDepsBundleEvent(
 
 beforeEach(() => {
   installMinimalDocumentEvent();
+  vi.useRealTimers();
 });
 
 describe("reconcileTrackedAssistantFloorsEvent", () => {
@@ -607,6 +664,44 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(autoRollSpy).toHaveBeenCalledTimes(1);
     expect(persistChatSpy).toHaveBeenCalled();
     expect(saveMetadataSpy).toHaveBeenCalled();
+  });
+
+  it("对象型 swipe 在 GENERATION_ENDED 后也会正确接管事件并刷新卡片", async () => {
+    const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
+    const newAssistantMsgId = "assistant:floor-1:v2:hash-new";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [
+      buildAssistantMessageWithObjectSwipeEvent(
+        newAssistantMsgId,
+        "楼层已刷新 [event:new_event]",
+        "消息本体仍是旧占位文本"
+      ),
+    ];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["swipe"],
+      deps,
+    });
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "message_received_cleanup",
+      eventArgs: [0],
+      deps,
+    });
+
+    const finalized = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_ended_finalize",
+      deps,
+    });
+
+    expect(finalized.changedData).toBe(true);
+    expect(finalized.changedUi).toBe(true);
+    expect(finalized.rebuiltFloorKeys).toEqual(["assistant:floor-1"]);
+    expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
+    expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
+    expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
+    expect(autoRollSpy).toHaveBeenCalledTimes(1);
   });
 
   it("hydrate_restore 只恢复 UI，不会在刷新时破坏已有 pendingRound", async () => {

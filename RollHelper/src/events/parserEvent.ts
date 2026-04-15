@@ -586,8 +586,34 @@ export function filterEventsByApplyScopeEvent(
   events: DiceEventSpecEvent[],
   applyScope: "protagonist_only" | "all"
 ): DiceEventSpecEvent[] {
-  if (applyScope === "all") return events;
-  return events.filter(isLikelyProtagonistActionEvent);
+  const eventDiagnostics = events.map((event) => ({
+    id: String(event.id ?? "").trim(),
+    title: String(event.title ?? "").trim(),
+    scope: event.scope ?? null,
+    targetType: event.targetType ?? null,
+    targetLabel: String(event.targetLabel ?? "").trim(),
+    skill: String(event.skill ?? "").trim(),
+    protagonistMatched: isLikelyProtagonistActionEvent(event),
+  }));
+
+  if (applyScope === "all") {
+    logger.info("[事件解析诊断] 作用域过滤已跳过", {
+      applyScope,
+      beforeCount: events.length,
+      afterCount: events.length,
+      events: eventDiagnostics,
+    });
+    return events;
+  }
+
+  const filteredEvents = events.filter((event) => isLikelyProtagonistActionEvent(event));
+  logger.info("[事件解析诊断] 作用域过滤结果", {
+    applyScope,
+    beforeCount: events.length,
+    afterCount: filteredEvents.length,
+    events: eventDiagnostics,
+  });
+  return filteredEvents;
 }
 
 export interface NormalizeEventSpecDepsEvent {
@@ -1058,11 +1084,19 @@ export function parseEventEnvelopesEvent(
   let shouldEndRound = false;
 
   let match: RegExpExecArray | null;
+  let fencedBlockCount = 0;
+  let fencedDiceEventCandidateCount = 0;
+  let fencedDiceEventParsedCount = 0;
+  let htmlBlockCount = 0;
+  let htmlDiceEventCandidateCount = 0;
+  let htmlDiceEventParsedCount = 0;
   while ((match = regex.exec(text)) !== null) {
+    fencedBlockCount += 1;
     const raw = decodeHtmlEntitiesEvent(match[1] ?? "").trim();
     if (!raw) continue;
     const hasDiceEventType = /"type"\s*:\s*"dice_events"/i.test(raw);
     if (hasDiceEventType) {
+      fencedDiceEventCandidateCount += 1;
       ranges.push({ start: match.index, end: match.index + match[0].length });
     }
 
@@ -1081,12 +1115,16 @@ export function parseEventEnvelopesEvent(
     }
     const normalized = normalizeEnvelopeEvent(parsed, deps);
     if (!normalized) continue;
+    if (hasDiceEventType) {
+      fencedDiceEventParsedCount += 1;
+    }
     events.push(...normalized.events);
     if (normalized.shouldEndRound) shouldEndRound = true;
   }
 
   const htmlRegex = /<pre\b[\s\S]*?<\/pre>/gi;
   while ((match = htmlRegex.exec(text)) !== null) {
+    htmlBlockCount += 1;
     const preBlock = match[0];
     const codeMatch = preBlock.match(/<code\b[^>]*>([\s\S]*?)<\/code>/i);
     const rawInner = (codeMatch ? codeMatch[1] : preBlock).replace(/<[^>]+>/g, "");
@@ -1095,6 +1133,7 @@ export function parseEventEnvelopesEvent(
 
     const hasDiceEventType = /"type"\s*:\s*"dice_events"/i.test(raw);
     if (hasDiceEventType) {
+      htmlDiceEventCandidateCount += 1;
       ranges.push({ start: match.index, end: match.index + preBlock.length });
     }
 
@@ -1111,6 +1150,9 @@ export function parseEventEnvelopesEvent(
 
     const normalized = normalizeEnvelopeEvent(parsed, deps);
     if (!normalized) continue;
+    if (hasDiceEventType) {
+      htmlDiceEventParsedCount += 1;
+    }
     events.push(...normalized.events);
     if (normalized.shouldEndRound) shouldEndRound = true;
   }
@@ -1135,6 +1177,23 @@ export function parseEventEnvelopesEvent(
     } else {
       logger.warn("正文尾部检测到损坏的裸 dice_events 控制块，已按清理区间移除。");
     }
+  }
+
+  if (/dice_events|```(?:rolljson|json)\b|<pre\b/i.test(text)) {
+    logger.info("[事件解析诊断] 解析事件包络摘要", {
+      textLength: text.length,
+      fencedBlockCount,
+      fencedDiceEventCandidateCount,
+      fencedDiceEventParsedCount,
+      htmlBlockCount,
+      htmlDiceEventCandidateCount,
+      htmlDiceEventParsedCount,
+      bareTailDetected: Boolean(bareTail),
+      rangeCount: ranges.length,
+      eventCount: events.length,
+      shouldEndRound,
+      textPreview: String(text ?? "").replace(/\s+/g, " ").slice(0, 180),
+    });
   }
 
   return { events, ranges, shouldEndRound };

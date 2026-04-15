@@ -230,6 +230,9 @@ function toSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): string 
   if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
     return "超时未操作，系统判定失败";
   }
+  if (item.resultSource === "skipped_manual_fail") {
+    return "已跳过未处理检定，系统按失败关闭";
+  }
   if (item.visibility === "blind" || item.resultSource === "blind_manual_roll") {
     return item.revealMode === "instant"
       ? "暗骰检定已结算（结果隐藏，已即时反馈）"
@@ -267,6 +270,9 @@ function toSummaryResultBriefEvent(item: RoundSummaryEventItemEvent): string {
   if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
     return "超时失败";
   }
+  if (item.resultSource === "skipped_manual_fail") {
+    return "跳过关闭";
+  }
   if (item.success === true) {
     return item.resultSource === "ai_auto_roll" ? "自动检定成功" : "成功";
   }
@@ -287,6 +293,9 @@ function toBlindSummaryResultSentenceEvent(item: RoundSummaryEventItemEvent): st
   }
   if (item.status === "timeout" || item.resultSource === "timeout_auto_fail") {
     return "暗骰失败";
+  }
+  if (item.resultSource === "skipped_manual_fail") {
+    return "未处理检定已跳过关闭";
   }
   if (item.revealMode === "instant") {
     if (item.resultGrade === "critical_success") return "暗骰已即时反馈（大成功）";

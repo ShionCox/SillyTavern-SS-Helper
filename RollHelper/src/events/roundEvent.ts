@@ -157,7 +157,9 @@ function evaluateResultGradeEvent(
   source: EventRollRecordEvent["source"]
 ): { resultGrade: EventResultGradeEvent; marginToDc: number | null } {
   const marginToDc = computeMarginToDcEvent(Number(result.total), compareUsed, dcUsed);
-  if (source === "timeout_auto_fail") return { resultGrade: "failure", marginToDc };
+  if (source === "timeout_auto_fail" || source === "skipped_manual_fail") {
+    return { resultGrade: "failure", marginToDc };
+  }
   if (success !== true && success !== false) return { resultGrade: "failure", marginToDc };
 
   if (detectSingleKeptDieExtremumEvent(result).isCandidate) {
@@ -1033,7 +1035,11 @@ function resolveRawOutcomeTextEvent(
     }
     return outcomes?.success?.trim() || "判定成功，剧情向有利方向推进。";
   }
-  if (record?.success === false || record?.source === "timeout_auto_fail") {
+  if (
+    record?.success === false
+    || record?.source === "timeout_auto_fail"
+    || record?.source === "skipped_manual_fail"
+  ) {
     if (!(outcomes?.failure && outcomes.failure.trim())) {
       logBlindOutcomeFallbackOnceEvent(event, record, "failure");
     }
@@ -1098,6 +1104,50 @@ export function getLatestRollRecordForEvent(round: PendingRoundEvent, eventId: s
     if (round.rolls[i]?.eventId === eventId) return round.rolls[i];
   }
   return null;
+}
+
+/**
+ * 功能：判断单个事件是否已经结算结束。
+ * @param event 事件定义。
+ * @returns 已有关闭时间时返回 true，否则返回 false。
+ */
+function isEventClosedEvent(event: DiceEventSpecEvent | null | undefined): boolean {
+  return Number.isFinite(Number(event?.closedAt)) && Number(event?.closedAt) > 0;
+}
+
+/**
+ * 功能：按当前事件关闭状态同步整轮开关状态。
+ * @param round 当前轮次。
+ * @returns boolean：轮次状态发生变化时返回 true。
+ */
+function syncRoundClosedStateFromEventsEvent(round: PendingRoundEvent): boolean {
+  const events = Array.isArray(round.events) ? round.events : [];
+  const shouldClose = events.length > 0 && events.every((event) => isEventClosedEvent(event));
+  const nextStatus: PendingRoundEvent["status"] = shouldClose ? "closed" : "open";
+  if (round.status === nextStatus) return false;
+  round.status = nextStatus;
+  return true;
+}
+
+/**
+ * 功能：在事件结算完成后立即停止该事件的倒计时。
+ * 参数：
+ *   round：当前轮次。
+ *   eventId：已结算事件标识。
+ *   settledAt：结算时间。
+ * 返回：
+ *   void：无返回值。
+ */
+function settleEventTimerEvent(
+  round: PendingRoundEvent,
+  eventId: string,
+  settledAt: number
+): void {
+  const timers = ensureEventTimerIndexEvent(round);
+  const timer = timers[eventId];
+  if (!timer) return;
+  timer.deadlineAt = null;
+  timer.expiredAt = settledAt;
 }
 
 /**
@@ -1477,8 +1527,17 @@ export function mergeEventsIntoPendingRoundEvent(
     const previous = merged.get(incoming.id);
     const existingRecord = getLatestRollRecordForEvent(round, incoming.id);
     const next: DiceEventSpecEvent = { ...(previous || {}), ...incoming };
+    next.listVisibility =
+      incoming.listVisibility === "hidden" || previous?.listVisibility === "hidden"
+        ? "hidden"
+        : "visible";
+    next.closedAt =
+      Number(incoming.closedAt)
+      || Number(previous?.closedAt)
+      || Number(existingRecord?.rolledAt)
+      || null;
 
-    if (!existingRecord) {
+    if (!existingRecord && !isEventClosedEvent(next)) {
       const resolvedTimeLimit = deps.resolveEventTimeLimitByUrgencyEvent({
         rollMode: next.rollMode,
         urgency: next.urgency,
@@ -1551,7 +1610,11 @@ export function resolveTriggeredOutcomeEvent(
     }
     return { kind: "success", text: outcomes?.success?.trim() || "判定成功，剧情向有利方向推进。", explosionTriggered };
   }
-  if (record?.success === false || record?.source === "timeout_auto_fail") {
+  if (
+    record?.success === false
+    || record?.source === "timeout_auto_fail"
+    || record?.source === "skipped_manual_fail"
+  ) {
     if (!(outcomes?.failure && outcomes.failure.trim())) {
       logBlindOutcomeFallbackOnceEvent(event, record, "failure");
     }
@@ -1642,8 +1705,10 @@ export function recordTimeoutFailureIfNeededEvent(
   if (now <= timer.deadlineAt) return null;
 
   const record = deps.createTimeoutFailureRecordEvent(round, event, now);
+  event.closedAt = now;
   round.rolls.push(record);
-  timer.expiredAt = now;
+  settleEventTimerEvent(round, event.id, now);
+  syncRoundClosedStateFromEventsEvent(round);
   return record;
 }
 
@@ -1812,7 +1877,8 @@ function buildInteractiveTriggerEventSpecEvent(
       explode: explodeOutcomeText || undefined,
     },
     sourceAssistantMsgId: String(trigger.sourceMessageId || "").trim(),
-    hiddenFromCurrentEventList: Boolean(trigger.blind),
+    listVisibility: trigger.blind ? "hidden" : "visible",
+    closedAt: null,
   };
 }
 
@@ -2002,7 +2068,10 @@ export async function performInteractiveTriggerRollEvent(
     revealMode,
   };
 
+  event.closedAt = record.rolledAt;
+  settleEventTimerEvent(round, event.id, record.rolledAt);
   round.rolls.push(record);
+  syncRoundClosedStateFromEventsEvent(round);
   if (trigger.blind && revealMode === "delayed") {
     enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   }
@@ -2084,6 +2153,7 @@ async function executeManualEventRollEvent(
   deps.ensureRoundEventTimersSyncedEvent(round);
   const timeoutCreated = deps.recordTimeoutFailureIfNeededEvent(round, event);
   if (timeoutCreated) {
+    event.closedAt = timeoutCreated.rolledAt;
     if (settings.enableDynamicResultGuidance) {
       enqueueResultGuidanceFromRecordEvent(meta, event, timeoutCreated);
     }
@@ -2201,8 +2271,11 @@ async function executeManualEventRollEvent(
     sourceAssistantMsgId: event.sourceAssistantMsgId,
   };
 
+  event.closedAt = record.rolledAt;
+  settleEventTimerEvent(round, event.id, record.rolledAt);
   enqueueBlindGuidanceFromRecordEvent(meta, settings, round, event, record);
   round.rolls.push(record);
+  syncRoundClosedStateFromEventsEvent(round);
   appendBlindHistoryFromRecordEvent(
     meta,
     event,
@@ -2436,7 +2509,10 @@ export async function autoRollEventsByAiModeEvent(round: PendingRoundEvent, deps
       return [];
     }
 
+    event.closedAt = record.rolledAt;
+    settleEventTimerEvent(round, event.id, record.rolledAt);
     round.rolls.push(record);
+    syncRoundClosedStateFromEventsEvent(round);
     if (settings.enableDynamicResultGuidance) {
       enqueueResultGuidanceFromRecordEvent(meta, event, record);
     }
@@ -2532,6 +2608,9 @@ export function formatRollRecordSummaryEvent(
 
   if (record.source === "timeout_auto_fail") {
     return `超时自动判定失败${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
+  }
+  if (record.source === "skipped_manual_fail") {
+    return `已跳过并按失败关闭${targetTag}${modifierTag}${statusDetailTag}${advantageTag}${gradeTag}${outcomeTag}`;
   }
   if (record.source === "blind_manual_roll" || record.visibility === "blind") {
     return "暗骰检定已结算（真实结果已隐藏，将通过后续叙事体现）";

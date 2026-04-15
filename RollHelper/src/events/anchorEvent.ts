@@ -1,6 +1,5 @@
 import type {
   DiceEventSpecEvent,
-  DiceMetaEvent,
   EventRollRecordEvent,
   PendingRoundEvent,
   RollHelperChatRecordEvent,
@@ -17,7 +16,6 @@ const WIDGET_CONTAINER_ATTR_Event = "data-rh-widget";
 
 export interface AnchorDepsEvent {
   getLiveContextEvent: () => { chat?: TavernMessageEvent[] } | null;
-  getDiceMetaEvent: () => DiceMetaEvent;
   getCurrentChatDataEvent: () => RollHelperChatRecordEvent;
   buildEventListCardEvent: (round: PendingRoundEvent) => string;
   buildEventRollResultCardEvent: (
@@ -32,8 +30,8 @@ export interface AnchorDepsEvent {
 
 export interface RefreshAllWidgetsResultEvent {
   mountedWidgetCount: number;
-  hasPendingRound: boolean;
-  pendingRoundMounted: boolean;
+  hasCurrentFloorWidgets: boolean;
+  currentFloorWidgetsMounted: boolean;
   hasHistoryWidgets: boolean;
   historyWidgetsMounted: boolean;
   chatDomReady: boolean;
@@ -259,81 +257,131 @@ function rebuildEventAndRecordFromSnapshotEvent(
 }
 
 /**
- * 功能：挂载当前打开轮次的卡片，按楼层分桶。
- *   - 最新来源楼层：挂事件列表卡 + 该楼层已结算事件的结果卡
- *   - 更早来源楼层：只挂该楼层已结算事件的结果卡
- *   - 没有已结算结果的旧楼层：不挂卡
- * @returns 成功挂载的楼层数。
+ * 功能：把楼层持久化数据重建成当前事件列表渲染所需的最小 PendingRoundEvent。
+ * 参数：
+ *   floorId：楼层编号。
+ *   floor：楼层记录。
+ * 返回：
+ *   PendingRoundEvent：用于当前事件列表渲染的最小运行时快照。
  */
-function mountPendingRoundWidgetsEvent(
-  round: PendingRoundEvent,
+function buildFloorRuntimeRoundSnapshotEvent(
+  floorId: number,
+  floor: RollHelperChatRecordEvent["floors"][string]
+): PendingRoundEvent {
+  const events = Array.isArray(floor.eventDice?.events)
+    ? floor.eventDice.events.map((event) => ({ ...event }))
+    : [];
+  const rolls = [
+    ...(Array.isArray(floor.eventDice?.publicRolls) ? floor.eventDice.publicRolls.map((item) => ({ ...item })) : []),
+    ...(Array.isArray(floor.eventDice?.blindRolls) ? floor.eventDice.blindRolls.map((item) => ({ ...item })) : []),
+  ];
+  const sourceAssistantMsgIds = Array.from(new Set([
+    ...events.map((item) => String(item?.sourceAssistantMsgId ?? "").trim()),
+    ...rolls.map((item) => String(item?.sourceAssistantMsgId ?? "").trim()),
+  ].filter(Boolean)));
+  if (sourceAssistantMsgIds.length <= 0) {
+    sourceAssistantMsgIds.push(`assistant_idx:${floorId}:${floor.createdAt || 0}`);
+  }
+  const latestRoundRef =
+    Array.isArray(floor.roundRefs) && floor.roundRefs.length > 0
+      ? String(floor.roundRefs[floor.roundRefs.length - 1] ?? "").trim()
+      : "";
+  return {
+    roundId: latestRoundRef || `floor_runtime_${floorId}`,
+    instanceToken: latestRoundRef || `floor_runtime_${floorId}`,
+    status: "open",
+    events,
+    rolls,
+    eventTimers: {},
+    sourceAssistantMsgIds,
+    openedAt: Number(floor.createdAt) || Date.now(),
+  };
+}
+
+/**
+ * 功能：按楼层数据库中的未关闭事件恢复当前事件列表与结果卡。
+ * 参数：
+ *   chatData：当前聊天数据库记录。
+ *   chat：当前聊天消息数组。
+ *   deps：卡片依赖。
+ * 返回：
+ *   mountedCount：成功挂载数量。
+ *   hasCurrentWidgets：是否存在应显示的当前卡片。
+ */
+function mountCurrentFloorWidgetsFromChatDataEvent(
+  chatData: RollHelperChatRecordEvent,
   chat: TavernMessageEvent[],
   deps: AnchorDepsEvent
-): { mountedCount: number; anyMounted: boolean } {
+): { mountedCount: number; hasCurrentWidgets: boolean } {
   let mountedCount = 0;
+  let hasCurrentWidgets = false;
+  let latestVisibleFloorId: number | null = null;
+  const closedRoundFloorIds = new Set<number>();
 
-  const latestMsgId =
-    round.sourceAssistantMsgIds.length > 0
-      ? round.sourceAssistantMsgIds[round.sourceAssistantMsgIds.length - 1]
-      : undefined;
-
-  const floorBuckets = new Map<string, { events: DiceEventSpecEvent[]; records: EventRollRecordEvent[] }>();
-
-  for (const event of round.events) {
-    const msgId = event.sourceAssistantMsgId || latestMsgId || "";
-    if (!msgId) continue;
-    let bucket = floorBuckets.get(msgId);
-    if (!bucket) {
-      bucket = { events: [], records: [] };
-      floorBuckets.set(msgId, bucket);
-    }
-    bucket.events.push(event);
-    const record = deps.getLatestRollRecordForEvent(round, event.id);
-    if (record && !isBlindResultRecordEvent(record)) {
-      bucket.records.push(record);
+  for (const roundId of chatData.rounds?.order ?? []) {
+    const round = chatData.rounds?.records?.[roundId];
+    if (!round || round.status !== "closed") continue;
+    for (const floorId of round.floorIds ?? []) {
+      closedRoundFloorIds.add(Number(floorId));
     }
   }
 
-  for (const [msgId, bucket] of floorBuckets) {
-    if (bucket.records.length <= 0 && msgId !== latestMsgId) continue;
-
-    const mesElement = findMesElementByMsgIdEvent(msgId, chat);
-    if (!mesElement) continue;
-
-    const cards: string[] = [];
-
-    if (msgId === latestMsgId) {
-      const listCardHtml = deps.buildEventListCardEvent(round);
-      if (listCardHtml) {
-        cards.push(listCardHtml);
-      }
-    }
-
-    for (const event of bucket.events) {
-      const record = deps.getLatestRollRecordForEvent(round, event.id);
-      if (record && !isBlindResultRecordEvent(record)) {
-        cards.push(deps.buildEventRollResultCardEvent(event, record));
-      }
-    }
-
-    if (cards.length > 0) {
-      mountWidgetToMesEvent(mesElement, cards.join(""), `round-${round.roundId}-floor-${msgId}`);
-      mountedCount += 1;
+  for (const floorId of chatData.floorOrder ?? []) {
+    const floor = chatData.floors?.[String(floorId)];
+    if (!floor?.eventDice) continue;
+    const hasVisibleEvents = (floor.eventDice.events ?? []).some(
+      (event) => event?.listVisibility !== "hidden" && !Number(event?.closedAt)
+    );
+    if (hasVisibleEvents) {
+      latestVisibleFloorId = floorId;
     }
   }
 
-  if (mountedCount <= 0 && latestMsgId) {
+  for (const floorId of chatData.floorOrder ?? []) {
+    const floor = chatData.floors?.[String(floorId)];
+    if (!floor?.eventDice) continue;
+    const isClosedHistoryFloor = closedRoundFloorIds.has(floorId);
+    const round = buildFloorRuntimeRoundSnapshotEvent(floorId, floor);
+    const visibleEvents = round.events.filter(
+      (event) => event.listVisibility !== "hidden" && !Number(event.closedAt)
+    );
+    const publicResultCards = isClosedHistoryFloor
+      ? []
+      : round.events
+      .map((event) => {
+        const record = deps.getLatestRollRecordForEvent(round, event.id);
+        if (!record || isBlindResultRecordEvent(record)) return "";
+        return deps.buildEventRollResultCardEvent(event, record);
+      })
+      .filter(Boolean);
+    const listCardHtml = visibleEvents.length > 0 && latestVisibleFloorId === floorId
+      ? deps.buildEventListCardEvent({
+        ...round,
+        events: visibleEvents,
+      })
+      : "";
+    if (!listCardHtml && publicResultCards.length <= 0) {
+      continue;
+    }
+    hasCurrentWidgets = hasCurrentWidgets || Boolean(listCardHtml);
+    const latestMsgId = round.sourceAssistantMsgIds[round.sourceAssistantMsgIds.length - 1] || "";
     const mesElement = findMesElementByMsgIdEvent(latestMsgId, chat);
-    if (mesElement) {
-      const listCard = deps.buildEventListCardEvent(round);
-      if (listCard) {
-        mountWidgetToMesEvent(mesElement, listCard, `round-${round.roundId}-floor-${latestMsgId}`);
-        mountedCount += 1;
-      }
+    if (!mesElement) {
+      logger.warn(`[卡片恢复] 未找到当前楼层锚点 floorId=${floorId} sourceMsgId=${latestMsgId}`);
+      continue;
     }
+    const cards = [
+      ...(listCardHtml ? [listCardHtml] : []),
+      ...publicResultCards,
+    ];
+    mountWidgetToMesEvent(mesElement, cards.join(""), `floor-current-${floorId}`);
+    mountedCount += 1;
   }
 
-  return { mountedCount, anyMounted: mountedCount > 0 };
+  return {
+    mountedCount,
+    hasCurrentWidgets,
+  };
 }
 
 /**
@@ -397,25 +445,8 @@ function mountHistoryRoundWidgetsEvent(
 }
 
 /**
- * 功能：判断当前待处理轮次是否已经被归档到 chatData 的已关闭轮次中。
- * 参数：
- *   round：当前待处理轮次。
- *   chatData：当前聊天 chatData 记录。
- * 返回：
- *   boolean：若 chatData.rounds 中已存在同 roundId 且状态为 closed 的记录则返回 true。
- */
-function isPendingRoundArchivedEvent(
-  round: PendingRoundEvent | undefined,
-  chatData: RollHelperChatRecordEvent | null | undefined
-): boolean {
-  if (!round || !chatData?.rounds?.records) return false;
-  const existing = chatData.rounds.records[round.roundId];
-  return !!existing && existing.status === "closed";
-}
-
-/**
  * 功能：根据当前运行时状态重新挂载所有事件卡片，按楼层分桶。
- *   - 当前打开轮次：最新楼层挂事件列表卡 + 结果卡；更早楼层只挂结果卡
+ *   - 当前楼层：直接按楼层数据库中的未关闭事件恢复事件列表卡 + 结果卡
  *   - 历史轮次：按 sourceAssistantMsgId 分组恢复结果卡
  * @param deps 事件卡片挂载依赖。
  * @returns 本次刷新结果，用于判断是否需要继续重试恢复。
@@ -427,8 +458,8 @@ export function refreshAllWidgetsFromStateEvent(
 
   const result: RefreshAllWidgetsResultEvent = {
     mountedWidgetCount: 0,
-    hasPendingRound: false,
-    pendingRoundMounted: false,
+    hasCurrentFloorWidgets: false,
+    currentFloorWidgetsMounted: false,
     hasHistoryWidgets: false,
     historyWidgetsMounted: false,
     chatDomReady: !!document.getElementById("chat"),
@@ -436,33 +467,16 @@ export function refreshAllWidgetsFromStateEvent(
 
   const liveCtx = deps.getLiveContextEvent();
   const chat = liveCtx?.chat as TavernMessageEvent[] | undefined;
-  const meta = deps.getDiceMetaEvent();
   const chatData = deps.getCurrentChatDataEvent();
-
-  const shouldMountPendingRound =
-    !!meta.pendingRound &&
-    meta.pendingRound.events.length > 0 &&
-    !isPendingRoundArchivedEvent(meta.pendingRound, chatData);
-
-  if (shouldMountPendingRound) {
-    result.hasPendingRound = true;
-  }
   if (!Array.isArray(chat)) {
     logger.warn("[卡片恢复] 当前 liveContext.chat 不可用，跳过挂载");
     return result;
   }
 
-  if (shouldMountPendingRound && meta.pendingRound) {
-    const round = meta.pendingRound;
-    const { mountedCount, anyMounted } = mountPendingRoundWidgetsEvent(round, chat, deps);
-    result.mountedWidgetCount += mountedCount;
-    result.pendingRoundMounted = anyMounted;
-    if (!anyMounted) {
-      logger.warn(
-        `[卡片恢复] 未找到锚点消息 roundId=${round.roundId} sourceMsgIds=${JSON.stringify(round.sourceAssistantMsgIds)}`
-      );
-    }
-  }
+  const currentResult = mountCurrentFloorWidgetsFromChatDataEvent(chatData, chat, deps);
+  result.hasCurrentFloorWidgets = currentResult.hasCurrentWidgets;
+  result.currentFloorWidgetsMounted = currentResult.mountedCount > 0;
+  result.mountedWidgetCount += currentResult.mountedCount;
 
   const closedRoundIds = (chatData?.rounds?.order || []).filter(
     (id) => chatData?.rounds?.records?.[id]?.status === "closed"
@@ -509,17 +523,15 @@ export function refreshAllWidgetsFromStateEvent(
     result.mountedWidgetCount += historyResult.mountedCount;
   }
 
-  if (result.hasPendingRound || result.hasHistoryWidgets) {
+  if (result.hasCurrentFloorWidgets || result.hasHistoryWidgets) {
     logger.info("[卡片恢复] refreshAllWidgetsFromStateEvent", {
-      pendingRoundId: meta.pendingRound?.roundId ?? null,
-      hasPendingRound: result.hasPendingRound,
-      pendingRoundMounted: result.pendingRoundMounted,
+      hasCurrentFloorWidgets: result.hasCurrentFloorWidgets,
+      currentFloorWidgetsMounted: result.currentFloorWidgetsMounted,
       hasHistoryWidgets: result.hasHistoryWidgets,
       historyWidgetsMounted: result.historyWidgetsMounted,
       mountedWidgetCount: result.mountedWidgetCount,
       chatDomReady: result.chatDomReady,
-      pendingEventCount: Array.isArray(meta.pendingRound?.events) ? meta.pendingRound.events.length : 0,
-      pendingRollCount: Array.isArray(meta.pendingRound?.rolls) ? meta.pendingRound.rolls.length : 0,
+      currentFloorCount: (chatData?.floorOrder || []).length,
       closedRoundCount: closedRoundIds.length,
     });
   }

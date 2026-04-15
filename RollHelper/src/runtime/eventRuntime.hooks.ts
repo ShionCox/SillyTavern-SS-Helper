@@ -165,7 +165,6 @@ const INITIAL_WIDGET_RESTORE_RETRY_DELAY_MS_Event = 250;
 function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
   return refreshAllWidgetsFromStateModuleEvent({
     getLiveContextEvent: getLiveContextCoreEvent,
-    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     getCurrentChatDataEvent: getCurrentChatDataStoreEvent,
     buildEventListCardEvent,
     buildEventRollResultCardEvent,
@@ -179,10 +178,7 @@ function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
  * @returns 需要继续重试时返回 `true`，否则返回 `false`。
  */
 function shouldRetryInitialWidgetRestoreEvent(result: RefreshAllWidgetsResultEvent): boolean {
-  return (
-    (result.hasPendingRound && !result.pendingRoundMounted)
-    || (result.hasHistoryWidgets && !result.historyWidgetsMounted)
-  );
+  return result.hasHistoryWidgets && !result.historyWidgetsMounted;
 }
 
 /**

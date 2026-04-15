@@ -280,9 +280,11 @@ describe("roundEvent 并发保护", () => {
       createIdEvent: (prefix: string): string => `${prefix}_test`,
     });
 
-    expect(result.event.hiddenFromCurrentEventList).toBe(true);
+    expect(result.event.listVisibility).toBe("hidden");
+    expect(result.event.closedAt).toBeGreaterThan(0);
     expect(meta.pendingRound?.events).toHaveLength(1);
-    expect(meta.pendingRound?.events[0]?.hiddenFromCurrentEventList).toBe(true);
+    expect(meta.pendingRound?.events[0]?.listVisibility).toBe("hidden");
+    expect(meta.pendingRound?.events[0]?.closedAt).toBeGreaterThan(0);
     expect(meta.pendingRound?.rolls).toHaveLength(1);
     expect(result.record.visibility).toBe("blind");
   });

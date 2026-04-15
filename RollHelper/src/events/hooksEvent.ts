@@ -625,6 +625,11 @@ type PreparedAssistantFloorSanitizedDataEvent = {
   floorKey: string | null;
   rawText: string;
   processedText: string;
+  currentMessageTextLength: number;
+  preferredMessageTextLength: number;
+  hostOriginalTextLength: number;
+  persistedSnapshotLength: number;
+  preferredFinalizeSourceLength: number;
   interactiveTriggers: RollHelperFloorRecordEvent["triggers"]["interactive"];
   triggerPack: RollHelperFloorRecordEvent["triggers"]["triggerPack"];
   sanitizedAt: number;
@@ -728,9 +733,15 @@ function prepareAssistantFloorSanitizedDataEvent(
   const settings = deps.getSettingsEvent();
   const meta = deps.getDiceMetaEvent();
   const currentMessageText = deps.getMessageTextEvent(target.msg);
+  const preferredMessageText = deps.getPreferredAssistantSourceTextEvent(target.msg);
   const hostOriginalText = deps.getHostOriginalSourceTextEvent(target.msg);
   const persistedSnapshotText = getPersistedAssistantOriginalSourceTextEvent(target.msg);
+  const currentMessageTextLength = currentMessageText.length;
+  const preferredMessageTextLength = preferredMessageText.length;
+  const hostOriginalTextLength = hostOriginalText.length;
+  const persistedSnapshotLength = persistedSnapshotText.length;
   const fullSourceCandidates = [
+    preferredMessageText,
     currentMessageText,
     hostOriginalText,
     persistedSnapshotText,
@@ -746,16 +757,49 @@ function prepareAssistantFloorSanitizedDataEvent(
     finalizeSourceCandidates.find((item) => String(item ?? "").trim())
     || fullSourceCandidates.find((item) => String(item ?? "").trim())
     || "";
+  const preferredFinalizeSourceLength = preferredFinalizeSourceText.length;
+  const preferredFinalizeSourcePreview = preferredFinalizeSourceText
+    .replace(/\s+/g, " ")
+    .slice(0, 160);
+  const currentMessagePreview = currentMessageText
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  const preferredMessagePreview = preferredMessageText
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  const hostOriginalPreview = hostOriginalText
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  const persistedSnapshotPreview = persistedSnapshotText
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
   const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
     getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
-    getPreferredAssistantSourceTextEvent: () => currentMessageText,
+    getPreferredAssistantSourceTextEvent: () => preferredMessageText,
     getMessageTextEvent: () => currentMessageText,
     parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
   });
   const assistantMsgId = deps.buildAssistantMessageIdEvent(target.msg, target.index);
   const floorKey = deps.buildAssistantFloorKeyEvent(assistantMsgId);
   const chatData = deps.getCurrentChatDataEvent();
-  if (chatData.meta.lastProcessedFloorId === target.index) {
+  const existingFloor = chatData.floors[String(target.index)] ?? null;
+  const floorContentUnchanged = Boolean(
+    existingFloor
+    && String(existingFloor.content?.raw ?? "") === preferredFinalizeSourceText
+    && String(existingFloor.content?.processed ?? "") === currentMessageText
+  );
+  if (chatData.meta.lastProcessedFloorId === target.index && floorContentUnchanged) {
+    traceHookRuntimeEvent("准备楼层净化数据.跳过重复处理", {
+      sourcePolicy,
+      assistantMsgId,
+      floorKey,
+      floorId: target.index,
+      reason: "lastProcessedFloorId_命中且楼层内容未变化",
+      existingRawLength: String(existingFloor?.content?.raw ?? "").length,
+      existingProcessedLength: String(existingFloor?.content?.processed ?? "").length,
+      preferredFinalizeSourceLength,
+      currentMessageTextLength,
+    });
     if (originalSnapshotChanged) {
       deps.persistChatSafeEvent();
     }
@@ -765,12 +809,30 @@ function prepareAssistantFloorSanitizedDataEvent(
       floorKey,
       rawText: preferredFinalizeSourceText,
       processedText: currentMessageText,
+      currentMessageTextLength,
+      preferredMessageTextLength,
+      hostOriginalTextLength,
+      persistedSnapshotLength,
+      preferredFinalizeSourceLength,
       interactiveTriggers: getMessageInteractiveTriggersEvent(target.msg),
       triggerPack: null,
       sanitizedAt: Date.now(),
       chosenEvents: [],
       chosenShouldEndRound: false,
     };
+  }
+  if (chatData.meta.lastProcessedFloorId === target.index && !floorContentUnchanged) {
+    traceHookRuntimeEvent("准备楼层净化数据.检测到同楼层新内容", {
+      sourcePolicy,
+      assistantMsgId,
+      floorKey,
+      floorId: target.index,
+      reason: "lastProcessedFloorId_命中但楼层内容已变化_继续净化",
+      existingRawLength: String(existingFloor?.content?.raw ?? "").length,
+      existingProcessedLength: String(existingFloor?.content?.processed ?? "").length,
+      preferredFinalizeSourceLength,
+      currentMessageTextLength,
+    });
   }
 
   const sanitizeResult = sourcePolicy === "reconcile"
@@ -796,13 +858,50 @@ function prepareAssistantFloorSanitizedDataEvent(
     : sanitizeAssistantMessageArtifactsOnceEvent(target.msg, target.index, {
         getSettingsEvent: deps.getSettingsEvent,
         getHostOriginalSourceTextEvent: () => preferredFinalizeSourceText,
-        getPreferredAssistantSourceTextEvent: () => currentMessageText,
+        getPreferredAssistantSourceTextEvent: () => preferredMessageText,
         getMessageTextEvent: () => currentMessageText,
         parseEventEnvelopesEvent: deps.parseEventEnvelopesEvent,
         removeRangesEvent: deps.removeRangesEvent,
         resolveSourceMessageIdEvent: () => assistantMsgId,
         sourceState: "raw_source",
       });
+  const chosenEvents = deps.filterEventsByApplyScopeEvent(sanitizeResult.events, settings.eventApplyScope);
+  traceHookRuntimeEvent("准备楼层净化数据.来源选择", {
+    sourcePolicy,
+    currentMessageTextLength,
+    preferredMessageTextLength,
+    hostOriginalTextLength,
+    persistedSnapshotLength,
+    preferredFinalizeSourceLength,
+    fullSourceCandidateCount: fullSourceCandidates.length,
+    finalizeSourceCandidateCount: finalizeSourceCandidates.length,
+    currentMessageHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(currentMessageText),
+    preferredMessageHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(preferredMessageText),
+    hostOriginalHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(hostOriginalText),
+    persistedSnapshotHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(persistedSnapshotText),
+    preferredFinalizeSourceHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(preferredFinalizeSourceText),
+    preferredFinalizeSourceHasRollFence: /```(?:rolljson|json)\b/i.test(preferredFinalizeSourceText),
+    currentMessagePreview,
+    preferredMessagePreview,
+    hostOriginalPreview,
+    persistedSnapshotPreview,
+    preferredFinalizeSourcePreview,
+  });
+  traceHookRuntimeEvent("准备楼层净化数据.净化结果", {
+    sourcePolicy,
+    assistantMsgId,
+    floorKey,
+    cleanTextLength: sanitizeResult.cleanText.length,
+    parsedEventCount: sanitizeResult.events.length,
+    applyScope: settings.eventApplyScope,
+    chosenEventCountAfterScopeFilter: chosenEvents.length,
+    shouldEndRound: sanitizeResult.shouldEndRound,
+    hasRollArtifacts: sanitizeResult.hasRollArtifacts,
+    hasTriggerArtifacts: sanitizeResult.hasTriggerArtifacts,
+    changedText: sanitizeResult.changedText,
+    changedMetadata: sanitizeResult.changedMetadata,
+    cleanTextPreview: sanitizeResult.cleanText.replace(/\s+/g, " ").slice(0, 160),
+  });
   const chosenText = sanitizeResult.cleanText;
   const shouldFinalize =
     chosenText.trim().length > 0
@@ -819,6 +918,11 @@ function prepareAssistantFloorSanitizedDataEvent(
       floorKey,
       rawText: preferredFinalizeSourceText,
       processedText: sanitizeResult.cleanText,
+      currentMessageTextLength,
+      preferredMessageTextLength,
+      hostOriginalTextLength,
+      persistedSnapshotLength,
+      preferredFinalizeSourceLength,
       interactiveTriggers: sanitizeResult.triggers,
       triggerPack: sanitizeResult.triggerPack,
       sanitizedAt: Date.now(),
@@ -870,10 +974,15 @@ function prepareAssistantFloorSanitizedDataEvent(
     floorKey,
     rawText: preferredFinalizeSourceText,
     processedText: sanitizeResult.cleanText,
+    currentMessageTextLength,
+    preferredMessageTextLength,
+    hostOriginalTextLength,
+    persistedSnapshotLength,
+    preferredFinalizeSourceLength,
     interactiveTriggers: sanitizeResult.triggers,
     triggerPack: sanitizeResult.triggerPack,
     sanitizedAt: Date.now(),
-    chosenEvents: deps.filterEventsByApplyScopeEvent(sanitizeResult.events, settings.eventApplyScope),
+    chosenEvents,
     chosenShouldEndRound: sanitizeResult.shouldEndRound,
   };
 }
@@ -927,6 +1036,11 @@ export async function finalizeAssistantFloorDataEvent(
     chosenEventCount: prepared.chosenEvents.length,
     chosenShouldEndRound: prepared.chosenShouldEndRound,
     changedDataBeforeAttach: prepared.changedData,
+    currentMessageTextLength: prepared.currentMessageTextLength,
+    preferredMessageTextLength: prepared.preferredMessageTextLength,
+    hostOriginalTextLength: prepared.hostOriginalTextLength,
+    persistedSnapshotLength: prepared.persistedSnapshotLength,
+    preferredFinalizeSourceLength: prepared.preferredFinalizeSourceLength,
   });
 
   await hydrateAssistantMessageDomImmediatelyEvent({ target, deps });

@@ -119,7 +119,10 @@ function buildEventListTextEvent(
   deps.ensureRoundEventTimersSyncedEvent(round);
 
   const lines: string[] = [];
-  const visibleEvents = round.events.filter((event) => !event.hiddenFromCurrentEventList);
+  const visibleEvents = round.events.filter((event) => {
+    if (event.listVisibility === "hidden") return false;
+    return !(Number.isFinite(Number(event.closedAt)) && Number(event.closedAt) > 0);
+  });
   lines.push(`当前轮次: ${round.roundId}`);
   lines.push(`事件数量: ${visibleEvents.length}`);
   lines.push(`状态系统: ${settings.enableStatusSystem ? "开启" : "关闭"}`);

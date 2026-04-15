@@ -56,6 +56,7 @@ import {
 import {
   getLiveContextEvent,
 } from "../core/runtimeContextEvent";
+import { parseDiceExpression as parseDiceExpressionCoreEvent } from "../core/diceEngineEvent";
 // 旧 V2 persistence 已移除，迁移由 SDK/db 层一次性处理
 import { normalizeActiveStatusesEvent as normalizeActiveStatusesFromEvent } from "../events/statusEvent";
 import { setSummaryHistoryRuntimeEvent, clearSummaryHistoryRuntimeEvent } from "../events/summaryEvent";
@@ -278,6 +279,203 @@ function normalizeFloorTriggersStateEvent(source: unknown): RollHelperFloorTrigg
   };
 }
 
+/**
+ * 功能：判断楼层事件是否仍属于待处理的手动检定。
+ * 参数：
+ *   event：楼层事件定义。
+ * 返回：
+ *   boolean：手动且未关闭时返回 true。
+ */
+function isPendingManualFloorEventEvent(event: DiceEventSpecEvent | null | undefined): boolean {
+  if (!event) return false;
+  if (event.rollMode === "auto") return false;
+  return !(Number.isFinite(Number(event.closedAt)) && Number(event.closedAt) > 0);
+}
+
+/**
+ * 功能：为“用户已进入下一轮”的旧手动检定生成失败结算记录。
+ * 参数：
+ *   event：待关闭的事件定义。
+ *   roundId：所属轮次标识。
+ *   rolledAt：本次自动关闭时间。
+ * 返回：
+ *   EventRollRecordEvent：补写到数据库的失败记录。
+ */
+function buildPendingManualAutoClosedRecordEvent(
+  event: DiceEventSpecEvent,
+  roundId: string,
+  rolledAt: number
+): EventRollRecordEvent {
+  let count = 0;
+  let sides = 0;
+  let modifier = 0;
+  try {
+    const parsed = parseDiceExpressionCoreEvent(String(event.checkDice ?? ""));
+    count = Number(parsed.count) || 0;
+    sides = Number(parsed.sides) || 0;
+    modifier = Number(parsed.modifier) || 0;
+  } catch {
+    count = 0;
+    sides = 0;
+    modifier = 0;
+  }
+  return {
+    rollId: createIdEvent("eroll"),
+    roundId,
+    eventId: event.id,
+    eventTitle: event.title,
+    diceExpr: String(event.checkDice ?? ""),
+    result: {
+      expr: String(event.checkDice ?? ""),
+      rolls: [],
+      modifier,
+      rawTotal: 0,
+      total: 0,
+      count,
+      sides,
+      selectionMode: "none",
+      exploding: false,
+      explosionTriggered: false,
+    },
+    success: false,
+    compareUsed: event.compare ?? ">=",
+    dcUsed: Number.isFinite(Number(event.dc)) ? Number(event.dc) : null,
+    advantageStateApplied: event.advantageState ?? "normal",
+    resultGrade: "failure",
+    marginToDc: null,
+    skillModifierApplied: 0,
+    statusModifierApplied: 0,
+    statusModifiersApplied: [],
+    baseModifierUsed: modifier,
+    finalModifierUsed: modifier,
+    targetLabelUsed: String(event.targetLabel ?? ""),
+    rolledAt,
+    source: "skipped_manual_fail",
+    visibility: "public",
+    concealResult: false,
+    natState: "none",
+    timeoutAt: rolledAt,
+    explodePolicyApplied: "not_requested",
+    explodePolicyReason: "用户已进入下一轮，未处理的手动检定按失败关闭。",
+    sourceAssistantMsgId: event.sourceAssistantMsgId,
+  };
+}
+
+/**
+ * 功能：按最新楼层推进规则，关闭数据库中所有未处理的旧手动检定。
+ * 参数：
+ *   previous：当前聊天数据库快照。
+ *   now：关闭时间。
+ * 返回：
+ *   RollHelperChatRecordEvent：完成关闭后的聊天数据。
+ */
+function closePendingManualFloorEventsForNextTurnEvent(
+  previous: RollHelperChatRecordEvent,
+  now: number
+): RollHelperChatRecordEvent {
+  let changed = false;
+  const nextFloors: Record<string, RollHelperFloorRecordEvent> = {};
+
+  for (const floorId of previous.floorOrder ?? []) {
+    const floor = previous.floors[String(floorId)];
+    if (!floor) continue;
+    let floorChanged = false;
+    const existingPublicRolls = Array.isArray(floor.eventDice?.publicRolls) ? floor.eventDice.publicRolls : [];
+    const existingBlindRolls = Array.isArray(floor.eventDice?.blindRolls) ? floor.eventDice.blindRolls : [];
+    const existingEvents = Array.isArray(floor.eventDice?.events) ? floor.eventDice.events : [];
+    const nextPublicRolls = [...existingPublicRolls];
+    const nextEvents = existingEvents.map((event) => {
+      if (!isPendingManualFloorEventEvent(event)) {
+        return event;
+      }
+      changed = true;
+      floorChanged = true;
+      const roundId =
+        Array.isArray(floor.roundRefs) && floor.roundRefs.length > 0
+          ? String(floor.roundRefs[floor.roundRefs.length - 1] ?? "").trim() || `floor_round_${floorId}`
+          : `floor_round_${floorId}`;
+      const hasExistingRecord = [...existingPublicRolls, ...existingBlindRolls].some((record) => record?.eventId === event.id);
+      if (!hasExistingRecord) {
+        nextPublicRolls.push(buildPendingManualAutoClosedRecordEvent(event, roundId, now));
+      }
+      return {
+        ...event,
+        closedAt: now,
+      };
+    });
+    nextFloors[String(floorId)] = {
+      ...floor,
+      updatedAt: floorChanged ? now : floor.updatedAt,
+      eventDice: {
+        events: nextEvents,
+        publicRolls: nextPublicRolls,
+        blindRolls: existingBlindRolls,
+      },
+    };
+  }
+
+  if (!changed) return previous;
+
+  const nextRoundRecords: Record<string, RollHelperRoundRecordEvent> = {};
+  let nextOpenRoundId: string | null = previous.meta.openRoundId;
+  for (const roundId of previous.rounds.order ?? []) {
+    const round = previous.rounds.records[roundId];
+    if (!round) continue;
+    const roundEvents = (round.floorIds ?? []).flatMap((floorId) => nextFloors[String(floorId)]?.eventDice?.events ?? []);
+    const shouldClose = roundEvents.length > 0 && roundEvents.every((event) => Number(event?.closedAt) > 0);
+    nextRoundRecords[roundId] = {
+      ...round,
+      status: shouldClose ? "closed" : round.status,
+      closedAt: shouldClose ? Number(round.closedAt) || now : round.closedAt,
+    };
+    if (shouldClose && nextOpenRoundId === roundId) {
+      nextOpenRoundId = null;
+    }
+  }
+
+  return {
+    ...previous,
+    meta: {
+      ...previous.meta,
+      updatedAt: now,
+      openRoundId: nextOpenRoundId,
+    },
+    floors: nextFloors,
+    rounds: {
+      ...previous.rounds,
+      records: nextRoundRecords,
+    },
+  };
+}
+
+/**
+ * 功能：按楼层记录中的投骰结果规范化事件关闭状态与列表可见性。
+ * 参数：
+ *   events 原始事件列表。
+ *   publicRolls 公开投骰记录。
+ *   blindRolls 暗骰记录。
+ * 返回：
+ *   DiceEventSpecEvent[]：补齐关闭状态后的事件列表。
+ */
+function normalizeFloorEventDiceEventsStateEvent(
+  events: unknown,
+  publicRolls: EventRollRecordEvent[],
+  blindRolls: EventRollRecordEvent[]
+): DiceEventSpecEvent[] {
+  const allRolls = [...publicRolls, ...blindRolls];
+  return Array.isArray(events)
+    ? events.map((item) => {
+      const event = item as DiceEventSpecEvent;
+      const matchedRecord = allRolls.find((record) => record?.eventId === event?.id);
+      return {
+        ...event,
+        listVisibility: event?.listVisibility === "hidden" ? "hidden" : "visible",
+        closedAt: Number(event?.closedAt) || Number(matchedRecord?.rolledAt) || null,
+      };
+    })
+    : [];
+}
+
 function normalizeChatRecordEvent(
   source: unknown,
   chatId: string,
@@ -300,6 +498,8 @@ function normalizeChatRecordEvent(
     const floorId = normalizeFloorIdEvent(floorSource.floorId ?? floorSource.messageId ?? rawKey);
     if (floorId == null) continue;
     floorOrder.add(floorId);
+    const publicRolls = Array.isArray(floorSource.eventDice?.publicRolls) ? floorSource.eventDice.publicRolls : [];
+    const blindRolls = Array.isArray(floorSource.eventDice?.blindRolls) ? floorSource.eventDice.blindRolls : [];
     floors[String(floorId)] = {
       floorId,
       messageId: floorId,
@@ -312,9 +512,9 @@ function normalizeChatRecordEvent(
       },
       triggers: normalizeFloorTriggersStateEvent(floorSource.triggers),
       eventDice: {
-        events: Array.isArray(floorSource.eventDice?.events) ? floorSource.eventDice.events : [],
-        publicRolls: Array.isArray(floorSource.eventDice?.publicRolls) ? floorSource.eventDice.publicRolls : [],
-        blindRolls: Array.isArray(floorSource.eventDice?.blindRolls) ? floorSource.eventDice.blindRolls : [],
+        events: normalizeFloorEventDiceEventsStateEvent(floorSource.eventDice?.events, publicRolls, blindRolls),
+        publicRolls,
+        blindRolls,
       },
       statusRefs: Array.isArray(floorSource.statusRefs)
         ? floorSource.statusRefs.map((item) => String(item ?? "").trim()).filter(Boolean)
@@ -437,23 +637,32 @@ function buildCurrentStatusesStateFromRuntimeEvent(now = Date.now()): RollHelper
 
 function buildRoundRecordFromPendingRoundEvent(
   round: PendingRoundEvent,
-  lastProcessedFloorId: number | null
+  floorIds: number[]
 ): RollHelperRoundRecordEvent {
-  const floorIds = new Set<number>();
-  if (lastProcessedFloorId != null) {
-    floorIds.add(lastProcessedFloorId);
-  }
+  const normalizedFloorIds = Array.from(
+    new Set(
+      (Array.isArray(floorIds) ? floorIds : [])
+        .map((item) => normalizeFloorIdEvent(item))
+        .filter((item): item is number => item != null)
+    )
+  ).sort((left, right) => left - right);
   return {
     roundId: String(round.roundId ?? "").trim(),
     status: round.status === "closed" ? "closed" : "open",
     openedAt: Number(round.openedAt) || Date.now(),
     closedAt: round.status === "closed" ? Date.now() : null,
-    floorIds: Array.from(floorIds),
+    floorIds: normalizedFloorIds,
     eventRefs: Array.isArray(round.events)
-      ? round.events.map((event) => `${lastProcessedFloorId ?? "unknown"}:${String(event?.id ?? "").trim()}`).filter(Boolean)
+      ? round.events.map((event) => {
+        const floorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(event?.sourceAssistantMsgId);
+        return `${floorId ?? "unknown"}:${String(event?.id ?? "").trim()}`;
+      }).filter(Boolean)
       : [],
     rollRefs: Array.isArray(round.rolls)
-      ? round.rolls.map((record) => `${lastProcessedFloorId ?? "unknown"}:${String(record?.rollId ?? "").trim()}`).filter(Boolean)
+      ? round.rolls.map((record) => {
+        const floorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(record?.sourceAssistantMsgId);
+        return `${floorId ?? "unknown"}:${String(record?.rollId ?? "").trim()}`;
+      }).filter(Boolean)
       : [],
     summaryCache: {
       eventsCount: Array.isArray(round.events) ? round.events.length : 0,
@@ -462,29 +671,143 @@ function buildRoundRecordFromPendingRoundEvent(
   };
 }
 
+/**
+ * 功能：从助手消息标识中解析楼层编号。
+ * 参数：
+ *   assistantMsgId：助手消息标识。
+ * 返回：
+ *   number | null：可解析时返回楼层编号，否则返回 null。
+ */
+function resolveAssistantFloorIdFromAssistantMsgIdEvent(assistantMsgId: unknown): number | null {
+  const normalized = String(assistantMsgId ?? "").trim();
+  if (!normalized) return null;
+  const match = normalized.match(/^assistant_idx:(\d+)(?::|$)/);
+  if (!match) return null;
+  return normalizeFloorIdEvent(match[1]);
+}
+
+/**
+ * 功能：从当前待处理轮次中提取本轮实际关联的楼层编号。
+ * 参数：
+ *   round：当前待处理轮次。
+ *   previous：当前聊天已加载的数据库快照。
+ * 返回：
+ *   number[]：去重后的楼层编号列表。
+ */
+function collectPendingRoundFloorIdsEvent(
+  round: PendingRoundEvent,
+  previous: RollHelperChatRecordEvent
+): number[] {
+  const floorIds = new Set<number>();
+  const remember = (assistantMsgId: unknown): void => {
+    const floorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(assistantMsgId);
+    if (floorId != null) {
+      floorIds.add(floorId);
+    }
+  };
+
+  for (const assistantMsgId of round.sourceAssistantMsgIds ?? []) {
+    remember(assistantMsgId);
+  }
+  for (const event of round.events ?? []) {
+    remember(event?.sourceAssistantMsgId);
+  }
+  for (const record of round.rolls ?? []) {
+    remember(record?.sourceAssistantMsgId);
+  }
+  if (floorIds.size <= 0 && previous.meta.lastProcessedFloorId != null) {
+    floorIds.add(previous.meta.lastProcessedFloorId);
+  }
+  return Array.from(floorIds).sort((left, right) => left - right);
+}
+
+/**
+ * 功能：把当前待处理轮次中的事件与投骰结果同步回楼层持久化数据。
+ * 参数：
+ *   previous：当前聊天已加载的数据库快照。
+ *   round：当前待处理轮次。
+ *   floorIds：本轮关联的楼层编号。
+ * 返回：
+ *   Record<string, RollHelperFloorRecordEvent>：同步后的楼层记录映射。
+ */
+function syncPendingRoundIntoFloorRecordsEvent(
+  previous: RollHelperChatRecordEvent,
+  round: PendingRoundEvent,
+  floorIds: number[]
+): Record<string, RollHelperFloorRecordEvent> {
+  const nextFloors = { ...(previous.floors ?? {}) };
+  const syncedFloorIds: number[] = [];
+  for (const floorId of floorIds) {
+    const existing = nextFloors[String(floorId)];
+    if (!existing) continue;
+    const roundEvents = (round.events ?? []).filter((event) => {
+      const eventFloorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(event?.sourceAssistantMsgId);
+      return eventFloorId == null ? floorId === previous.meta.lastProcessedFloorId : eventFloorId === floorId;
+    });
+    const roundPublicRolls = (round.rolls ?? []).filter((record) => {
+      const recordFloorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(record?.sourceAssistantMsgId);
+      const matchedFloor = recordFloorId == null ? floorId === previous.meta.lastProcessedFloorId : recordFloorId === floorId;
+      return matchedFloor && record?.visibility !== "blind";
+    });
+    const roundBlindRolls = (round.rolls ?? []).filter((record) => {
+      const recordFloorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(record?.sourceAssistantMsgId);
+      const matchedFloor = recordFloorId == null ? floorId === previous.meta.lastProcessedFloorId : recordFloorId === floorId;
+      return matchedFloor && record?.visibility === "blind";
+    });
+    nextFloors[String(floorId)] = {
+      ...existing,
+      updatedAt: Date.now(),
+      eventDice: {
+        events: roundEvents,
+        publicRolls: roundPublicRolls,
+        blindRolls: roundBlindRolls,
+      },
+      roundRefs: Array.from(new Set([...(existing.roundRefs ?? []), round.roundId])),
+    };
+    syncedFloorIds.push(floorId);
+  }
+  traceStoreRuntimeEvent("syncPendingRoundIntoFloorRecordsEvent", {
+    roundId: round.roundId,
+    floorIds,
+    syncedFloorIds,
+    eventCount: Array.isArray(round.events) ? round.events.length : 0,
+    rollCount: Array.isArray(round.rolls) ? round.rolls.length : 0,
+  });
+  return nextFloors;
+}
+
 async function syncCurrentChatDataFromRuntimeEvent(reason = "runtime_sync"): Promise<void> {
   const chatId = getActiveChatIdEvent();
   if (!chatId) return;
   const now = Date.now();
   const currentStatuses = buildCurrentStatusesStateFromRuntimeEvent(now);
   const meta = getDiceMetaEvent();
+  const normalizedPendingRound = meta.pendingRound
+    ? normalizeClosedPendingRoundBeforePersistEvent(meta.pendingRound, now)
+    : undefined;
+  if (normalizedPendingRound) {
+    meta.pendingRound = normalizedPendingRound;
+  }
   await writeChatDatabaseByChatIdEvent(chatId, (previous) => {
     // 保留已有 rounds（含已关闭回合），只更新当前 open round
     const nextRecords = { ...(previous.rounds.records ?? {}) };
     const nextOrder = [...(previous.rounds.order ?? [])];
-    if (meta.pendingRound?.roundId) {
-      const roundId = String(meta.pendingRound.roundId).trim();
+    let nextFloors = { ...(previous.floors ?? {}) };
+    if (normalizedPendingRound?.roundId) {
+      const roundId = String(normalizedPendingRound.roundId).trim();
       if (roundId) {
+        const floorIds = collectPendingRoundFloorIdsEvent(normalizedPendingRound, previous);
+        nextFloors = syncPendingRoundIntoFloorRecordsEvent(previous, normalizedPendingRound, floorIds);
         nextRecords[roundId] = buildRoundRecordFromPendingRoundEvent(
-          meta.pendingRound,
-          previous.meta.lastProcessedFloorId
+          normalizedPendingRound,
+          floorIds
         );
         if (!nextOrder.includes(roundId)) {
           nextOrder.push(roundId);
         }
         // 从 floor.roundRefs 补充 floorIds
         for (const floorId of previous.floorOrder) {
-          const floor = previous.floors[String(floorId)];
+          const floor = nextFloors[String(floorId)];
           if (!floor) continue;
           for (const ref of floor.roundRefs) {
             if (String(ref ?? "").trim() !== roundId) continue;
@@ -501,10 +824,11 @@ async function syncCurrentChatDataFromRuntimeEvent(reason = "runtime_sync"): Pro
       meta: {
         ...previous.meta,
         updatedAt: now,
-        openRoundId: meta.pendingRound?.status === "open"
-          ? String(meta.pendingRound?.roundId ?? "").trim() || null
+        openRoundId: normalizedPendingRound?.status === "open"
+          ? String(normalizedPendingRound?.roundId ?? "").trim() || null
           : null,
       },
+      floors: nextFloors,
       skills: buildSkillsStateFromSettingsEvent(now),
       rounds: {
         order: Array.from(new Set(nextOrder)).filter(Boolean),
@@ -523,41 +847,6 @@ async function syncCurrentChatDataFromRuntimeEvent(reason = "runtime_sync"): Pro
     roundCount: getCurrentChatDataEvent().rounds.order.length,
     activeStatusCount: getCurrentChatDataEvent().statuses.current.snapshot.length,
   });
-}
-
-/**
- * 功能：从 chatData 的 open round + floors 重建 PendingRoundEvent，用于桥接旧运行时。
- */
-function reconstructPendingRoundFromChatDataEvent(
-  chatRecord: RollHelperChatRecordEvent
-): PendingRoundEvent | undefined {
-  const openRoundId = chatRecord.meta.openRoundId;
-  if (!openRoundId) return undefined;
-  const roundRecord = chatRecord.rounds.records[openRoundId];
-  if (!roundRecord || roundRecord.status !== "open") return undefined;
-
-  const events: import("../types/eventDomainEvent").DiceEventSpecEvent[] = [];
-  const rolls: import("../types/eventDomainEvent").EventRollRecordEvent[] = [];
-  const sourceAssistantMsgIds: string[] = [];
-
-  for (const floorId of roundRecord.floorIds) {
-    const floor = chatRecord.floors[String(floorId)];
-    if (!floor) continue;
-    events.push(...(floor.eventDice?.events ?? []));
-    rolls.push(...(floor.eventDice?.publicRolls ?? []));
-    sourceAssistantMsgIds.push(`assistant_idx:${floorId}:${floor.createdAt || 0}`);
-  }
-
-  return {
-    roundId: roundRecord.roundId,
-    instanceToken: roundRecord.roundId,
-    status: "open",
-    events,
-    rolls,
-    eventTimers: {},
-    sourceAssistantMsgIds,
-    openedAt: roundRecord.openedAt,
-  };
 }
 
 /**
@@ -602,6 +891,124 @@ function rebuildSummaryHistoryRuntimeFromChatDataEvent(
   return snapshots;
 }
 
+/**
+ * 功能：从数据库中恢复最新仍可操作的楼层事件为运行时当前轮次。
+ * 参数：
+ *   chatRecord：当前聊天数据库记录。
+ * 返回：
+ *   PendingRoundEvent | undefined：存在可继续检定的最新楼层时返回轮次，否则返回 undefined。
+ */
+function rebuildPendingRoundFromLatestActionableFloorEvent(
+  chatRecord: RollHelperChatRecordEvent
+): PendingRoundEvent | undefined {
+  for (let index = (chatRecord.floorOrder ?? []).length - 1; index >= 0; index -= 1) {
+    const floorId = chatRecord.floorOrder[index];
+    const floor = chatRecord.floors[String(floorId)];
+    if (!floor?.eventDice) continue;
+    const events = Array.isArray(floor.eventDice.events)
+      ? floor.eventDice.events.map((event) => ({ ...event }))
+      : [];
+    const unresolvedVisibleEvents = events.filter((event) => {
+      if (event?.listVisibility === "hidden") return false;
+      return !(Number.isFinite(Number(event?.closedAt)) && Number(event?.closedAt) > 0);
+    });
+    if (unresolvedVisibleEvents.length <= 0) {
+      continue;
+    }
+    const publicRolls = Array.isArray(floor.eventDice.publicRolls)
+      ? floor.eventDice.publicRolls.map((record) => ({ ...record }))
+      : [];
+    const blindRolls = Array.isArray(floor.eventDice.blindRolls)
+      ? floor.eventDice.blindRolls.map((record) => ({ ...record }))
+      : [];
+    const sourceAssistantMsgIds = Array.from(new Set([
+      ...events.map((event) => String(event?.sourceAssistantMsgId ?? "").trim()),
+      ...publicRolls.map((record) => String(record?.sourceAssistantMsgId ?? "").trim()),
+      ...blindRolls.map((record) => String(record?.sourceAssistantMsgId ?? "").trim()),
+    ].filter(Boolean)));
+    if (sourceAssistantMsgIds.length <= 0) {
+      sourceAssistantMsgIds.push(`assistant_idx:${floorId}:${floor.createdAt || 0}`);
+    }
+    const roundId =
+      Array.isArray(floor.roundRefs) && floor.roundRefs.length > 0
+        ? String(floor.roundRefs[floor.roundRefs.length - 1] ?? "").trim() || `floor_runtime_${floorId}`
+        : `floor_runtime_${floorId}`;
+    return {
+      roundId,
+      instanceToken: `restored_${roundId}`,
+      status: "open",
+      events,
+      rolls: [...publicRolls, ...blindRolls],
+      eventTimers: {},
+      sourceAssistantMsgIds,
+      sourceFloorKey: `assistant_idx:${floorId}`,
+      openedAt: Number(floor.createdAt) || Date.now(),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * 功能：在聊天状态装载时，将数据库中遗留的 open round 直接归档为 closed，
+ * 避免刷新或切换聊天后旧轮次继续以“当前事件列表”身份被恢复。
+ * 参数：
+ *   chatId：当前聊天 ID。
+ *   chatRecord：当前聊天持久化记录。
+ *   reason：本次装载原因。
+ * 返回：
+ *   Promise<RollHelperChatRecordEvent>：规范化后的聊天记录。
+ */
+async function finalizePersistedOpenRoundOnLoadEvent(
+  chatId: string,
+  chatRecord: RollHelperChatRecordEvent,
+  reason: string
+): Promise<RollHelperChatRecordEvent> {
+  const normalizedReason = String(reason ?? "").trim().toLowerCase();
+  if (normalizedReason === "preview_blind_history") {
+    return chatRecord;
+  }
+  const openRoundId = String(chatRecord.meta.openRoundId ?? "").trim();
+  if (!openRoundId) {
+    return chatRecord;
+  }
+  const roundRecord = chatRecord.rounds.records[openRoundId];
+  if (!roundRecord || roundRecord.status !== "open") {
+    return chatRecord;
+  }
+
+  traceStoreRuntimeEvent("finalizePersistedOpenRoundOnLoadEvent", {
+    chatId,
+    reason: normalizedReason,
+    roundId: openRoundId,
+    floorIds: roundRecord.floorIds ?? [],
+  });
+
+  return writeChatDatabaseByChatIdEvent(chatId, (previous) => {
+    const currentRound = previous.rounds.records[openRoundId];
+    if (!currentRound || currentRound.status !== "open") {
+      return previous;
+    }
+    return {
+      ...previous,
+      meta: {
+        ...previous.meta,
+        openRoundId: null,
+      },
+      rounds: {
+        ...previous.rounds,
+        records: {
+          ...previous.rounds.records,
+          [openRoundId]: {
+            ...currentRound,
+            status: "closed",
+            closedAt: Number(currentRound.closedAt) || Date.now(),
+          },
+        },
+      },
+    };
+  });
+}
+
 /** 从楼层数据最小化构建一条 RoundSummaryEventItemEvent。 */
 export function buildMinimalSummaryItemEvent(
   event: DiceEventSpecEvent,
@@ -623,7 +1030,9 @@ export function buildMinimalSummaryItemEvent(
     advantageState: record?.advantageStateApplied ?? event.advantageState ?? "normal",
     urgency: event.urgency,
     timeLimit: event.timeLimit ?? "none",
-    status: record ? (record.source === "timeout_auto_fail" ? "timeout" : "done") : "pending",
+    status: record
+      ? (record.source === "timeout_auto_fail" ? "timeout" : "done")
+      : "pending",
     resultSource: record?.source ?? null,
     visibility: record?.visibility,
     revealMode: record?.revealMode === "instant" ? "instant" : "delayed",
@@ -818,6 +1227,10 @@ export async function loadCurrentChatDatabaseEvent(reason = "init"): Promise<voi
   traceStoreRuntimeEvent("loadCurrentChatDatabaseEvent.loaded", {
     reason,
     chatId,
+    hasPersistedData:
+      ACTIVE_CHAT_DATA_V3_Event.floorOrder.length > 0
+      || ACTIVE_CHAT_DATA_V3_Event.rounds.order.length > 0
+      || ACTIVE_CHAT_DATA_V3_Event.statuses.order.length > 0,
     floorCount: ACTIVE_CHAT_DATA_V3_Event.floorOrder.length,
     roundCount: ACTIVE_CHAT_DATA_V3_Event.rounds.order.length,
     statusCount: ACTIVE_CHAT_DATA_V3_Event.statuses.order.length,
@@ -844,13 +1257,22 @@ export async function setLastUserMessageIdEvent(messageId: unknown): Promise<voi
   const normalizedMessageId = normalizeFloorIdEvent(messageId);
   const chatId = getActiveChatIdEvent();
   if (!chatId || normalizedMessageId == null) return;
-  await writeChatDatabaseByChatIdEvent(chatId, (previous) => ({
-    ...previous,
-    meta: {
-      ...previous.meta,
-      lastUserMessageId: normalizedMessageId,
-    },
-  }));
+  const now = Date.now();
+  closePendingManualEventsInRuntimeEvent(now);
+  await writeChatDatabaseByChatIdEvent(chatId, (previous) => {
+    const next = closePendingManualFloorEventsForNextTurnEvent(previous, now);
+    return {
+      ...next,
+      meta: {
+        ...next.meta,
+        lastUserMessageId: normalizedMessageId,
+      },
+    };
+  });
+  traceStoreRuntimeEvent("setLastUserMessageIdEvent.closed_pending_manual_events", {
+    chatId,
+    lastUserMessageId: normalizedMessageId,
+  });
 }
 
 export async function upsertAssistantFloorEvent(
@@ -1025,6 +1447,76 @@ function persistRuntimeStateToChatScopedEvent(): void {
   })();
 }
 
+/**
+ * 功能：在运行时内存中同步关闭所有旧的待处理手动检定。
+ * 参数：
+ *   now：关闭时间。
+ * 返回：
+ *   boolean：运行时轮次发生变化时返回 true。
+ */
+function closePendingManualEventsInRuntimeEvent(now: number): boolean {
+  const meta = getDiceMetaEvent();
+  const round = meta.pendingRound;
+  if (!round || round.status !== "open") return false;
+  let changed = false;
+  for (const event of round.events ?? []) {
+    if (!isPendingManualFloorEventEvent(event)) continue;
+    const hasExistingRecord = Array.isArray(round.rolls) && round.rolls.some((record) => record?.eventId === event.id);
+    if (!hasExistingRecord) {
+      round.rolls.push(
+        buildPendingManualAutoClosedRecordEvent(event, String(round.roundId ?? ""), now)
+      );
+    }
+    event.closedAt = now;
+    changed = true;
+  }
+  if (!changed) return false;
+  if (Array.isArray(round.events) && round.events.length > 0 && round.events.every((event) => Number(event?.closedAt) > 0)) {
+    round.status = "closed";
+    meta.pendingRound = undefined;
+  }
+  return true;
+}
+
+/**
+ * 功能：在待写入数据库前，把已关闭轮次中尚未处理的手动检定统一补成失败关闭。
+ * 参数：
+ *   round：当前待持久化的轮次。
+ *   now：关闭时间。
+ * 返回：
+ *   PendingRoundEvent：规范化后的轮次对象。
+ */
+function normalizeClosedPendingRoundBeforePersistEvent(
+  round: PendingRoundEvent,
+  now: number
+): PendingRoundEvent {
+  if (!round || round.status === "open") return round;
+  const nextEvents = Array.isArray(round.events)
+    ? round.events.map((event) => ({ ...event }))
+    : [];
+  const nextRolls = Array.isArray(round.rolls)
+    ? round.rolls.map((record) => ({ ...record }))
+    : [];
+  let changed = false;
+
+  for (const event of nextEvents) {
+    if (!isPendingManualFloorEventEvent(event)) continue;
+    const hasExistingRecord = nextRolls.some((record) => record?.eventId === event.id);
+    if (!hasExistingRecord) {
+      nextRolls.push(buildPendingManualAutoClosedRecordEvent(event, String(round.roundId ?? ""), now));
+    }
+    event.closedAt = now;
+    changed = true;
+  }
+
+  if (!changed) return round;
+  return {
+    ...round,
+    events: nextEvents,
+    rolls: nextRolls,
+  };
+}
+
 export function getActiveChatKeyEvent(): string {
   if (ACTIVE_CHAT_KEY_Event) return ACTIVE_CHAT_KEY_Event;
   return resolveCurrentChatKeyEvent();
@@ -1186,14 +1678,16 @@ export async function loadChatScopedStateIntoRuntimeEvent(reason = "init"): Prom
     await loadCurrentChatDatabaseEvent(reason);
     if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
-    const chatRecord = getCurrentChatDataEvent();
+    let chatRecord = getCurrentChatDataEvent();
+    chatRecord = await finalizePersistedOpenRoundOnLoadEvent(chatId, chatRecord, reason);
+    if (token !== CHAT_SCOPED_LOAD_TOKEN_Event) return;
 
     // 从 chatData (v3) 恢复运行时 DiceMetaEvent —— 仅恢复运行时瞬态字段，
     // pendingRound / summaryHistory / blindHistory / lastProcessedAssistantMsgId
     // 不再从 chatData 反序列化；业务代码直接读 chatData。
     const meta = getDiceMetaEvent();
     meta.activeStatuses = normalizeActiveStatusesFromEvent(chatRecord.statuses.current.snapshot);
-    meta.pendingRound = reconstructPendingRoundFromChatDataEvent(chatRecord);
+    meta.pendingRound = rebuildPendingRoundFromLatestActionableFloorEvent(chatRecord);
     // 从 chatData 闭合轮次重建运行时摘要历史列表
     setSummaryHistoryRuntimeEvent(rebuildSummaryHistoryRuntimeFromChatDataEvent(chatRecord));
     // 暗骰历史为纯运行时状态，聊天切换时直接清空

@@ -12,6 +12,7 @@ export type EventRollSourceEvent =
   | "blind_manual_roll"
   | "ai_auto_roll"
   | "passive_check"
+  | "skipped_manual_fail"
   | "timeout_auto_fail";
 export type SummaryDetailModeEvent = "minimal" | "balanced" | "detailed";
 export type RollHelperSettingsThemeEvent = "default" | "dark" | "light" | "tavern";
@@ -319,7 +320,8 @@ export interface DiceEventSpecEvent {
   dcReason?: string;
   outcomes?: EventOutcomesEvent;
   sourceAssistantMsgId?: string;
-  hiddenFromCurrentEventList?: boolean;
+  listVisibility?: "visible" | "hidden";
+  closedAt?: number | null;
 }
 
 export interface EventRollRecordEvent {
