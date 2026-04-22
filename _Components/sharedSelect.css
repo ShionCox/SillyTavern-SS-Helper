@@ -116,8 +116,18 @@ _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact {
   height: var(--stx-shared-select-control-height);
   min-height: var(--stx-shared-select-control-height);
   max-height: var(--stx-shared-select-control-height);
-  padding: 4px 8px;
+  padding: 0 8px;
   gap: 6px;
+}
+
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact .stx-shared-select-trigger-copy,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact .stx-shared-select-main,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact .stx-shared-select-label,
+_SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-compact .stx-shared-select-indicator {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
 }
 
 _SCOPE_ .stx-shared-select-trigger.stx-shared-select-trigger-36 {

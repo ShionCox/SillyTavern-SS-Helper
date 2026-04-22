@@ -19,7 +19,6 @@ import {
 export type AssistantOriginalSourceMetaEvent = {
     source: "host" | "plugin_snapshot" | "fallback";
     capturedAt: number;
-    richnessScore: number;
     containsRollJson: boolean;
     containsEventEnvelope: boolean;
     containsInteractiveTrigger: boolean;
@@ -150,7 +149,6 @@ export function getPersistedAssistantOriginalSourceMetaEvent(
     return {
         source: "plugin_snapshot",
         capturedAt: 0,
-        richnessScore: 0,
         containsRollJson: stripRollJsonBlocks(rawText) !== rawText,
         containsEventEnvelope: /"type"\s*:\s*"dice_events"/i.test(rawText) || /<eventjson>/i.test(rawText),
         containsInteractiveTrigger: /<rh-trigger\b/i.test(rawText) || /"type"\s*:\s*"trigger_pack"/i.test(rawText),
@@ -171,31 +169,67 @@ function normalizeAssistantOriginalSourceCandidatesEvent(sourceCandidates: strin
         .filter((item, candidateIndex, array) => item && array.indexOf(item) === candidateIndex);
 }
 
-export function scoreAssistantOriginalSourceRichnessEvent(
+function looksLikeIncompleteAssistantStructuredSourceEvent(text: string): boolean {
+    const normalized = String(text ?? "");
+    if (!normalized.trim()) return false;
+    const hasStructuredHead =
+        /"type"\s*:\s*"dice_events"/i.test(normalized)
+        || /```(?:rolljson|json|triggerjson|triggerpack)\b/i.test(normalized)
+        || /<eventjson>/i.test(normalized)
+        || /<rh-trigger\b/i.test(normalized)
+        || /"type"\s*:\s*"trigger_pack"/i.test(normalized);
+    if (!hasStructuredHead) return false;
+    const openCurlyCount = (normalized.match(/\{/g) || []).length;
+    const closeCurlyCount = (normalized.match(/\}/g) || []).length;
+    const openSquareCount = (normalized.match(/\[/g) || []).length;
+    const closeSquareCount = (normalized.match(/\]/g) || []).length;
+    return openCurlyCount > closeCurlyCount || openSquareCount > closeSquareCount;
+}
+
+function hasStructuredAssistantArtifactsEvent(
     text: string,
     deps: Pick<SanitizeAssistantMessageArtifactsDepsEvent, "parseEventEnvelopesEvent">
-): number {
+): boolean {
     const normalizedText = String(text ?? "").trim();
-    if (!normalizedText) return 0;
-
-    let score = 1;
-    if (/<rh-trigger\b/i.test(normalizedText)) {
-        score += 10;
-    }
-    if (/"type"\s*:\s*"trigger_pack"/i.test(normalizedText)) {
-        score += 10;
+    if (!normalizedText) return false;
+    if (looksLikeIncompleteAssistantStructuredSourceEvent(normalizedText)) return false;
+    if (/<rh-trigger\b/i.test(normalizedText) || /"type"\s*:\s*"trigger_pack"/i.test(normalizedText)) {
+        return true;
     }
     if (deps.parseEventEnvelopesEvent) {
         const parsed = deps.parseEventEnvelopesEvent(normalizedText);
         if (parsed.events.length > 0 || parsed.ranges.length > 0) {
-            score += 20;
+            return true;
         }
     }
-    if (stripRollJsonBlocks(normalizedText) !== normalizedText) {
-        score += 20;
+    return stripRollJsonBlocks(normalizedText) !== normalizedText;
+}
+
+function resolveCanonicalAssistantOriginalSourceEvent(
+    message: TavernMessageEvent,
+    deps: AssistantOriginalSourceCandidateDepsEvent
+): { text: string; source: AssistantOriginalSourceMetaEvent["source"] } | null {
+    const persistedText = getPersistedAssistantOriginalSourceTextEvent(message).trim();
+    const hostText = String(deps.getHostOriginalSourceTextEvent?.(message) ?? "").trim();
+    const preferredText = String(deps.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message)).trim();
+    const fallbackText = String(deps.getMessageTextEvent?.(message) ?? getMessageTextSafe(message)).trim();
+
+    if (hostText && hasStructuredAssistantArtifactsEvent(hostText, deps)) {
+        return { text: hostText, source: "host" };
     }
-    score += Math.min(5, Math.floor(normalizedText.length / 400));
-    return score;
+    if (persistedText) {
+        return { text: persistedText, source: "plugin_snapshot" };
+    }
+    if (hostText) {
+        return { text: hostText, source: "host" };
+    }
+    if (preferredText) {
+        return { text: preferredText, source: "fallback" };
+    }
+    if (fallbackText) {
+        return { text: fallbackText, source: "fallback" };
+    }
+    return null;
 }
 
 export function buildAssistantOriginalSourceMetaEvent(
@@ -208,7 +242,6 @@ export function buildAssistantOriginalSourceMetaEvent(
     return {
         source,
         capturedAt: Date.now(),
-        richnessScore: scoreAssistantOriginalSourceRichnessEvent(normalizedText, deps),
         containsRollJson: stripRollJsonBlocks(normalizedText) !== normalizedText,
         containsEventEnvelope: Boolean(parsed && (parsed.events.length > 0 || parsed.ranges.length > 0)),
         containsInteractiveTrigger: /<rh-trigger\b/i.test(normalizedText) || /"type"\s*:\s*"trigger_pack"/i.test(normalizedText),
@@ -480,49 +513,19 @@ export function ensureAssistantOriginalSnapshotPersistedEvent(
     message: TavernMessageEvent,
     deps: AssistantOriginalSourceCandidateDepsEvent
 ): boolean {
-    const currentStableText = getPersistedAssistantOriginalSourceTextEvent(message);
-    const currentStableTrimmed = currentStableText.trim();
-    let bestText = currentStableTrimmed;
-    let bestScore = scoreAssistantOriginalSourceRichnessEvent(currentStableTrimmed, deps);
-    let bestSource: AssistantOriginalSourceMetaEvent["source"] = currentStableTrimmed ? "plugin_snapshot" : "fallback";
-
-    const sourceCandidates = [
-        {
-            text: String(deps.getHostOriginalSourceTextEvent?.(message) ?? "").trim(),
-            source: "host" as const,
-        },
-        {
-            text: String(deps.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message)).trim(),
-            source: "fallback" as const,
-        },
-        {
-            text: String(deps.getMessageTextEvent?.(message) ?? getMessageTextSafe(message)).trim(),
-            source: "fallback" as const,
-        },
-    ].filter((item, candidateIndex, array) => item.text && array.findIndex((candidate) => candidate.text === item.text) === candidateIndex);
-
-    for (const candidate of sourceCandidates) {
-        const candidateScore = scoreAssistantOriginalSourceRichnessEvent(candidate.text, deps);
-        const shouldReplace =
-            candidateScore > bestScore
-            || (candidateScore === bestScore && candidate.text.length > bestText.length);
-        if (!shouldReplace) continue;
-        bestText = candidate.text;
-        bestScore = candidateScore;
-        bestSource = candidate.source;
-    }
-
-    if (!bestText.trim()) {
+    const canonical = resolveCanonicalAssistantOriginalSourceEvent(message, deps);
+    if (!canonical?.text.trim()) {
         return false;
     }
-    if (bestText === currentStableTrimmed) {
+    const currentStableTrimmed = getPersistedAssistantOriginalSourceTextEvent(message).trim();
+    if (canonical.text === currentStableTrimmed) {
         return false;
     }
     return setAssistantOriginalSourceMetaEvent(
         message,
-        bestText,
+        canonical.text,
         true,
-        buildAssistantOriginalSourceMetaEvent(bestText, bestSource, deps)
+        buildAssistantOriginalSourceMetaEvent(canonical.text, canonical.source, deps)
     );
 }
 
@@ -530,23 +533,27 @@ export function getStableAssistantOriginalSourceTextEvent(
     message: TavernMessageEvent | undefined,
     deps?: AssistantOriginalSourceCandidateDepsEvent
 ): string {
-    const stableText = getPersistedAssistantOriginalSourceTextEvent(message);
-    if (stableText.trim()) {
-        return stableText;
-    }
     if (message && deps) {
         ensureAssistantOriginalSnapshotPersistedEvent(message, deps);
-        const persistedText = getPersistedAssistantOriginalSourceTextEvent(message);
-        if (persistedText.trim()) {
-            return persistedText;
-        }
     }
-    const sourceCandidates = normalizeAssistantOriginalSourceCandidatesEvent([
-        deps?.getHostOriginalSourceTextEvent?.(message) ?? "",
-        deps?.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message),
-        deps?.getMessageTextEvent?.(message) ?? getMessageTextSafe(message),
-    ]);
-    return sourceCandidates[0] ?? "";
+    const persistedText = getPersistedAssistantOriginalSourceTextEvent(message).trim();
+    if (persistedText) {
+        return persistedText;
+    }
+    const hostText = String(deps?.getHostOriginalSourceTextEvent?.(message) ?? "").trim();
+    if (hostText) {
+        return hostText;
+    }
+    const preferredText = String(
+        deps?.getPreferredAssistantSourceTextEvent?.(message) ?? getMessageTextSafe(message)
+    ).trim();
+    if (preferredText) {
+        return preferredText;
+    }
+    const fallbackText = String(
+        deps?.getMessageTextEvent?.(message) ?? getMessageTextSafe(message)
+    ).trim();
+    return fallbackText;
 }
 
 export function hasInteractiveTriggerMarkupInStableSourceEvent(

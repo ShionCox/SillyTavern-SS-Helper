@@ -1036,6 +1036,34 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
       max-width: min(100%, 420px);
     }
 
+    #${cardId} .st-roll-dice-toggle-row {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    #${cardId} .st-roll-dice-toggle-row .st-roll-dice-toggle-group {
+      max-width: 100%;
+      justify-content: flex-start;
+    }
+
+    #${cardId} .st-roll-time-limit-grid {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+      justify-content: stretch;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #${cardId} .st-roll-dual-field-grid {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+      justify-content: stretch;
+      align-items: center;
+      gap: 10px;
+    }
+
     #${cardId} .st-roll-dice-toggle {
       position: relative;
       display: inline-flex;
@@ -3129,6 +3157,14 @@ export function buildSettingsCardStylesTemplateEvent(cardId: string): string {
     }
 
     @media (max-width: 680px) {
+      #${cardId} .st-roll-time-limit-grid {
+        grid-template-columns: 1fr;
+      }
+
+      #${cardId} .st-roll-dual-field-grid {
+        grid-template-columns: 1fr;
+      }
+
       #${cardId} .st-roll-workbench-toolbar,
       #${cardId} .st-roll-workbench-context,
       #${cardId} .st-roll-workbench-sidebar-head {

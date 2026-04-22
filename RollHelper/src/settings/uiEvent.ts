@@ -1845,7 +1845,12 @@ export function syncSettingsUiEvent(deps: SyncSettingsUiDepsEvent): void {
   if (timeLimitDefaultUrgencyInput) {
     timeLimitDefaultUrgencyInput.value = settings.timeLimitDefaultUrgency;
     timeLimitDefaultUrgencyInput.disabled = !settings.enableTimeLimit;
-    timeLimitDefaultUrgencyInput.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+    timeLimitDefaultUrgencyInput.style.opacity = "";
+    const timeLimitDefaultUrgencySelectRoot =
+      timeLimitDefaultUrgencyInput.closest<HTMLElement>('[data-ui="shared-select"]');
+    if (timeLimitDefaultUrgencySelectRoot) {
+      timeLimitDefaultUrgencySelectRoot.style.opacity = settings.enableTimeLimit ? "1" : "0.5";
+    }
   }
   if (timeLimitLowSecondsInput) {
     timeLimitLowSecondsInput.value = String(settings.timeLimitUrgencyLowSeconds);

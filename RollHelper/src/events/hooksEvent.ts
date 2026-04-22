@@ -81,6 +81,57 @@ function looksLikeIncompleteAssistantControlBlockEvent(text: string): boolean {
   return openCurlyCount > closeCurlyCount || openSquareCount > closeSquareCount;
 }
 
+type AssistantSourceCandidateKindEvent =
+  | "session_captured"
+  | "preferred_message"
+  | "current_message"
+  | "host_original"
+  | "persisted_snapshot";
+
+type AssistantSourceCandidateEvent = {
+  kind: AssistantSourceCandidateKindEvent;
+  text: string;
+};
+
+function normalizeAssistantSourceCandidatesEvent(
+  candidates: AssistantSourceCandidateEvent[]
+): AssistantSourceCandidateEvent[] {
+  return candidates.filter((candidate, index, array) => {
+    const text = String(candidate.text ?? "").trim();
+    return text && array.findIndex((item) => String(item.text ?? "").trim() === text) === index;
+  });
+}
+
+function chooseFirstCompleteAssistantSourceCandidateEvent(
+  candidates: AssistantSourceCandidateEvent[]
+): AssistantSourceCandidateEvent | null {
+  const normalizedCandidates = normalizeAssistantSourceCandidatesEvent(candidates);
+  if (normalizedCandidates.length <= 0) return null;
+  return (
+    normalizedCandidates.find((candidate) => !looksLikeIncompleteAssistantControlBlockEvent(candidate.text))
+    || normalizedCandidates[0]
+    || null
+  );
+}
+
+function hasStructuredAssistantArtifactsInHooksEvent(
+  text: string,
+  deps: Pick<FinalizeAssistantFloorDataDepsEvent, "parseEventEnvelopesEvent">
+): boolean {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) return false;
+  if (looksLikeIncompleteAssistantControlBlockEvent(normalized)) return false;
+  if (
+    /```(?:rolljson|triggerjson|triggerpack|json)\b/i.test(normalized)
+    || /<rh-trigger\b/i.test(normalized)
+    || /"type"\s*:\s*"trigger_pack"/i.test(normalized)
+  ) {
+    return true;
+  }
+  const parsed = deps.parseEventEnvelopesEvent(normalized);
+  return parsed.events.length > 0 || parsed.ranges.length > 0;
+}
+
 export interface EventHooksDepsEvent {
   getLiveContextEvent: () => STContext | null;
   eventSource: any;
@@ -260,6 +311,8 @@ type AssistantGenerationSessionStateEvent = {
   targetIndex: number | null;
   startedAt: number;
   finalized: boolean;
+  capturedSourceText: string;
+  capturedSourceKind: AssistantSourceCandidateKindEvent | null;
 };
 
 let activeAssistantGenerationSessionEvent: AssistantGenerationSessionStateEvent | null = null;
@@ -399,6 +452,28 @@ function resolveAssistantEventTargetByMessageIdEvent(
   return null;
 }
 
+function resolveAssistantFinalizeTargetByEventArgsEvent(
+  eventArgs: unknown[],
+  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent" | "isAssistantMessageEvent">
+): AssistantMessageTargetEvent | null {
+  const liveCtx = deps.getLiveContextEvent();
+  const chat = liveCtx?.chat;
+  if (!Array.isArray(chat) || chat.length <= 0) return null;
+
+  const explicitTarget = resolveAssistantEventTargetByMessageIdEvent(eventArgs, deps);
+  if (explicitTarget) return explicitTarget;
+
+  const rawMessageId = eventArgs[0];
+  const messageIndex = Number(rawMessageId);
+  if (Number.isInteger(messageIndex) && messageIndex === chat.length) {
+    return findLatestAssistantEvent(chat as TavernMessageEvent[], {
+      isAssistantMessageEvent: deps.isAssistantMessageEvent,
+    });
+  }
+
+  return null;
+}
+
 function resolveAssistantEventTargetEvent(
   eventArgs: unknown[],
   deps: Pick<EventHooksDepsEvent, "getLiveContextEvent" | "isAssistantMessageEvent">
@@ -425,6 +500,8 @@ function beginAssistantGenerationSessionEvent(
     targetIndex: typeof target?.index === "number" ? target.index : null,
     startedAt: Date.now(),
     finalized: false,
+    capturedSourceText: "",
+    capturedSourceKind: null,
   };
   nextState.sessionKey = buildAssistantGenerationSessionKeyEvent(nextState);
   activeAssistantGenerationSessionEvent = nextState;
@@ -452,6 +529,21 @@ function resolveAssistantGenerationSessionTargetEvent(
     [activeAssistantGenerationSessionEvent.targetIndex],
     deps
   );
+}
+
+function resolveAssistantFinalizeTargetEvent(
+  eventArgs: unknown[],
+  deps: Pick<EventHooksDepsEvent, "getLiveContextEvent" | "isAssistantMessageEvent">
+): AssistantMessageTargetEvent | null {
+  const fromEventArgs = resolveAssistantFinalizeTargetByEventArgsEvent(eventArgs, deps);
+  if (fromEventArgs) return fromEventArgs;
+
+  const latestAssistant = resolveAssistantEventTargetEvent(eventArgs, deps);
+  const fromSession = resolveAssistantGenerationSessionTargetEvent(deps);
+  if (!fromSession) return latestAssistant;
+  if (!latestAssistant) return fromSession;
+
+  return latestAssistant.index >= fromSession.index ? latestAssistant : fromSession;
 }
 
 function hidePendingAssistantGenerationWidgetsEvent(
@@ -508,6 +600,46 @@ function finishAssistantGenerationSessionEvent(): void {
   activeAssistantGenerationSessionEvent = null;
 }
 
+function captureAssistantGenerationSessionSourceEvent(
+  target: AssistantMessageTargetEvent,
+  deps: Pick<
+    EventHooksDepsEvent,
+    "getHostOriginalSourceTextEvent" | "getPreferredAssistantSourceTextEvent" | "getMessageTextEvent" | "parseEventEnvelopesEvent"
+  >
+): void {
+  if (!activeAssistantGenerationSessionEvent) return;
+  const candidates: AssistantSourceCandidateEvent[] = normalizeAssistantSourceCandidatesEvent([
+    { kind: "host_original", text: deps.getHostOriginalSourceTextEvent(target.msg) },
+    { kind: "preferred_message", text: deps.getPreferredAssistantSourceTextEvent(target.msg) },
+    { kind: "current_message", text: deps.getMessageTextEvent(target.msg) },
+  ]);
+  const structuredCandidate = chooseFirstCompleteAssistantSourceCandidateEvent(
+    candidates.filter((candidate) => hasStructuredAssistantArtifactsInHooksEvent(candidate.text, deps as any))
+  );
+  const fallbackCandidate = chooseFirstCompleteAssistantSourceCandidateEvent(candidates);
+  const chosenCandidate = structuredCandidate || fallbackCandidate;
+  if (!chosenCandidate?.text.trim()) return;
+
+  const existingText = String(activeAssistantGenerationSessionEvent.capturedSourceText ?? "").trim();
+  const existingIsStructured = hasStructuredAssistantArtifactsInHooksEvent(existingText, deps as any);
+  const chosenIsStructured = hasStructuredAssistantArtifactsInHooksEvent(chosenCandidate.text, deps as any);
+
+  if (existingText) {
+    if (existingIsStructured) {
+      return;
+    }
+    if (!chosenIsStructured && existingText.length >= chosenCandidate.text.trim().length) {
+      return;
+    }
+  }
+
+  activeAssistantGenerationSessionEvent = {
+    ...activeAssistantGenerationSessionEvent,
+    capturedSourceText: chosenCandidate.text,
+    capturedSourceKind: chosenIsStructured ? "session_captured" : chosenCandidate.kind,
+  };
+}
+
 function isFinalizeLifecycleReasonEvent(reason: AssistantFloorLifecycleReasonEvent): boolean {
   return reason === "generation_ended_finalize";
 }
@@ -561,7 +693,7 @@ function resolveAssistantFloorLifecycleContextEvent(args: {
     if (args.reason === "message_received_cleanup") {
       target = resolveAssistantEventTargetByMessageIdEvent(args.eventArgs ?? [], args.deps);
     } else if (args.reason === "generation_ended_finalize") {
-      target = resolveAssistantGenerationSessionTargetEvent(args.deps);
+      target = resolveAssistantFinalizeTargetEvent(args.eventArgs ?? [], args.deps);
     } else {
       target = resolveAssistantEventTargetEvent(args.eventArgs ?? [], args.deps);
     }
@@ -736,27 +868,45 @@ function prepareAssistantFloorSanitizedDataEvent(
   const preferredMessageText = deps.getPreferredAssistantSourceTextEvent(target.msg);
   const hostOriginalText = deps.getHostOriginalSourceTextEvent(target.msg);
   const persistedSnapshotText = getPersistedAssistantOriginalSourceTextEvent(target.msg);
+  const sessionCapturedText = String(activeAssistantGenerationSessionEvent?.capturedSourceText ?? "");
   const currentMessageTextLength = currentMessageText.length;
   const preferredMessageTextLength = preferredMessageText.length;
   const hostOriginalTextLength = hostOriginalText.length;
   const persistedSnapshotLength = persistedSnapshotText.length;
-  const fullSourceCandidates = [
-    preferredMessageText,
-    currentMessageText,
-    hostOriginalText,
-    persistedSnapshotText,
-  ].filter((item, index, array) => item && array.indexOf(item) === index);
-  const finalizeSourceCandidates = (
+  const sessionCapturedTextLength = sessionCapturedText.length;
+  const fullSourceCandidates: AssistantSourceCandidateEvent[] = normalizeAssistantSourceCandidatesEvent([
+    { kind: "session_captured", text: sessionCapturedText },
+    { kind: "preferred_message", text: preferredMessageText },
+    { kind: "current_message", text: currentMessageText },
+    { kind: "host_original", text: hostOriginalText },
+    { kind: "persisted_snapshot", text: persistedSnapshotText },
+  ]);
+  const finalizeSourceCandidates: AssistantSourceCandidateEvent[] = normalizeAssistantSourceCandidatesEvent(
     sourcePolicy === "reconcile"
       ? [
-          currentMessageText,
+          { kind: "current_message", text: currentMessageText },
+          { kind: "persisted_snapshot", text: persistedSnapshotText },
         ]
-      : fullSourceCandidates
-  ).filter((item, index, array) => item && array.indexOf(item) === index);
-  const preferredFinalizeSourceText =
-    finalizeSourceCandidates.find((item) => String(item ?? "").trim())
-    || fullSourceCandidates.find((item) => String(item ?? "").trim())
-    || "";
+      : [
+          { kind: "session_captured", text: sessionCapturedText },
+          { kind: "host_original", text: hostOriginalText },
+          { kind: "persisted_snapshot", text: persistedSnapshotText },
+          { kind: "preferred_message", text: preferredMessageText },
+          { kind: "current_message", text: currentMessageText },
+        ]
+  );
+  const structuredFinalizeSourceCandidates = finalizeSourceCandidates.filter((candidate) =>
+    hasStructuredAssistantArtifactsInHooksEvent(candidate.text, deps)
+  );
+  const structuredFullSourceCandidates = fullSourceCandidates.filter((candidate) =>
+    hasStructuredAssistantArtifactsInHooksEvent(candidate.text, deps)
+  );
+  const preferredFinalizeSource =
+    chooseFirstCompleteAssistantSourceCandidateEvent(structuredFinalizeSourceCandidates)
+    || chooseFirstCompleteAssistantSourceCandidateEvent(structuredFullSourceCandidates)
+    || chooseFirstCompleteAssistantSourceCandidateEvent(finalizeSourceCandidates)
+    || chooseFirstCompleteAssistantSourceCandidateEvent(fullSourceCandidates);
+  const preferredFinalizeSourceText = preferredFinalizeSource?.text ?? "";
   const preferredFinalizeSourceLength = preferredFinalizeSourceText.length;
   const preferredFinalizeSourcePreview = preferredFinalizeSourceText
     .replace(/\s+/g, " ")
@@ -771,6 +921,9 @@ function prepareAssistantFloorSanitizedDataEvent(
     .replace(/\s+/g, " ")
     .slice(0, 120);
   const persistedSnapshotPreview = persistedSnapshotText
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+  const sessionCapturedPreview = sessionCapturedText
     .replace(/\s+/g, " ")
     .slice(0, 120);
   const originalSnapshotChanged = ensureAssistantOriginalSnapshotPersistedEvent(target.msg, {
@@ -872,19 +1025,25 @@ function prepareAssistantFloorSanitizedDataEvent(
     preferredMessageTextLength,
     hostOriginalTextLength,
     persistedSnapshotLength,
+    sessionCapturedTextLength,
     preferredFinalizeSourceLength,
     fullSourceCandidateCount: fullSourceCandidates.length,
     finalizeSourceCandidateCount: finalizeSourceCandidates.length,
+    structuredFinalizeSourceCandidateCount: structuredFinalizeSourceCandidates.length,
+    structuredFullSourceCandidateCount: structuredFullSourceCandidates.length,
+    preferredFinalizeSourceKind: preferredFinalizeSource?.kind ?? null,
     currentMessageHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(currentMessageText),
     preferredMessageHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(preferredMessageText),
     hostOriginalHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(hostOriginalText),
     persistedSnapshotHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(persistedSnapshotText),
+    sessionCapturedHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(sessionCapturedText),
     preferredFinalizeSourceHasDiceEvents: /"type"\s*:\s*"dice_events"/i.test(preferredFinalizeSourceText),
     preferredFinalizeSourceHasRollFence: /```(?:rolljson|json)\b/i.test(preferredFinalizeSourceText),
     currentMessagePreview,
     preferredMessagePreview,
     hostOriginalPreview,
     persistedSnapshotPreview,
+    sessionCapturedPreview,
     preferredFinalizeSourcePreview,
   });
   traceHookRuntimeEvent("准备楼层净化数据.净化结果", {
@@ -933,14 +1092,14 @@ function prepareAssistantFloorSanitizedDataEvent(
 
   chatData.meta.lastProcessedFloorId = target.index;
   const snapshotText = finalizeSourceCandidates.find((item) => {
-    const normalized = String(item ?? "").trim();
+    const normalized = String(item.text ?? "").trim();
     return Boolean(normalized)
       && (
         /```(?:rolljson|triggerjson|triggerpack|json)\b/i.test(normalized)
         || /<rh-trigger\b/i.test(normalized)
         || /"type"\s*:\s*"trigger_pack"/i.test(normalized)
       );
-  }) || preferredFinalizeSourceText.trim();
+  })?.text || preferredFinalizeSourceText.trim();
   const latestSnapshotChanged = snapshotText
     ? rememberAssistantOriginalSourceTextEvent(
       target.msg,
@@ -1274,6 +1433,7 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
     }
     const target = { msg: context.message, index: context.index };
     updateAssistantGenerationSessionTargetEvent(target);
+    captureAssistantGenerationSessionSourceEvent(target, args.deps);
     const cleanupResult = await cleanupAssistantFloorStoredStateEvent(target, args.deps);
     changedData = cleanupResult.changedData;
     if (cleanupResult.floorKey && cleanupResult.changedData) {
@@ -1294,6 +1454,7 @@ export async function rebuildAssistantFloorLifecycleEvent(args: {
       return { changedData: false, changedUi: false, rebuiltFloorKeys: [] };
     }
     const target = { msg: context.message, index: context.index };
+    captureAssistantGenerationSessionSourceEvent(target, args.deps);
     const result = await finalizeAssistantFloorDataEvent(target, args.deps, "finalize");
     changedData = result.changedData;
     if (result.floorKey) {
@@ -2047,6 +2208,57 @@ function resolveBlindHistoryOriginFromEventIdEvent(
   return fallbackOrigin ?? "event_blind";
 }
 
+type BlindHistoryPreviewSourceKindEvent = "record" | "trigger" | "dom";
+
+function isSyntheticBlindHistoryRollIdEvent(rollId: string | undefined): boolean {
+  const normalized = String(rollId ?? "").trim().toLowerCase();
+  return normalized.startsWith("rhtrigger:") || normalized.startsWith("rhtrigger-dom:");
+}
+
+function resolveBlindHistoryPreviewDedupKeyEvent(item: BlindHistoryItemEvent): string {
+  const origin = String(item.origin ?? "").trim() || "event_blind";
+  const sourceAssistantMsgId = String(item.sourceAssistantMsgId ?? "").trim();
+  const eventId = String(item.eventId ?? "").trim();
+  if (sourceAssistantMsgId && eventId) {
+    return `event:${origin}:${sourceAssistantMsgId}:${eventId}`;
+  }
+  const rollId = String(item.rollId ?? "").trim();
+  if (rollId && !isSyntheticBlindHistoryRollIdEvent(rollId)) {
+    return `roll:${rollId}`;
+  }
+  const sourceFloorKey = String(item.sourceFloorKey ?? "").trim();
+  const titleOrTarget = String(item.targetLabel ?? item.eventTitle ?? "").trim();
+  if (sourceAssistantMsgId && titleOrTarget) {
+    return `message:${origin}:${sourceAssistantMsgId}:${titleOrTarget}`;
+  }
+  if (sourceFloorKey && titleOrTarget) {
+    return `floor:${origin}:${sourceFloorKey}:${titleOrTarget}`;
+  }
+  return `synthetic:${origin}:${rollId || eventId || titleOrTarget || "blind_history"}`;
+}
+
+function resolveBlindHistoryPreviewSourcePriorityEvent(sourceKind: BlindHistoryPreviewSourceKindEvent): number {
+  if (sourceKind === "record") return 3;
+  if (sourceKind === "trigger") return 2;
+  return 1;
+}
+
+function mergeBlindHistoryPreviewItemEvent(
+  existing: BlindHistoryItemEvent,
+  incoming: BlindHistoryItemEvent,
+  existingSourceKind: BlindHistoryPreviewSourceKindEvent,
+  incomingSourceKind: BlindHistoryPreviewSourceKindEvent
+): BlindHistoryItemEvent {
+  const existingPriority = resolveBlindHistoryPreviewSourcePriorityEvent(existingSourceKind);
+  const incomingPriority = resolveBlindHistoryPreviewSourcePriorityEvent(incomingSourceKind);
+  const dominant = incomingPriority >= existingPriority ? incoming : existing;
+  const supplement = incomingPriority >= existingPriority ? existing : incoming;
+  return normalizeBlindHistoryItemEvent({
+    ...supplement,
+    ...dominant,
+  });
+}
+
 function buildBlindHistoryItemFromPendingRoundRecordEvent(
   round: PendingRoundEvent,
   record: NonNullable<PendingRoundEvent["rolls"]>[number]
@@ -2209,23 +2421,39 @@ function countResolvedBlindTriggerNodesInDomEvent(): number {
   return document.querySelectorAll(".st-rh-inline-trigger[data-resolved=\"1\"][data-blind=\"1\"]").length;
 }
 
-function collectBlindHistoryPreviewItemsEvent(
+export function collectBlindHistoryPreviewItemsEvent(
   meta: DiceMetaEvent,
   getLiveContextEvent?: () => STContext | null,
   buildAssistantMessageIdEvent?: (message: TavernMessageEvent, index?: number) => string,
   settings?: { defaultBlindSkillsText?: string } | null,
   chatData?: RollHelperChatRecordEvent | null
 ): BlindHistoryItemEvent[] {
-  const merged = new Map<string, BlindHistoryItemEvent>();
-  const upsert = (item: BlindHistoryItemEvent | null | undefined): void => {
-    if (!item?.rollId) return;
-    merged.set(item.rollId, item);
+  const merged = new Map<string, { item: BlindHistoryItemEvent; sourceKind: BlindHistoryPreviewSourceKindEvent }>();
+  const upsert = (
+    item: BlindHistoryItemEvent | null | undefined,
+    sourceKind: BlindHistoryPreviewSourceKindEvent
+  ): void => {
+    if (!item) return;
+    const dedupeKey = resolveBlindHistoryPreviewDedupKeyEvent(item);
+    const existing = merged.get(dedupeKey);
+    if (!existing) {
+      merged.set(dedupeKey, { item, sourceKind });
+      return;
+    }
+    merged.set(dedupeKey, {
+      item: mergeBlindHistoryPreviewItemEvent(existing.item, item, existing.sourceKind, sourceKind),
+      sourceKind:
+        resolveBlindHistoryPreviewSourcePriorityEvent(sourceKind)
+        >= resolveBlindHistoryPreviewSourcePriorityEvent(existing.sourceKind)
+          ? sourceKind
+          : existing.sourceKind,
+    });
   };
 
   const round = meta.pendingRound;
   if (round && Array.isArray(round.rolls)) {
     for (const record of round.rolls) {
-      upsert(buildBlindHistoryItemFromPendingRoundRecordEvent(round, record));
+      upsert(buildBlindHistoryItemFromPendingRoundRecordEvent(round, record), "record");
     }
   }
 
@@ -2256,7 +2484,7 @@ function collectBlindHistoryPreviewItemsEvent(
               rollId: matchedRoll.rollId,
               targetLabelUsed: matchedRoll.targetLabelUsed,
               revealMode: matchedRoll.revealMode,
-            }, roundId));
+            }, roundId), "record");
           }
         }
         // 从楼层的 blindRolls 补充
@@ -2275,7 +2503,7 @@ function collectBlindHistoryPreviewItemsEvent(
             sourceAssistantMsgId: roll.sourceAssistantMsgId,
             sourceFloorKey: `assistant_idx:${floorId}:${floor.createdAt || 0}`,
             state: "consumed",
-          }));
+          }), "record");
         }
       }
     }
@@ -2288,35 +2516,17 @@ function collectBlindHistoryPreviewItemsEvent(
     settings
   );
   for (const item of triggerDerivedItems) {
-    if (!item.rollId) continue;
-    const existing = merged.get(item.rollId);
-    merged.set(
-      item.rollId,
-      existing
-        ? normalizeBlindHistoryItemEvent({
-            ...item,
-            ...existing,
-          })
-        : item
-    );
+    upsert(item, "trigger");
   }
 
   const domDerivedItems = collectBlindHistoryPreviewItemsFromTriggerDomEvent();
   for (const item of domDerivedItems) {
-    if (!item.rollId) continue;
-    const existing = merged.get(item.rollId);
-    merged.set(
-      item.rollId,
-      existing
-        ? normalizeBlindHistoryItemEvent({
-            ...item,
-            ...existing,
-          })
-        : item
-    );
+    upsert(item, "dom");
   }
 
-  return Array.from(merged.values()).sort((left, right) => Number(right.rolledAt || 0) - Number(left.rolledAt || 0));
+  return Array.from(merged.values())
+    .map((entry) => entry.item)
+    .sort((left, right) => Number(right.rolledAt || 0) - Number(left.rolledAt || 0));
 }
 
 /**

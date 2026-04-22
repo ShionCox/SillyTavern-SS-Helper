@@ -166,6 +166,7 @@ function refreshAllWidgetsFromStateWiredEvent(): RefreshAllWidgetsResultEvent {
   return refreshAllWidgetsFromStateModuleEvent({
     getLiveContextEvent: getLiveContextCoreEvent,
     getCurrentChatDataEvent: getCurrentChatDataStoreEvent,
+    getDiceMetaEvent: getDiceMetaStoreMetaEvent,
     buildEventListCardEvent,
     buildEventRollResultCardEvent,
     getLatestRollRecordForEvent,

@@ -575,7 +575,8 @@ export function resolveEventTargetEvent(
 
 export function isLikelyProtagonistActionEvent(event: DiceEventSpecEvent): boolean {
   if (event.targetType === "self") return true;
-  if (event.targetType === "supporting" || event.targetType === "object") return false;
+  if (event.targetType === "supporting") return false;
+  if (event.targetType === "scene" || event.targetType === "object") return true;
   if (event.scope === "protagonist" || event.scope === "all") return true;
   if (event.scope === "character") return false;
   const text = `${event.title}\n${event.desc}\n${event.skill}\n${event.targetLabel}`;

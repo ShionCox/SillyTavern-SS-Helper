@@ -226,12 +226,12 @@ export function buildSettingsCardHtmlTemplateEvent(
             "给 AI 追加结果提示。",
             )}
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="enabled dice type ai dice d20 d6 d100">
+          <div class="st-roll-item st-roll-item-stack st-roll-search-item" data-st-roll-search="enabled dice type ai dice d20 d6 d100">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">AI 可用骰式</div>
               <div class="st-roll-item-desc">只允许 AI 从已开启的骰式中选取。默认仅开启 d20。</div>
             </div>
-            <div class="st-roll-row">
+            <div class="st-roll-row st-roll-dice-toggle-row">
               <div id="${ids.allowedDiceSidesId}" class="st-roll-dice-toggle-group" data-tip="选择允许 AI 使用的骰式。">
                 ${[4, 6, 8, 10, 12, 20, 100]
                   .map(
@@ -364,12 +364,12 @@ export function buildSettingsCardHtmlTemplateEvent(
               </div>
             </div>
 
-            <div class="st-roll-item st-roll-search-item" data-st-roll-search="time limit urgency seconds low normal high critical">
+            <div class="st-roll-item st-roll-item-stack st-roll-search-item" data-st-roll-search="time limit urgency seconds low normal high critical">
               <div class="st-roll-item-main">
                 <div class="st-roll-item-title">紧张程度秒数映射</div>
                 <div class="st-roll-item-desc">系统会把手动检定的紧张程度映射成固定秒数，AI 不再直接决定具体几秒。</div>
               </div>
-              <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+              <div class="st-roll-row st-roll-time-limit-grid">
                 ${buildSharedInputField({
                   id: ids.timeLimitLowSecondsId,
                   type: "number",
@@ -845,12 +845,12 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback min max text length char count">
+          <div class="st-roll-item st-roll-item-stack st-roll-search-item" data-st-roll-search="selection fallback min max text length char count">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">自由划词字数限制</div>
               <div class="st-roll-item-desc">仅在“按字数限制”模式下生效，按整段归一化后的总长度判断。</div>
             </div>
-            <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+            <div class="st-roll-row st-roll-dual-field-grid">
               ${buildSharedInputField({
                 id: ids.selectionFallbackMinTextLengthId,
                 type: "number",
@@ -947,12 +947,12 @@ export function buildSettingsCardHtmlTemplateEvent(
             </div>
           </div>
 
-          <div class="st-roll-item st-roll-search-item" data-st-roll-search="selection fallback action skill">
+          <div class="st-roll-item st-roll-item-stack st-roll-search-item" data-st-roll-search="selection fallback action skill">
             <div class="st-roll-item-main">
               <div class="st-roll-item-title">自由划词默认动作与技能</div>
               <div class="st-roll-item-desc">自由划词只提供一个兜底入口，默认建议统一使用“调查”。</div>
             </div>
-            <div class="st-roll-row" style="gap: 10px; flex-wrap: wrap;">
+            <div class="st-roll-row st-roll-dual-field-grid">
               ${buildSharedInputField({
                 id: ids.selectionFallbackSingleActionId,
                 type: "text",

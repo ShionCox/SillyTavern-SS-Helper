@@ -1,4 +1,5 @@
 import type {
+  DiceMetaEvent,
   DiceEventSpecEvent,
   EventRollRecordEvent,
   PendingRoundEvent,
@@ -17,6 +18,7 @@ const WIDGET_CONTAINER_ATTR_Event = "data-rh-widget";
 export interface AnchorDepsEvent {
   getLiveContextEvent: () => { chat?: TavernMessageEvent[] } | null;
   getCurrentChatDataEvent: () => RollHelperChatRecordEvent;
+  getDiceMetaEvent: () => DiceMetaEvent;
   buildEventListCardEvent: (round: PendingRoundEvent) => string;
   buildEventRollResultCardEvent: (
     event: DiceEventSpecEvent,
@@ -256,6 +258,25 @@ function rebuildEventAndRecordFromSnapshotEvent(
   return { event, record };
 }
 
+function resolveAssistantFloorIdFromAssistantMsgIdEvent(assistantMsgId: unknown): number | null {
+  const normalized = String(assistantMsgId ?? "").trim();
+  if (!normalized) return null;
+  const match = normalized.match(/^assistant_idx:(\d+)(?::|$)/);
+  if (!match) return null;
+  const floorId = Number(match[1]);
+  return Number.isFinite(floorId) && floorId >= 0 ? floorId : null;
+}
+
+function isPendingRoundRecordForFloorEvent(
+  floorId: number,
+  sourceAssistantMsgId: unknown,
+  fallbackFloorId: number | null
+): boolean {
+  const parsedFloorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(sourceAssistantMsgId);
+  if (parsedFloorId != null) return parsedFloorId === floorId;
+  return fallbackFloorId != null && fallbackFloorId === floorId;
+}
+
 /**
  * 功能：把楼层持久化数据重建成当前事件列表渲染所需的最小 PendingRoundEvent。
  * 参数：
@@ -266,15 +287,31 @@ function rebuildEventAndRecordFromSnapshotEvent(
  */
 function buildFloorRuntimeRoundSnapshotEvent(
   floorId: number,
-  floor: RollHelperChatRecordEvent["floors"][string]
+  floor: RollHelperChatRecordEvent["floors"][string],
+  pendingRound?: PendingRoundEvent | null
 ): PendingRoundEvent {
-  const events = Array.isArray(floor.eventDice?.events)
+  const persistedEvents = Array.isArray(floor.eventDice?.events)
     ? floor.eventDice.events.map((event) => ({ ...event }))
     : [];
-  const rolls = [
+  const persistedRolls = [
     ...(Array.isArray(floor.eventDice?.publicRolls) ? floor.eventDice.publicRolls.map((item) => ({ ...item })) : []),
     ...(Array.isArray(floor.eventDice?.blindRolls) ? floor.eventDice.blindRolls.map((item) => ({ ...item })) : []),
   ];
+  const fallbackPendingFloorId = resolveAssistantFloorIdFromAssistantMsgIdEvent(
+    pendingRound?.sourceAssistantMsgIds?.[pendingRound.sourceAssistantMsgIds.length - 1]
+  );
+  const runtimeEvents = Array.isArray(pendingRound?.events)
+    ? pendingRound.events
+      .filter((event) => isPendingRoundRecordForFloorEvent(floorId, event?.sourceAssistantMsgId, fallbackPendingFloorId))
+      .map((event) => ({ ...event }))
+    : [];
+  const runtimeRolls = Array.isArray(pendingRound?.rolls)
+    ? pendingRound.rolls
+      .filter((record) => isPendingRoundRecordForFloorEvent(floorId, record?.sourceAssistantMsgId, fallbackPendingFloorId))
+      .map((record) => ({ ...record }))
+    : [];
+  const events = runtimeEvents.length > 0 ? runtimeEvents : persistedEvents;
+  const rolls = runtimeRolls.length > 0 ? runtimeRolls : persistedRolls;
   const sourceAssistantMsgIds = Array.from(new Set([
     ...events.map((item) => String(item?.sourceAssistantMsgId ?? "").trim()),
     ...rolls.map((item) => String(item?.sourceAssistantMsgId ?? "").trim()),
@@ -287,9 +324,9 @@ function buildFloorRuntimeRoundSnapshotEvent(
       ? String(floor.roundRefs[floor.roundRefs.length - 1] ?? "").trim()
       : "";
   return {
-    roundId: latestRoundRef || `floor_runtime_${floorId}`,
-    instanceToken: latestRoundRef || `floor_runtime_${floorId}`,
-    status: "open",
+    roundId: String(pendingRound?.roundId ?? "").trim() || latestRoundRef || `floor_runtime_${floorId}`,
+    instanceToken: String(pendingRound?.instanceToken ?? "").trim() || latestRoundRef || `floor_runtime_${floorId}`,
+    status: pendingRound?.status === "closed" ? "closed" : "open",
     events,
     rolls,
     eventTimers: {},
@@ -317,6 +354,7 @@ function mountCurrentFloorWidgetsFromChatDataEvent(
   let hasCurrentWidgets = false;
   let latestVisibleFloorId: number | null = null;
   const closedRoundFloorIds = new Set<number>();
+  const pendingRound = deps.getDiceMetaEvent().pendingRound;
 
   for (const roundId of chatData.rounds?.order ?? []) {
     const round = chatData.rounds?.records?.[roundId];
@@ -329,7 +367,8 @@ function mountCurrentFloorWidgetsFromChatDataEvent(
   for (const floorId of chatData.floorOrder ?? []) {
     const floor = chatData.floors?.[String(floorId)];
     if (!floor?.eventDice) continue;
-    const hasVisibleEvents = (floor.eventDice.events ?? []).some(
+    const snapshot = buildFloorRuntimeRoundSnapshotEvent(floorId, floor, pendingRound);
+    const hasVisibleEvents = (snapshot.events ?? []).some(
       (event) => event?.listVisibility !== "hidden" && !Number(event?.closedAt)
     );
     if (hasVisibleEvents) {
@@ -341,7 +380,7 @@ function mountCurrentFloorWidgetsFromChatDataEvent(
     const floor = chatData.floors?.[String(floorId)];
     if (!floor?.eventDice) continue;
     const isClosedHistoryFloor = closedRoundFloorIds.has(floorId);
-    const round = buildFloorRuntimeRoundSnapshotEvent(floorId, floor);
+    const round = buildFloorRuntimeRoundSnapshotEvent(floorId, floor, pendingRound);
     const visibleEvents = round.events.filter(
       (event) => event.listVisibility !== "hidden" && !Number(event.closedAt)
     );

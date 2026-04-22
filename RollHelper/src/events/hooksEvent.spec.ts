@@ -40,12 +40,14 @@ vi.mock("../settings/skillEditorUiEvent", () => ({
 import {
   buildAssistantMessageIdEvent,
   clearDiceMetaEventState,
+  collectBlindHistoryPreviewItemsEvent,
   rebuildAssistantFloorLifecycleEvent,
   reconcileTrackedAssistantFloorsEvent,
 } from "./hooksEvent";
 import {
   invalidatePendingRoundFloorEvent,
 } from "./roundEvent";
+import { setMessageInteractiveTriggersEvent } from "./interactiveTriggerMetadataEvent";
 
 type HooksTestDepsBundleEvent = {
   deps: RuntimeEventHooksDepsEvent;
@@ -704,6 +706,97 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(autoRollSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("finalize 会优先使用仍保留控制块的 hostOriginal 源文本，而不是已清洗的当前正文", async () => {
+    const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
+    const newAssistantMsgId = "assistant:floor-1:v2:hash-new";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [buildAssistantMessageEvent(newAssistantMsgId, "这是已经被清洗过的正文，不含事件")];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    deps.getPreferredAssistantSourceTextEvent = (): string => "这是宿主偏好的纯正文，不含事件";
+    deps.getHostOriginalSourceTextEvent = (): string => "```rolljson\n[event:new_event]\n```";
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["normal"],
+      deps,
+    });
+
+    const finalized = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_ended_finalize",
+      target: { msg: chat[0], index: 0 },
+      deps,
+    });
+
+    expect(finalized.changedData).toBe(true);
+    expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
+    expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
+    expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
+    expect(autoRollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("GENERATION_ENDED 会优先接管酒馆新插入的最新 assistant 楼层，而不是旧 session 目标", async () => {
+    const oldAssistantMsgId = "assistant_idx:0:swipe_0:old";
+    const newAssistantMsgId = "assistant_idx:2:swipe_0:new";
+    const meta = buildMetaEvent(oldAssistantMsgId);
+    const chat = [
+      buildAssistantMessageEvent(oldAssistantMsgId, "旧楼层正文"),
+      { role: "user", mes: "user" } as TavernMessageEvent,
+      buildAssistantMessageEvent(newAssistantMsgId, "```rolljson\n[event:new_event]\n```"),
+    ];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      eventArgs: ["normal"],
+      target: { msg: chat[0], index: 0 },
+      deps,
+    });
+
+    const finalized = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_ended_finalize",
+      eventArgs: [chat.length],
+      deps,
+    });
+
+    expect(finalized.changedData).toBe(true);
+    expect(finalized.rebuiltFloorKeys).toEqual(["assistant_idx:2"]);
+    expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
+    expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([newAssistantMsgId]);
+    expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
+    expect(autoRollSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("finalize 不会被完整但不含控制块的 hostOriginal 误导，会优先选择带事件控制块的正文源", async () => {
+    const assistantMsgId = "assistant_idx:2:swipe_0:new";
+    const meta = buildMetaEvent(assistantMsgId);
+    const chat = [
+      buildAssistantMessageEvent(assistantMsgId, "```rolljson\n[event:new_event]\n```\n这是正文"),
+    ];
+    const { deps, autoRollSpy, mergeEventsSpy } = buildDepsBundleEvent(meta, chat);
+
+    deps.getPreferredAssistantSourceTextEvent = (): string => "```rolljson\n[event:new_event]\n```\n这是宿主偏好的正文";
+    deps.getHostOriginalSourceTextEvent = (): string => "这是完整宿主原文，但这次不含任何事件控制块。";
+
+    await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_started",
+      target: { msg: chat[0], index: 0 },
+      deps,
+    });
+
+    const finalized = await rebuildAssistantFloorLifecycleEvent({
+      reason: "generation_ended_finalize",
+      eventArgs: [chat.length],
+      deps,
+    });
+
+    expect(finalized.changedUi).toBe(true);
+    expect(meta.pendingRound?.events.map((item) => item.id)).toEqual(["new_event"]);
+    expect(meta.pendingRound?.sourceAssistantMsgIds).toEqual([assistantMsgId]);
+    expect(mergeEventsSpy).toHaveBeenCalledTimes(1);
+    expect(autoRollSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("hydrate_restore 只恢复 UI，不会在刷新时破坏已有 pendingRound", async () => {
     const oldAssistantMsgId = "assistant:floor-1:v1:hash-old";
     const meta = buildMetaEvent(oldAssistantMsgId);
@@ -778,5 +871,111 @@ describe("reconcileTrackedAssistantFloorsEvent", () => {
     expect(meta.pendingRound).toBeUndefined();
     expect(mergeEventsSpy).not.toHaveBeenCalled();
     expect(autoRollSpy).not.toHaveBeenCalled();
+  });
+
+  it("暗骰预览会优先保留真实投骰记录，不会把交互触发和 DOM 占位重复展示出来", () => {
+    const assistantMsgId = "assistant_idx:2:swipe_0:test";
+    const message = {
+      role: "assistant",
+      mes: "正文",
+    } as TavernMessageEvent;
+    setMessageInteractiveTriggersEvent(message, [{
+      triggerId: "itr:test",
+      label: "发黑的爪痕",
+      action: "调查",
+      skill: "调查",
+      blind: true,
+      sourceMessageId: assistantMsgId,
+      sourceId: "clue_1",
+      occurrenceIndex: 0,
+      diceExpr: "1d100",
+      compare: ">=",
+      revealMode: "instant",
+    }]);
+
+    const previousDocument = (globalThis as typeof globalThis & { document?: Document }).document;
+    (globalThis as typeof globalThis & { document?: Document }).document = {
+      querySelectorAll: () => ([
+        {
+          dataset: {
+            sourceMessageId: assistantMsgId,
+            sourceId: "clue_1",
+            occurrenceIndex: "0",
+            triggerId: "itr:test",
+            label: "发黑的爪痕",
+            skill: "调查",
+            diceExpr: "1d100",
+            sourceFloorKey: "assistant_idx:2",
+            revealMode: "instant",
+          },
+        },
+      ] as unknown as NodeListOf<HTMLElement>),
+    } as unknown as Document;
+
+    const items = collectBlindHistoryPreviewItemsEvent({
+      pendingRound: {
+        roundId: "round_test",
+        instanceToken: "round_test",
+        status: "open",
+        openedAt: 1713373334000,
+        sourceAssistantMsgIds: [assistantMsgId],
+        sourceFloorKey: "assistant_idx:2",
+        eventTimers: {},
+        events: [{
+          id: "itr:test",
+          title: "调查",
+          checkDice: "1d100",
+          dc: 50,
+          skill: "调查",
+          targetType: "clue",
+          targetLabel: "发黑的爪痕",
+          desc: "desc",
+          sourceAssistantMsgId: assistantMsgId,
+        } as DiceEventSpecEvent],
+        rolls: [{
+          rollId: "eroll_real_1",
+          roundId: "round_test",
+          eventId: "itr:test",
+          eventTitle: "调查",
+          diceExpr: "1d100",
+          result: {
+            expr: "1d100",
+            count: 1,
+            sides: 100,
+            modifier: 0,
+            rolls: [42],
+            rawTotal: 42,
+            total: 42,
+            selectionMode: "none",
+          },
+          success: true,
+          compareUsed: ">=",
+          dcUsed: 50,
+          advantageStateApplied: "normal",
+          resultGrade: "success",
+          skillModifierApplied: 0,
+          statusModifierApplied: 0,
+          baseModifierUsed: 0,
+          finalModifierUsed: 0,
+          targetLabelUsed: "发黑的爪痕",
+          rolledAt: 1713373335000,
+          source: "blind_manual_roll",
+          visibility: "blind",
+          concealResult: true,
+          natState: "none",
+          timeoutAt: null,
+          sourceAssistantMsgId: assistantMsgId,
+          revealMode: "instant",
+        } as EventRollRecordEvent],
+      },
+    }, () => ({ chat: [message] } as any), () => assistantMsgId);
+
+    (globalThis as typeof globalThis & { document?: Document }).document = previousDocument;
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.rollId).toBe("eroll_real_1");
+    expect(items[0]?.eventTitle).toBe("调查");
+    expect(items[0]?.rolledAt).toBe(1713373335000);
+    expect(items[0]?.origin).toBe("interactive_blind");
   });
 });
