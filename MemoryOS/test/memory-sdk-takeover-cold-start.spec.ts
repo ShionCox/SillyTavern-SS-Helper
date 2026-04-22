@@ -276,7 +276,7 @@ vi.mock('../src/repository/entry-repository', () => {
 
 vi.mock('../../SDK/tavern', () => {
     return {
-        buildSdkChatKeyEvent: vi.fn(() => 'chat-1'),
+        buildSdkChatIdEvent: vi.fn(() => 'chat-1'),
         getCurrentTavernCharacterEvent: vi.fn(() => null),
         getCurrentTavernUserNameEvent: vi.fn(() => '你'),
         getTavernMessageTextEvent: getTavernMessageTextEventMock,

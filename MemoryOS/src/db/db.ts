@@ -32,6 +32,7 @@ import type {
     DBTemplateBinding,
 } from '../../../SDK/db';
 import { SSHelperDatabase } from '../../../SDK/db';
+import { buildSdkChatIdEvent } from '../../../SDK/tavern';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { clearAllVectorDataForChat } from './vector-db';
 import type {
@@ -1047,9 +1048,12 @@ export async function importMemoryPromptTestBundle(
     options: { targetChatKey?: string; skipClear?: boolean } = {},
 ): Promise<ImportMemoryPromptTestBundleResult> {
     const sourceDatabase = bundle?.database;
-    const targetChatKey = normalizeText(options.targetChatKey ?? `memory_test::${Date.now()}`);
+    const targetChatKey = normalizeText(options.targetChatKey ?? buildSdkChatIdEvent());
     if (!sourceDatabase || !normalizeText(sourceDatabase.chatKey)) {
         throw new Error('invalid_bundle_database');
+    }
+    if (!targetChatKey) {
+        throw new Error('invalid_target_chat_id');
     }
 
     const mapChatKey = (row: unknown): Record<string, unknown> => {

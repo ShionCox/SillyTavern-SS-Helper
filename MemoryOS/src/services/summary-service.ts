@@ -82,6 +82,7 @@ export class SummaryService {
         normalizedSummary?: SummarySnapshot['normalizedSummary'];
         actorKeys: string[];
         entryUpserts?: Parameters<EntryRepository['applySummarySnapshot']>[0]['entryUpserts'];
+        relationshipMutations?: Parameters<EntryRepository['applySummarySnapshot']>[0]['relationshipMutations'];
         refreshBindings?: Parameters<EntryRepository['applySummarySnapshot']>[0]['refreshBindings'];
     }): Promise<SummarySnapshot> {
         return this.repository.applySummarySnapshot(input);

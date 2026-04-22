@@ -41,6 +41,7 @@ import { normalizeSummarySnapshot } from '../memory-summary-planner';
 import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { deleteWorldProfileBinding, getWorldProfileBinding, putWorldProfileBinding } from '../memory-world-profile';
 import { BindingResolutionService } from '../services/binding-resolution-service';
+import { RelationshipMutationService } from '../services/relationship-mutation-service';
 import {
     CORE_MEMORY_ENTRY_TYPES,
     DEFAULT_ACTOR_MEMORY_STAT,
@@ -61,6 +62,8 @@ import {
     type SummaryEntryUpsert,
     type SummaryRefreshBinding,
     type SummarySnapshot,
+    type SummaryMutationApplyDiagnostics,
+    type SummaryRelationshipMutationDiagnostics,
     type StructuredBindings,
     type UnifiedMemoryFilters,
     type WorldProfileBinding,
@@ -728,6 +731,7 @@ export class EntryRepository {
         normalizedSummary?: SummarySnapshot['normalizedSummary'];
         actorKeys: string[];
         entryUpserts?: SummaryEntryUpsert[];
+        relationshipMutations?: LedgerMutation[];
         refreshBindings?: SummaryRefreshBinding[];
     }): Promise<SummarySnapshot> {
         const summaryId = `summary-snapshot:${this.chatKey}:${crypto.randomUUID()}`;
@@ -754,14 +758,30 @@ export class EntryRepository {
             validTo: upsert.validTo,
             ongoing: upsert.ongoing,
         }));
-        const mutationApplyDiagnostics = await this.applyLedgerMutationBatch(mutations, {
+        const mutationContext: LedgerMutationBatchContext = {
             chatKey: this.chatKey,
             source: 'summary',
             sourceLabel: this.normalizeText(input.title) || '结构化回合总结',
             summaryId,
             allowCreate: true,
             allowInvalidate: true,
-        });
+        };
+        const mutationApplyDiagnostics = await this.applyLedgerMutationBatch(mutations, mutationContext);
+        const relationshipMutations = Array.isArray(input.relationshipMutations) ? input.relationshipMutations : [];
+        const relationshipResult = relationshipMutations.length > 0
+            ? await new RelationshipMutationService({
+                chatKey: this.chatKey,
+                repository: this,
+            }).applyMutations({
+                mutations: relationshipMutations,
+                context: mutationContext,
+            })
+            : undefined;
+        const combinedMutationDiagnostics = this.buildSummaryMutationApplyDiagnostics(
+            mutationApplyDiagnostics,
+            relationshipMutations,
+            relationshipResult,
+        );
 
         const allEntries = await this.listEntries();
         const savedEntries: MemoryEntry[] = (Array.isArray(input.entryUpserts) ? input.entryUpserts : [])
@@ -813,7 +833,7 @@ export class EntryRepository {
         }
 
         const row: DBSummarySnapshot & {
-            mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
+            mutationApplyDiagnostics?: SummaryMutationApplyDiagnostics;
         } = {
             summaryId,
             chatKey: this.chatKey,
@@ -828,13 +848,66 @@ export class EntryRepository {
             actorKeys,
             entryUpserts: (input.entryUpserts ?? []).map((item: SummaryEntryUpsert): Record<string, unknown> => ({ ...item })),
             refreshBindings: (input.refreshBindings ?? []).map((item: SummaryRefreshBinding): Record<string, unknown> => ({ ...item })),
-            mutationApplyDiagnostics,
+            mutationApplyDiagnostics: combinedMutationDiagnostics,
             createdAt: now,
             updatedAt: now,
         };
         await db.summary_snapshots.put(row);
         const savedSnapshot = this.mapSummarySnapshot(row);
         return savedSnapshot;
+    }
+
+    /**
+     * 功能：合并总结条目写回与关系写回诊断。
+     * @param entryDiagnostics 条目写回诊断。
+     * @param relationshipMutations 关系变更列表。
+     * @param relationshipResult 关系写回结果。
+     * @returns 合并后的总结写回诊断。
+     */
+    private buildSummaryMutationApplyDiagnostics(
+        entryDiagnostics: ApplyLedgerMutationBatchResult,
+        relationshipMutations: LedgerMutation[],
+        relationshipResult?: SummaryRelationshipMutationDiagnostics,
+    ): SummaryMutationApplyDiagnostics {
+        const skippedRelationshipCount = relationshipResult?.skippedMutationIds.length ?? 0;
+        const createdRelationshipCount = relationshipResult?.createdRelationshipIds.length ?? 0;
+        const updatedRelationshipCount = relationshipResult?.updatedRelationshipIds.length ?? 0;
+        const relationshipDecisions = relationshipMutations.map((mutation: LedgerMutation, index: number) => {
+            const mutationId = this.normalizeText(mutation.sourceContext?.mutationId) || `relationship_mutation_${index + 1}`;
+            const skipped = relationshipResult?.skippedMutationIds.includes(mutationId) ?? false;
+            return {
+                targetKind: 'relationship',
+                action: skipped ? 'NOOP' as const : mutation.action,
+                title: this.normalizeText(mutation.title) || '未命名关系',
+                matchMode: skipped ? 'skipped' as const : 'exact_match' as const,
+                entryId: undefined,
+                entityKey: undefined,
+                compareKey: this.normalizeText(mutation.compareKey) || undefined,
+                reasonCodes: this.normalizeTags(mutation.reasonCodes),
+            };
+        });
+        return {
+            ...entryDiagnostics,
+            counts: {
+                ...entryDiagnostics.counts,
+                input: entryDiagnostics.counts.input + relationshipMutations.length,
+                add: entryDiagnostics.counts.add + createdRelationshipCount,
+                update: entryDiagnostics.counts.update + updatedRelationshipCount,
+                noop: entryDiagnostics.counts.noop + skippedRelationshipCount,
+            },
+            noopCount: entryDiagnostics.noopCount + skippedRelationshipCount,
+            decisions: [
+                ...entryDiagnostics.decisions,
+                ...relationshipDecisions,
+            ],
+            relationshipResult,
+            appliedRelationshipMutationIds: relationshipResult?.appliedRelationshipMutationIds ?? [],
+            skippedRelationshipMutationIds: relationshipResult?.skippedMutationIds ?? [],
+            createdRelationshipIds: relationshipResult?.createdRelationshipIds ?? [],
+            updatedRelationshipIds: relationshipResult?.updatedRelationshipIds ?? [],
+            affectedRelationshipIds: relationshipResult?.affectedRelationshipIds ?? [],
+            historyWritten: Boolean(entryDiagnostics.historyWritten && (relationshipResult?.historyWritten ?? true)),
+        };
     }
 
     async listSummarySnapshots(limit: number = 20): Promise<SummarySnapshot[]> {
@@ -1460,7 +1533,7 @@ export class EntryRepository {
      */
     private mapSummarySnapshot(row: DBSummarySnapshot): SummarySnapshot {
         const extraRecord = row as DBSummarySnapshot & {
-            mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
+            mutationApplyDiagnostics?: SummaryMutationApplyDiagnostics;
         };
         return {
             summaryId: row.summaryId,

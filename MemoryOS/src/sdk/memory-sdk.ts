@@ -1,5 +1,5 @@
 import {
-    buildSdkChatKeyEvent,
+    buildSdkChatIdEvent,
     getCurrentTavernCharacterEvent,
     getTavernMessageTextEvent,
     getTavernRuntimeContextEvent,
@@ -62,6 +62,7 @@ import type { ContentLabSettings } from '../config/content-tag-registry';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
+import { GraphService } from '../services/graph-service';
 import { DreamingService, type DreamExecutionContext } from '../services/dreaming-service';
 import { DreamRollbackService } from '../services/dream-rollback-service';
 import type {
@@ -620,6 +621,7 @@ export class MemorySDKImpl {
                     return;
                 }
                 await this.refreshVectorIndexAfterPipeline('自动总结');
+                await this.recordSummaryGraphRefresh('自动总结');
                 const lastSummarizedMessageId = hostMessages.length > 0
                     ? undefined
                     : await this.readLastSummarizedMessageIdFromEvents(messageWindowLimit);
@@ -1159,6 +1161,7 @@ export class MemorySDKImpl {
                     if (snapshot) {
                         await this.alignSummaryProgressToCurrentFloor();
                         await this.refreshVectorIndexAfterPipeline('手动总结');
+                        await this.recordSummaryGraphRefresh('手动总结');
                     }
                     return snapshot;
                 },
@@ -4098,6 +4101,57 @@ export class MemorySDKImpl {
     }
 
     /**
+     * 功能：记录总结后的图谱派生刷新结果。
+     * @param sourceLabel 来源标签。
+     * @returns 异步完成。
+     */
+    private async recordSummaryGraphRefresh(sourceLabel: string): Promise<void> {
+        try {
+            const graph = await this.buildCurrentMemoryGraph();
+            await this.entryRepository.appendMutationHistory({
+                action: 'summary_graph_refreshed',
+                payload: {
+                    sourceLabel,
+                    mode: 'local',
+                    usedLLM: false,
+                    nodeCount: graph.nodes.length,
+                    edgeCount: graph.edges.length,
+                },
+            });
+        } catch (error) {
+            logger.warn('总结后刷新可视化记忆失败', error);
+            await this.entryRepository.appendMutationHistory({
+                action: 'summary_graph_refresh_failed',
+                payload: {
+                    sourceLabel,
+                    reasonCode: String((error as Error)?.message ?? error),
+                },
+            });
+        }
+    }
+
+    /**
+     * 功能：构建当前主记忆图谱。
+     * @returns 图谱快照。
+     */
+    private async buildCurrentMemoryGraph(): Promise<ReturnType<GraphService['buildMemoryGraphFromMemory']>> {
+        const [entries, relationships, actors, roleMemories, summaries] = await Promise.all([
+            this.entryRepository.listEntries(),
+            this.entryRepository.listRelationships(),
+            this.entryRepository.listActorProfiles(),
+            this.entryRepository.listRoleMemories(),
+            this.entryRepository.listSummarySnapshots(8),
+        ]);
+        return new GraphService().buildMemoryGraphFromMemory({
+            entries,
+            relationships,
+            actors,
+            roleMemories,
+            summaries,
+        });
+    }
+
+    /**
      * 功能：读取当前聊天的总结进度。
      * @returns 总结进度。
      */
@@ -4256,7 +4310,7 @@ export class MemorySDKImpl {
      * @returns 当前聊天消息列表；当前 SDK 不是激活聊天时返回空数组
      */
     private readActiveHostChatMessages(): Array<{ role?: string; content?: string; name?: string; turnIndex?: number }> {
-        const currentChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
+        const currentChatKey = String(buildSdkChatIdEvent() ?? '').trim();
         if (!currentChatKey || currentChatKey !== this.chatKey_) {
             return [];
         }

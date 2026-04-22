@@ -563,17 +563,8 @@ identity、actorCards、entityCards、worldBase 没有新增时可返回空集�
 ```json
 {
   "type": "object",
-  "required": ["domain", "conflictType", "buckets", "patches"],
+  "required": ["patches"],
   "properties": {
-    "domain": { "type": "string" },
-    "conflictType": { "type": "string" },
-    "buckets": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["bucketId", "domain", "conflictType", "records"]
-      }
-    },
     "patches": {
       "type": "array",
       "items": {
@@ -588,25 +579,6 @@ identity、actorCards、entityCards、worldBase 没有新增时可返回空集�
 <!-- section: TAKEOVER_CONFLICT_RESOLUTION_BATCH_OUTPUT_SAMPLE -->
 ```json
 {
-  "domain": "relationship",
-  "conflictType": "state_divergence",
-  "buckets": [
-    {
-      "bucketId": "relationship/state_divergence/user_actor_erin",
-      "domain": "relationship",
-      "conflictType": "state_divergence",
-      "records": [
-        {
-          "sourceActorKey": "user",
-          "targetActorKey": "actor_erin",
-          "participants": ["user", "actor_erin"],
-          "relationTag": "朋友",
-          "state": "双方已建立谨慎合作。",
-          "summary": "形成了可继续推进的合作关系。"
-        }
-      ]
-    }
-  ],
   "patches": [
     {
       "bucketId": "relationship/state_divergence/user_actor_erin",

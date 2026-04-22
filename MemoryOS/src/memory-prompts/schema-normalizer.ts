@@ -706,32 +706,8 @@ function buildTakeoverConflictResolutionBatchSchema(): Record<string, unknown> {
     return {
         type: 'object',
         additionalProperties: false,
-        required: ['domain', 'conflictType', 'buckets', 'patches'],
+        required: ['patches'],
         properties: {
-            domain: { type: 'string' },
-            conflictType: { type: 'string' },
-            buckets: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['bucketId', 'domain', 'conflictType', 'records'],
-                    properties: {
-                        bucketId: { type: 'string' },
-                        domain: { type: 'string' },
-                        conflictType: { type: 'string' },
-                        records: {
-                            type: 'array',
-                            items: {
-                                type: 'object',
-                                additionalProperties: true,
-                                required: [],
-                                properties: {},
-                            },
-                        },
-                    },
-                },
-            },
             patches: {
                 type: 'array',
                 items: buildTakeoverConflictResolutionSchema(),

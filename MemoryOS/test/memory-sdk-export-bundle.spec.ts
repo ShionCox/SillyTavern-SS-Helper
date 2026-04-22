@@ -84,6 +84,7 @@ vi.mock('../src/repository/entry-repository', () => {
 
 vi.mock('../../../SDK/tavern', () => {
     return {
+        buildSdkChatIdEvent: vi.fn(() => 'chat-1'),
         getCurrentTavernCharacterEvent: vi.fn(() => null),
         getCurrentTavernUserSnapshotEvent: vi.fn(() => null),
         getTavernSemanticSnapshotEvent: vi.fn(() => null),

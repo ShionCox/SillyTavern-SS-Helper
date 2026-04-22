@@ -127,7 +127,7 @@ export function buildTakeoverMemoryGraph(progress: MemoryTakeoverProgressSnapsho
 
     const nodes = [...nodeMap.values()];
     const edges = edgeLedger.toEdges();
-    applyForceLayout(nodes, edges);
+    applyUnifiedMemoryGraphLayout(nodes, edges);
     return { nodes, edges };
 }
 
@@ -1714,7 +1714,7 @@ function collectPromotedEvents(nodeMap: Map<string, WorkbenchMemoryGraphNode>): 
  * @param nodes 节点列表。
  * @param edges 边列表。
  */
-function applyForceLayout(
+export function applyUnifiedMemoryGraphLayout(
     nodes: WorkbenchMemoryGraphNode[],
     edges: WorkbenchMemoryGraph['edges'],
 ): void {

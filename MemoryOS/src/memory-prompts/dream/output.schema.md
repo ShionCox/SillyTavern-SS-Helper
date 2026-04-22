@@ -60,10 +60,12 @@
 字段要求：
 - `narrative`：中等长度，压缩梦境叙事。
 - `highlights`：2 到运行时上限条，去重，便于 UI 展示。
-- `proposedMutations`：高价值、低幻觉风险提案，数量受运行时上限控制。
+- `proposedMutations`：高价值、低幻觉风险提案，数量受运行时上限控制；只有能确定正式主记忆类型时才输出 `entry_create`。
 - `sourceEntryRefs / sourceNodeRefs / bridgeNodeRefs`：只能使用当前 Prompt DTO 中提供的短引用别名，不得输出真实内部 ID。
 - `preview`：一句话可读。
 - `reason`：偏审批语言，不偏文学解释。
 - `explanationSteps`：简洁、可追溯。
 - `payload.fieldsJson / payload.detailPayloadJson`：必须是合法 JSON 对象字符串，不能直接输出自由对象。
 - 严格模式下 `payload` 内所有字段都必须给出；不适用的字符串填 `""`，数组填 `[]`，数值填 `0`，布尔填 `false`，对象字符串填 `{}`。
+- 梦境洞察、象征性联想、低置信弱推断只写入 `narrative` / `highlights`，不要用 `entryType: "other"` 创建记忆块。
+- `entry_create` 的 `entryType` 必须是 `event`、`task`、`scene_shared_state`、`world_global_state`、`world_hard_rule`、`item`、`organization`、`city`、`nation`、`location` 等明确类型之一。

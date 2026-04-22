@@ -10,7 +10,7 @@ export function registerMemoryLLMTasks(llm: MemoryLLMApi, pluginId: string): voi
     llm.registerConsumer({
         pluginId,
         displayName: '记忆系统',
-        registrationVersion: 8,
+        registrationVersion: 10,
         tasks: [
             {
                 taskKey: 'memory_embedding',

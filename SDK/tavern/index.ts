@@ -148,7 +148,7 @@ export type { SdkTavernMessageTextExtractionEvent } from "./prompt";
 
 export { ensureTavernInstanceIdEvent } from "./instance";
 
-export { buildSdkChatKeyEvent } from "./chatkey";
+export { buildSdkChatIdEvent, buildSdkChatKeyEvent } from "./chatkey";
 
 export {
   listTavernChatsForCurrentScopeEvent,

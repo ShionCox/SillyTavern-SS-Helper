@@ -82,4 +82,40 @@ describe('buildTakeoverStructuredTaskRequest 用户占位符', () => {
         expect(promptText).not.toContain('林远');
         expect(promptText).not.toContain('{{userDisplayName}}');
     });
+
+    it('会让批量冲突裁决只输出 patches 根对象', async (): Promise<void> => {
+        const { buildTakeoverStructuredTaskRequest } = await import('../src/memory-takeover/takeover-llm');
+        const request = await buildTakeoverStructuredTaskRequest({
+            systemSection: 'TAKEOVER_BATCH_SYSTEM',
+            schemaSection: 'TAKEOVER_CONFLICT_RESOLUTION_BATCH_SCHEMA',
+            sampleSection: 'TAKEOVER_CONFLICT_RESOLUTION_BATCH_OUTPUT_SAMPLE',
+            payload: {
+                domain: 'world',
+                conflictType: 'value_divergence',
+                buckets: [
+                    {
+                        bucketId: 'world/value_divergence/a',
+                        domain: 'world',
+                        conflictType: 'value_divergence',
+                        records: [
+                            { key: '夜禁', value: '持续执行中', compareKey: 'ck:v2:world_global_state:夜禁:global' },
+                            { key: '夜禁', value: '范围扩大', compareKey: 'ck:v2:world_global_state:夜禁:global' },
+                        ],
+                    },
+                ],
+            },
+        });
+
+        const schema = request.schema as { required?: string[]; properties?: Record<string, unknown> };
+        const promptText = request.messages.map((item) => item.content).join('\n');
+        const outputExample = promptText.match(/<output_example>\n([\s\S]*?)\n<\/output_example>/)?.[1] ?? '';
+
+        expect(schema.required).toEqual(['patches']);
+        expect(schema.properties).not.toHaveProperty('domain');
+        expect(schema.properties).not.toHaveProperty('conflictType');
+        expect(schema.properties).not.toHaveProperty('buckets');
+        expect(promptText).toContain('"buckets"');
+        expect(outputExample).toContain('"patches"');
+        expect(outputExample).not.toContain('"buckets"');
+    });
 });

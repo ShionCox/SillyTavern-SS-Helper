@@ -57,6 +57,7 @@ import {
     resolveTakeoverWorkbenchText,
     resolveUnifiedWorkbenchText,
 } from './workbenchLocale';
+import type { MemoryPromptTestBundle } from '../db/db';
 import { buildTakeoverFallbackEstimate, parseTakeoverFormDraft } from './takeoverFormShared';
 import {
     type ContentLabSettings,
@@ -72,6 +73,7 @@ import {
     mountMemoryGraphPage,
 } from './workbenchPages/memoryGraphPage';
 import { DreamUiStateService } from './dream-ui-state-service';
+import { inspectMemoryDatabaseSnapshot } from '../db/database-snapshot-inspector';
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const graphService = new GraphService();
@@ -338,6 +340,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         previewQuery: '',
         previewTabLoaded: false,
         previewTabLoading: false,
+        databaseSnapshotInspection: null,
+        databaseSnapshotInspectionFileName: '',
+        databaseSnapshotInspectionLoading: false,
         worldProfileTestInput: '',
         worldProfileTestRunning: false,
         worldProfileTestResult: null,
@@ -512,6 +517,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 entryTypes: [],
                 entries: [],
                 actors: [],
+                relationships: [],
                 roleMemories: [],
                 summaries: [],
                 preview: previewCache,
@@ -520,7 +526,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 entryAuditRecords: [],
                 recallExplanation: previewRecallExplanationCache,
                 actorGraph: { nodes: [], links: [] },
-                memoryGraph: graphService.buildTakeoverGraph(null),
+                memoryGraph: graphService.buildMemoryGraphFromMemory({
+                    entries: [],
+                    relationships: [],
+                    actors: [],
+                    roleMemories: [],
+                    summaries: [],
+                }),
                 takeoverProgress: takeoverProgressCache,
                 vectorSnapshot: vectorCache,
                 contentLabSnapshot: buildContentLabSnapshot(),
@@ -574,6 +586,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryTypes,
             entries,
             actors,
+            relationships,
             roleMemories,
             summaries,
             preview: previewCache,
@@ -582,7 +595,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             entryAuditRecords,
             recallExplanation: previewRecallExplanationCache,
             actorGraph: buildActorGraph(actors, relationships, entries),
-            memoryGraph: graphService.buildTakeoverGraph(takeoverProgress),
+            memoryGraph: graphService.buildMemoryGraphFromMemory({
+                entries,
+                relationships,
+                actors,
+                roleMemories,
+                summaries,
+            }),
             takeoverProgress,
             vectorSnapshot: vectorCache,
             contentLabSnapshot: buildContentLabSnapshot(),
@@ -666,6 +685,52 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         applyContentLabSettingsToState(saved);
         state.contentLabTabLoaded = true;
         return saved.tagRegistry;
+    };
+
+    /**
+     * 功能：读取导出的数据库 JSON，生成检查报告并自动导入当前聊天。
+     * @param file 用户选择的 JSON 文件。
+     * @returns 异步完成。
+     */
+    const inspectDatabaseSnapshotFile = async (file: File): Promise<void> => {
+        state.databaseSnapshotInspectionFileName = file.name;
+        state.databaseSnapshotInspectionLoading = true;
+        await render();
+        try {
+            const text = await readFileAsUtf8Text(file);
+            const parsed = JSON.parse(text) as unknown;
+            const report = inspectMemoryDatabaseSnapshot(parsed);
+            if (!report.database) {
+                throw new Error('未识别到可导入的 MemoryOS 数据库快照。');
+            }
+            const bundle = buildPromptTestBundleFromDatabaseInspection(report);
+            await memory.chatState.importPromptTestBundleForTest(bundle, {
+                targetChatKey: memory.getChatKey(),
+                skipClear: false,
+            });
+            state.databaseSnapshotInspection = report;
+            invalidatePreviewSnapshot();
+            invalidateVectorSnapshot();
+            state.selectedEntryId = '';
+            state.selectedTypeKey = '';
+            state.selectedActorKey = '';
+            state.bindEntryId = '';
+            if (report.valid) {
+                toast.success('导出数据库已读取并保存到当前聊天。');
+            } else {
+                toast.warning('导出数据库已保存到当前聊天，但存在缺失字段或格式问题。');
+            }
+            if (state.currentView === 'vectors') {
+                await refreshVectorSnapshot();
+            }
+        } catch (error) {
+            logger.warn('读取导出的数据库失败', error);
+            state.databaseSnapshotInspection = null;
+            toast.error(`读取导出的数据库失败：${String((error as Error)?.message ?? error)}`);
+        } finally {
+            state.databaseSnapshotInspectionLoading = false;
+            await render();
+        }
     };
 
     /**
@@ -1030,6 +1095,11 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 const fileName = buildChatDatabaseExportFileName(memory.getChatKey());
                 downloadJsonFile(fileName, databaseSnapshot);
                 toast.success('当前聊天记忆库已导出。');
+                return;
+            }
+            if (action === 'select-database-snapshot') {
+                const input = root.querySelector('#stx-memory-database-snapshot-file') as HTMLInputElement | null;
+                input?.click();
                 return;
             }
             if (action === 'clear-chat-database') {
@@ -1593,6 +1663,16 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         const previewQueryInput = root.querySelector('#stx-memory-preview-query') as HTMLInputElement | null;
         previewQueryInput?.addEventListener('input', (): void => {
             state.previewQuery = String(previewQueryInput.value ?? '').trim();
+        });
+
+        const databaseSnapshotFileInput = root.querySelector('#stx-memory-database-snapshot-file') as HTMLInputElement | null;
+        databaseSnapshotFileInput?.addEventListener('change', (): void => {
+            const file = databaseSnapshotFileInput.files?.[0] ?? null;
+            databaseSnapshotFileInput.value = '';
+            if (!file) {
+                return;
+            }
+            void inspectDatabaseSnapshotFile(file);
         });
 
         const actorQueryInput = root.querySelector('#stx-memory-actor-query') as HTMLInputElement | null;
@@ -2491,6 +2571,55 @@ function downloadJsonFile(fileName: string, data: unknown): void {
     window.setTimeout((): void => {
         URL.revokeObjectURL(objectUrl);
     }, 0);
+}
+
+/**
+ * 功能：使用 FileReader 按 UTF-8 读取文本文件。
+ * @param file 待读取文件。
+ * @returns 文件文本内容。
+ */
+function readFileAsUtf8Text(file: File): Promise<string> {
+    return new Promise((resolve: (value: string) => void, reject: (reason?: unknown) => void): void => {
+        const reader = new FileReader();
+        reader.onerror = (): void => {
+            reject(new Error('文件读取失败。'));
+        };
+        reader.onload = (): void => {
+            const result = reader.result;
+            if (typeof result !== 'string') {
+                reject(new Error('文件内容不是文本。'));
+                return;
+            }
+            resolve(result);
+        };
+        reader.readAsText(file, 'utf-8');
+    });
+}
+
+/**
+ * 功能：把数据库检查报告包装为可复用的导入测试包。
+ * @param report 数据库检查报告。
+ * @returns Prompt 测试包。
+ */
+function buildPromptTestBundleFromDatabaseInspection(
+    report: ReturnType<typeof inspectMemoryDatabaseSnapshot>,
+): MemoryPromptTestBundle {
+    if (!report.database) {
+        throw new Error('缺少数据库快照。');
+    }
+    return {
+        version: '1.0.0',
+        exportedAt: report.exportedAt ?? report.generatedAt ?? Date.now(),
+        sourceChatKey: report.database.chatKey,
+        database: report.database,
+        promptFixture: [],
+        query: '',
+        settings: {},
+        captureMeta: {
+            mode: 'simulated_prompt',
+            note: 'database_snapshot_import',
+        },
+    };
 }
 
 /**

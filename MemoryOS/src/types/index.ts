@@ -14,6 +14,8 @@ export type {
     SummaryEntryUpsert,
     SummaryRefreshBinding,
     SummarySnapshot,
+    SummaryMutationApplyDiagnostics,
+    SummaryRelationshipMutationDiagnostics,
     StructuredBindings,
     BindingMatchMode,
     BindingResolutionDecision,

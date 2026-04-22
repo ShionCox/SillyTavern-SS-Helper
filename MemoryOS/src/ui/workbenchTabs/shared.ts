@@ -6,6 +6,7 @@ import type {
     MemoryEntryType,
     MemoryTakeoverProgressSnapshot,
     MemoryEntryTypeField,
+    MemoryRelationshipRecord,
     MemoryMutationHistoryRecord,
     PromptAssemblySnapshot,
     RoleEntryMemory,
@@ -23,6 +24,7 @@ import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieva
 import type { ContentPreviewSourceMode, RawFloorRecord } from '../../memory-takeover/content-block-pipeline';
 import type { DreamMaintenanceProposalRecord, DreamQualityReport, DreamSchedulerStateRecord, DreamSessionRecord } from '../../services/dream-types';
 import type { DreamUiStateSnapshot } from '../dream-ui-state-service';
+import type { MemoryDatabaseSnapshotInspectionReport } from '../../db/database-snapshot-inspector';
 
 export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'content-lab' | 'dream';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
@@ -172,6 +174,9 @@ export interface WorkbenchState {
     previewQuery: string;
     previewTabLoaded: boolean;
     previewTabLoading: boolean;
+    databaseSnapshotInspection: MemoryDatabaseSnapshotInspectionReport | null;
+    databaseSnapshotInspectionFileName: string;
+    databaseSnapshotInspectionLoading: boolean;
     worldProfileTestInput: string;
     worldProfileTestRunning: boolean;
     worldProfileTestResult: WorkbenchWorldProfileTestResult | null;
@@ -248,6 +253,7 @@ export interface WorkbenchSnapshot {
     entryTypes: MemoryEntryType[];
     entries: MemoryEntry[];
     actors: ActorMemoryProfile[];
+    relationships: MemoryRelationshipRecord[];
     roleMemories: RoleEntryMemory[];
     summaries: SummarySnapshot[];
     preview: PromptAssemblySnapshot | null;

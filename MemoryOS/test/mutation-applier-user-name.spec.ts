@@ -74,11 +74,11 @@ describe('applySummaryMutation user display name', () => {
         });
 
         expect(snapshot.summaryId).toBe('summary-1');
-        const upsert = applySnapshot.mock.calls[0][0].entryUpserts[0];
-        expect(upsert.title).toBe('林远与艾琳的关系');
-        expect(upsert.summary).toBe('她对林远保持警惕');
-        expect(upsert.detailPayload.fields.state).toBe('林远仍在观察名单中');
-        expect(upsert.detailPayload.targetActorKey).toBe('user');
-        expect(upsert.detailPayload.participants).toEqual(['char_erin', 'user']);
+        expect(applySnapshot.mock.calls[0][0].entryUpserts).toHaveLength(0);
+        const relationshipMutation = applySnapshot.mock.calls[0][0].relationshipMutations[0];
+        expect(relationshipMutation.summary).toBe('她对林远保持警惕');
+        expect(relationshipMutation.detailPayload.fields.state).toBe('林远仍在观察名单中');
+        expect(relationshipMutation.detailPayload.targetActorKey).toBe('user');
+        expect(relationshipMutation.detailPayload.participants).toEqual(['char_erin', 'user']);
     });
 });

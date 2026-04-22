@@ -103,7 +103,7 @@ const SUMMARY_COMMON_RULES: string[] = [
     'ADD 使用 newRecord，UPDATE、MERGE、INVALIDATE 使用 patch，DELETE 和 NOOP 不要输出 payload、patch、newRecord。',
     'compareKey 采用 ck:v2 协议；entityKey 是内部稳定键，compareKey 是跨流程比对键，matchKeys 仅用于模糊候选。',
     'actorKey 只能使用 user 或 actor_*，禁止输出 char_*、ck:*、ek:* 或任何临时引用。',
-    '不要输出 targetKind=actor_profile 或 targetKind=relationship 这类旧 entry 主链动作。',
+    '不要输出 targetKind=actor_profile；关系变化必须使用 targetKind=relationship，并提供 sourceActorKey、targetActorKey、relationTag 写入关系主表。',
     '无法确认同一对象时优先 NOOP、UPDATE 或 MERGE，不要因名字变化盲目 ADD。',
     'reasonCodes、candidateId、compareKey、matchKeys 不是每个动作都必须出现，只有确认时才填写。',
 ];
@@ -793,23 +793,8 @@ function takeoverConflictSample(): Record<string, unknown> {
 function takeoverConflictBatchSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: ['domain', 'conflictType', 'buckets', 'patches'],
+        required: ['patches'],
         properties: {
-            domain: { type: 'string' },
-            conflictType: { type: 'string' },
-            buckets: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    required: ['bucketId', 'domain', 'conflictType', 'records'],
-                    properties: {
-                        bucketId: { type: 'string' },
-                        domain: { type: 'string' },
-                        conflictType: { type: 'string' },
-                        records: { type: 'array', items: { type: 'object', additionalProperties: true } },
-                    },
-                },
-            },
             patches: {
                 type: 'array',
                 items: takeoverConflictSchema(),
@@ -820,25 +805,6 @@ function takeoverConflictBatchSchema(): Record<string, unknown> {
 
 function takeoverConflictBatchSample(): Record<string, unknown> {
     return {
-        domain: 'relationship',
-        conflictType: 'state_divergence',
-        buckets: [
-            {
-                bucketId: 'relationship/state_divergence/user_actor_erin',
-                domain: 'relationship',
-                conflictType: 'state_divergence',
-                records: [
-                    {
-                        sourceActorKey: 'user',
-                        targetActorKey: 'actor_erin',
-                        participants: ['user', 'actor_erin'],
-                        relationTag: '朋友',
-                        state: '双方已建立谨慎合作。',
-                        summary: '形成了可继续推进的合作关系。',
-                    },
-                ],
-            },
-        ],
         patches: [
             {
                 bucketId: 'relationship/state_divergence/user_actor_erin',

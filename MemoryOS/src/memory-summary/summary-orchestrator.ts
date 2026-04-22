@@ -889,6 +889,22 @@ function buildEditableFieldMap(typeSchemas: Array<{ schemaId: string; editableFi
     for (const schema of typeSchemas) {
         map.set(schema.schemaId, new Set(schema.editableFields));
     }
+    map.set('relationship', new Set([
+        'relationshipId',
+        'sourceActorKey',
+        'targetActorKey',
+        'relationTag',
+        'state',
+        'summary',
+        'trust',
+        'affection',
+        'tension',
+        'participants',
+        'fields.sourceActorKey',
+        'fields.targetActorKey',
+        'fields.relationTag',
+        'fields.state',
+    ]));
     return map;
 }
 
@@ -991,8 +1007,27 @@ function buildStrictSummaryMutationSchema(
 function buildStrictActionItemsSchema(
     typeSchemas: Array<{ schemaId: string; editableFields: string[] }>,
 ): Record<string, unknown> {
-    const targetKinds = Array.from(new Set(typeSchemas.map((item) => String(item.schemaId ?? '').trim()).filter(Boolean)));
-    const mergedEditableFields = Array.from(new Set(typeSchemas.flatMap((item) => item.editableFields ?? [])));
+    const targetKinds = Array.from(new Set([
+        ...typeSchemas.map((item) => String(item.schemaId ?? '').trim()).filter(Boolean),
+        'relationship',
+    ]));
+    const mergedEditableFields = Array.from(new Set([
+        ...typeSchemas.flatMap((item) => item.editableFields ?? []),
+        'relationshipId',
+        'sourceActorKey',
+        'targetActorKey',
+        'relationTag',
+        'state',
+        'summary',
+        'trust',
+        'affection',
+        'tension',
+        'participants',
+        'fields.sourceActorKey',
+        'fields.targetActorKey',
+        'fields.relationTag',
+        'fields.state',
+    ]));
     return {
         type: 'object',
         additionalProperties: false,

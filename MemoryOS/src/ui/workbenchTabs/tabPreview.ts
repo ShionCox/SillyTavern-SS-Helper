@@ -97,11 +97,14 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     <button class="stx-memory-workbench__button" data-action="refresh-preview"><i class="fa-solid fa-satellite-dish"></i> ${escapeHtml(resolvePreviewWorkbenchText('refresh_preview'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="capture-summary"><i class="fa-solid fa-camera"></i> ${escapeHtml(resolvePreviewWorkbenchText('capture_summary'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="export-chat-database"><i class="fa-solid fa-file-export"></i> ${escapeHtml(resolvePreviewWorkbenchText('export_chat_database'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="select-database-snapshot"><i class="fa-solid fa-file-import"></i> ${escapeHtml(resolvePreviewWorkbenchText('read_exported_database'))}</button>
+                    <input id="stx-memory-database-snapshot-file" type="file" accept="application/json,.json" hidden>
                     <button class="stx-memory-workbench__ghost-btn" data-action="clear-chat-database" style="border-color:rgba(239,68,68,0.4); color:var(--mw-warn);">
                         <i class="fa-solid fa-trash-can"></i> ${escapeHtml(resolvePreviewWorkbenchText('clear_chat_database'))}
                     </button>
                 </div>
             </div>
+            ${buildDatabaseSnapshotInspectionMarkup(state)}
             ${previewNotReady && !previewLoading ? `
                 <div class="stx-memory-workbench__card">
                     <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('lazy_placeholder'))}</div>
@@ -678,6 +681,72 @@ function buildNarrativeStyleDebugMarkup(value: unknown): string {
             <div>${escapeHtml(resolvePreviewWorkbenchText('secondary_style'))}：<strong>${escapeHtml(secondaryStyles.length > 0 ? secondaryStyles.map((item: string): string => resolveNarrativeStyleLabel(item)).join('、') : resolvePreviewWorkbenchText('empty_value'))}</strong></div>
             <div>${escapeHtml(resolvePreviewWorkbenchText('style_source'))}：<strong>${escapeHtml(resolveNarrativeStyleSourceLabel(source || ''))}</strong></div>
             <div>${escapeHtml(resolvePreviewWorkbenchText('style_stability'))}：<strong>${escapeHtml(isStable ? resolvePreviewWorkbenchText('style_stable') : resolvePreviewWorkbenchText('style_pending'))}</strong></div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：构建导出数据库读取检查面板。
+ * @param state 当前工作台状态。
+ * @returns 面板 HTML。
+ */
+function buildDatabaseSnapshotInspectionMarkup(state: WorkbenchState): string {
+    const report = state.databaseSnapshotInspection;
+    if (state.databaseSnapshotInspectionLoading) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_inspection'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_loading'))}</div>
+            </div>
+        `;
+    }
+    if (!report) {
+        return '';
+    }
+    const sourceLabel = report.sourceKind === 'prompt_test_bundle'
+        ? resolvePreviewWorkbenchText('database_snapshot_source_bundle')
+        : report.sourceKind === 'database_snapshot'
+            ? resolvePreviewWorkbenchText('database_snapshot_source_snapshot')
+            : resolvePreviewWorkbenchText('database_snapshot_source_unknown');
+    const statusText = report.valid
+        ? resolvePreviewWorkbenchText('database_snapshot_status_complete')
+        : resolvePreviewWorkbenchText('database_snapshot_status_incomplete');
+    const statusColor = report.valid ? 'var(--mw-accent-cyan)' : 'var(--mw-warn)';
+    const collectionRows = report.collectionCounts.map((item): string => `
+        <div class="stx-memory-workbench__info-row">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(String(item.count))}${item.present ? '' : ` · ${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_missing'))}`}</strong>
+        </div>
+    `).join('');
+    const missingText = report.missingFields.length > 0
+        ? report.missingFields.join('、')
+        : resolvePreviewWorkbenchText('database_snapshot_no_missing_fields');
+    const warningText = report.warnings.length > 0
+        ? report.warnings.join('；')
+        : resolvePreviewWorkbenchText('database_snapshot_no_warnings');
+
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_inspection'))}</div>
+            <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_file'))}</span><strong>${escapeHtml(state.databaseSnapshotInspectionFileName || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_status'))}</span><strong style="color:${statusColor};">${escapeHtml(statusText)}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_source'))}</span><strong>${escapeHtml(sourceLabel)}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>chatKey</span><strong>${escapeHtml(report.chatKey || resolvePreviewWorkbenchText('empty_value'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_generated_at'))}</span><strong>${escapeHtml(formatTimestamp(report.generatedAt))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_exported_at'))}</span><strong>${escapeHtml(formatTimestamp(report.exportedAt))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_invalid_records'))}</span><strong>${escapeHtml(String(report.invalidRecordCount))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_missing_fields'))}</span><strong>${escapeHtml(missingText)}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_warnings'))}</span><strong>${escapeHtml(warningText)}</strong></div>
+            </div>
+            <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple" style="margin-top:12px;">
+                ${collectionRows}
+            </div>
+            <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple" style="margin-top:12px;">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_vector_documents'))}</span><strong>${escapeHtml(String(report.vectorCounts.vectorDocuments))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_vector_index'))}</span><strong>${escapeHtml(String(report.vectorCounts.vectorIndex))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('database_snapshot_vector_recall_stats'))}</span><strong>${escapeHtml(String(report.vectorCounts.vectorRecallStats))}</strong></div>
+            </div>
         </div>
     `;
 }

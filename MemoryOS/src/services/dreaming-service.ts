@@ -971,7 +971,7 @@ export class DreamingService {
         if (mutationType === 'relationship_patch') {
             return normalizedPayload;
         }
-        const entryType = this.normalizeText(normalizedPayload.entryType) || 'other';
+        const entryType = this.normalizeText(normalizedPayload.entryType);
         const detailPayload = {
             ...this.toRecord(normalizedPayload.detailPayload),
         };
@@ -980,7 +980,7 @@ export class DreamingService {
             ...this.toRecord(detailPayload.fields),
         };
         const fieldPolicy = applyWorldProfileFieldPolicy({
-            schemaId: entryType,
+            schemaId: entryType || 'other',
             fields: baseFields,
             reasonCodes: [
                 ...this.normalizeStringArray(normalizedPayload.reasonCodes),

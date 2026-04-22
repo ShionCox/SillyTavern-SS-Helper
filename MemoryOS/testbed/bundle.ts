@@ -78,10 +78,12 @@ function normalizeDatabaseSnapshot(
         audit: Array.isArray(value.audit) ? value.audit : [],
         meta: (isRecord(value.meta) ? value.meta : null) as MemoryChatDatabaseSnapshot['meta'],
         memoryMutationHistory: Array.isArray(value.memoryMutationHistory) ? value.memoryMutationHistory : [],
+        memoryEntryAuditRecords: Array.isArray(value.memoryEntryAuditRecords) ? value.memoryEntryAuditRecords : [],
         memoryEntries: Array.isArray(value.memoryEntries) ? value.memoryEntries : [],
         memoryEntryTypes: Array.isArray(value.memoryEntryTypes) ? value.memoryEntryTypes : [],
         actorMemoryProfiles: Array.isArray(value.actorMemoryProfiles) ? value.actorMemoryProfiles : [],
         roleEntryMemory: Array.isArray(value.roleEntryMemory) ? value.roleEntryMemory : [],
+        memoryRelationships: Array.isArray(value.memoryRelationships) ? value.memoryRelationships : [],
         summarySnapshots: Array.isArray(value.summarySnapshots) ? value.summarySnapshots : [],
         worldProfileBindings: Array.isArray(value.worldProfileBindings) ? value.worldProfileBindings : [],
         pluginState: (isRecord(value.pluginState) ? value.pluginState : null) as MemoryChatDatabaseSnapshot['pluginState'],
@@ -114,7 +116,7 @@ export function normalizePromptTestBundleFromUnknown(
     const wrapped = isRecord(raw.payload)
         ? raw.payload
         : (isRecord(raw.bundle) ? raw.bundle : raw);
-    const fallbackChatKey = `memory_test::${Date.now()}`;
+    const fallbackChatKey = `test_chat_${Date.now()}`;
     const database = normalizeDatabaseSnapshot(
         wrapped.database
         ?? wrapped.snapshot

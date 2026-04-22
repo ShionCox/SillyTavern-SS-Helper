@@ -165,8 +165,8 @@ function readPromptMessages(): Array<Record<string, unknown>> {
 }
 
 /**
- * 功能：渲染当前活动 chatKey。
- * @param chatKey 聊天键。
+ * 功能：渲染当前活动 ChatId。
+ * @param chatKey 聊天 ID。
  * @returns 无返回值。
  */
 function renderActiveChat(chatKey: string): void {
@@ -227,7 +227,6 @@ function readBundleFromEditor(): MemoryPromptTestBundle | null {
  */
 function applyBundleToEditor(bundle: MemoryPromptTestBundle): void {
     activeBundle = bundle;
-    chatKeyInput.value = String(bundle.database.chatKey || bundle.sourceChatKey || '');
     queryInput.value = String(bundle.query || '');
     sourceMessageIdInput.value = String(bundle.sourceMessageId || '');
     promptInput.value = formatJson(Array.isArray(bundle.promptFixture) ? bundle.promptFixture : []);
@@ -311,7 +310,11 @@ async function runPipeline(): Promise<void> {
 
     const mode = detectPromptTestBundleMode(bundle);
     logger.info(`测试模式：${mode === 'exact_replay' ? 'exact_replay（严格模式）' : 'simulated_prompt（仅排障）'}`);
-    const targetChatKey = String(chatKeyInput.value || bundle.database.chatKey || '').trim() || `memory_test::${Date.now()}`;
+    const targetChatKey = String(chatKeyInput.value || '').trim();
+    if (!targetChatKey) {
+        logger.error('请先填写当前测试 ChatId。');
+        return;
+    }
     renderActiveChat(targetChatKey);
 
     const sdk = new MemorySDKImpl(targetChatKey);
@@ -454,7 +457,7 @@ async function exportBundleFromCurrentChat(): Promise<void> {
     logger.section('导出当前会话测试包');
     const chatKey = String(chatKeyInput.value || '').trim();
     if (!chatKey) {
-        logger.error('请先填写当前测试 ChatKey。');
+        logger.error('请先填写当前测试 ChatId。');
         return;
     }
     const sdk = new MemorySDKImpl(chatKey);
@@ -481,7 +484,7 @@ async function exportBundleFromCurrentChat(): Promise<void> {
 }
 
 /**
- * 功能：导入编辑器里的测试包到目标 chatKey。
+ * 功能：导入编辑器里的测试包到目标 ChatId。
  * @returns 异步执行完成。
  */
 async function importBundleFromEditor(): Promise<void> {
@@ -492,13 +495,17 @@ async function importBundleFromEditor(): Promise<void> {
         logger.error('测试包 JSON 无效，无法导入。');
         return;
     }
-    const targetChatKey = String(chatKeyInput.value || bundle.database.chatKey || '').trim() || `memory_test::${Date.now()}`;
+    const targetChatKey = String(chatKeyInput.value || '').trim();
+    if (!targetChatKey) {
+        logger.error('请先填写当前测试 ChatId。');
+        return;
+    }
     const sdk = new MemorySDKImpl(targetChatKey);
     try {
         await sdk.init();
         const imported = await sdk.chatState.importPromptTestBundleForTest(bundle, { targetChatKey });
         applyBundleToEditor(imported.bundle);
-        logger.info(`导入完成：chatKey=${imported.chatKey}`);
+        logger.info(`导入完成：ChatId=${imported.chatKey}`);
     } finally {
         await disposeMemorySdk(sdk);
     }
@@ -536,7 +543,7 @@ async function importBundleFromFile(file: File): Promise<void> {
 }
 
 /**
- * 功能：预览当前 chatKey 的数据库快照。
+ * 功能：预览当前 ChatId 的数据库快照。
  * @returns 异步执行完成。
  */
 async function previewCurrentDatabase(): Promise<void> {
@@ -544,7 +551,7 @@ async function previewCurrentDatabase(): Promise<void> {
     logger.section('读取数据库快照');
     const chatKey = String(chatKeyInput.value || '').trim();
     if (!chatKey) {
-        logger.error('请先填写当前测试 ChatKey。');
+        logger.error('请先填写当前测试 ChatId。');
         return;
     }
     const sdk = new MemorySDKImpl(chatKey);
@@ -566,7 +573,7 @@ async function previewCurrentDatabase(): Promise<void> {
 }
 
 /**
- * 功能：清空当前测试 chatKey 的 MemoryOS 数据。
+ * 功能：清空当前测试 ChatId 的 MemoryOS 数据。
  * @returns 异步执行完成。
  */
 async function clearCurrentTestDatabase(): Promise<void> {
@@ -574,7 +581,7 @@ async function clearCurrentTestDatabase(): Promise<void> {
     logger.section('清空数据库');
     const chatKey = String(chatKeyInput.value || '').trim();
     if (!chatKey) {
-        logger.error('请先填写当前测试 ChatKey。');
+        logger.error('请先填写当前测试 ChatId。');
         return;
     }
     const sdk = new MemorySDKImpl(chatKey);
@@ -618,7 +625,7 @@ async function clearCurrentTestDatabase(): Promise<void> {
             clearedAt: Date.now(),
             message: '当前测试数据库已清空。',
         });
-        logger.info(`清空完成：chatKey=${chatKey}`);
+        logger.info(`清空完成：ChatId=${chatKey}`);
     } finally {
         await disposeMemorySdk(sdk);
     }
@@ -643,7 +650,7 @@ function clearResultViews(): void {
  * @returns 无返回值。
  */
 function bootstrapPage(): void {
-    chatKeyInput.value = `memory_test::${Date.now()}`;
+    chatKeyInput.value = `test_chat_${Date.now()}`;
     queryInput.value = '厄尔多利亚是什么地方';
     sourceMessageIdInput.value = 'u-last';
     promptInput.value = formatJson(DEFAULT_PROMPT_MESSAGES);

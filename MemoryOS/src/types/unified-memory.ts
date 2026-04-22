@@ -359,6 +359,30 @@ export interface ApplyLedgerMutationBatchResult {
     historyWritten: boolean;
 }
 
+/**
+ * 功能：定义总结写回关系主表的诊断信息。
+ */
+export interface SummaryRelationshipMutationDiagnostics {
+    appliedRelationshipMutationIds: string[];
+    skippedMutationIds: string[];
+    createdRelationshipIds: string[];
+    updatedRelationshipIds: string[];
+    affectedRelationshipIds: string[];
+    historyWritten: boolean;
+}
+
+/**
+ * 功能：定义总结落库阶段的合并诊断信息。
+ */
+export interface SummaryMutationApplyDiagnostics extends ApplyLedgerMutationBatchResult {
+    relationshipResult?: SummaryRelationshipMutationDiagnostics;
+    appliedRelationshipMutationIds?: string[];
+    skippedRelationshipMutationIds?: string[];
+    createdRelationshipIds?: string[];
+    updatedRelationshipIds?: string[];
+    affectedRelationshipIds?: string[];
+}
+
 export interface SummarySnapshot {
     summaryId: string;
     chatKey: string;
@@ -373,7 +397,7 @@ export interface SummarySnapshot {
     actorKeys: string[];
     entryUpserts: SummaryEntryUpsert[];
     refreshBindings: SummaryRefreshBinding[];
-    mutationApplyDiagnostics?: ApplyLedgerMutationBatchResult;
+    mutationApplyDiagnostics?: SummaryMutationApplyDiagnostics;
     createdAt: number;
     updatedAt: number;
 }
@@ -689,6 +713,20 @@ export const CORE_MEMORY_ENTRY_TYPES: Array<{
         fields: [
             { key: 'objective', label: '目标', kind: 'textarea' },
             { key: 'status', label: '当前状态', kind: 'text' },
+        ],
+    },
+    {
+        key: 'dream_summary_candidate',
+        label: '梦境总结候选',
+        category: '其他',
+        description: '梦境系统整理出的总结候选，不等同于正式长期记忆。',
+        injectToSystem: false,
+        bindableToRole: false,
+        icon: 'fa-solid fa-moon',
+        accentColor: '#8b5cf6',
+        fields: [
+            { key: 'candidateSummary', label: '候选摘要', kind: 'textarea' },
+            { key: 'sourceHighlights', label: '来源洞察', kind: 'tags' },
         ],
     },
     {

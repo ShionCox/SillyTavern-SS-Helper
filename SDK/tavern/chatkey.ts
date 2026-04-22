@@ -1,5 +1,5 @@
 import { getTavernContextSnapshotEvent } from "./context";
-import { buildTavernChatScopedKeyEvent } from "./normalize";
+import { buildTavernChatScopedKeyEvent, isFallbackTavernChatEvent } from "./normalize";
 
 /**
  * 功能：根据当前酒馆上下文自动构建标准化 chatKey。
@@ -14,4 +14,15 @@ export function buildSdkChatKeyEvent(): string {
     ...scope,
     chatId: scope.currentChatId,
   });
+}
+
+/**
+ * 功能：根据当前酒馆上下文读取官方聊天 ID。
+ * @returns 官方聊天 ID；无有效聊天时返回空字符串
+ */
+export function buildSdkChatIdEvent(): string {
+  const scope = getTavernContextSnapshotEvent();
+  const chatId = String(scope?.currentChatId ?? "").trim();
+  if (!chatId || isFallbackTavernChatEvent(chatId)) return "";
+  return chatId;
 }

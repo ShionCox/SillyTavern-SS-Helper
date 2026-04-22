@@ -93,4 +93,128 @@ describe('DreamMutationTranslator', () => {
         expect((translated[1]?.detailPayload as Record<string, unknown>)?.sourceActorKey).toBe('user');
         expect((translated[1]?.sourceContext as Record<string, unknown>)?.mutationId).toBe('m2');
     });
+
+    it('缺少明确 entryType 时会推断正式类型，不再兜底为 other', () => {
+        const translator = new DreamMutationTranslator();
+        const mutations: DreamMutationProposal[] = [
+            {
+                mutationId: 'm_scene',
+                mutationType: 'entry_create',
+                confidence: 0.78,
+                reason: '实验室状态发生了明确变化。',
+                sourceWave: 'recent',
+                sourceEntryIds: ['entry_scene'],
+                preview: '实验室状态更新',
+                payload: {
+                    title: '实验室基地状态',
+                    summary: '实验室基础设施完成测试。',
+                    fieldsJson: '{"location":"实验室","visibilityScope":"全员可见"}',
+                },
+            },
+            {
+                mutationId: 'm_task',
+                mutationType: 'entry_create',
+                confidence: 0.79,
+                reason: '形成了明确目标。',
+                sourceWave: 'mid',
+                sourceEntryIds: ['entry_task'],
+                preview: '建立食物供应',
+                payload: {
+                    title: '建立食物供应',
+                    summary: '需要建立稳定食物供应。',
+                    fieldsJson: '{"objective":"建立食物供应","status":"进行中"}',
+                },
+            },
+            {
+                mutationId: 'm_world',
+                mutationType: 'entry_create',
+                confidence: 0.8,
+                reason: '形成了长期世界状态。',
+                sourceWave: 'deep',
+                sourceEntryIds: ['entry_world'],
+                preview: '夜禁状态',
+                payload: {
+                    title: '夜禁状态',
+                    summary: '城市进入夜禁状态。',
+                    fieldsJson: '{"scope":"城市","state":"夜禁中"}',
+                },
+            },
+        ];
+
+        const translated = translator.translateMutations({
+            dreamId: 'dream_2',
+            mutations,
+        });
+
+        expect(translated.map((mutation) => mutation.targetKind)).toEqual([
+            'scene_shared_state',
+            'task',
+            'world_global_state',
+        ]);
+        expect(translated.some((mutation) => mutation.targetKind === 'other')).toBe(false);
+    });
+
+    it('无法分类或低置信的梦境洞察只保留在梦境中，不写入主记忆', () => {
+        const translator = new DreamMutationTranslator();
+        const translated = translator.translateMutations({
+            dreamId: 'dream_3',
+            mutations: [
+                {
+                    mutationId: 'm_low',
+                    mutationType: 'entry_create',
+                    confidence: 0.5,
+                    reason: '只是象征性联想。',
+                    sourceWave: 'deep',
+                    sourceEntryIds: ['entry_low'],
+                    preview: '梦境洞察',
+                    payload: {
+                        title: '梦境洞察',
+                        summary: '记忆在梦里轻微震荡。',
+                    },
+                },
+                {
+                    mutationId: 'm_unknown',
+                    mutationType: 'entry_create',
+                    confidence: 0.82,
+                    reason: '没有足够结构化字段。',
+                    sourceWave: 'deep',
+                    sourceEntryIds: ['entry_unknown'],
+                    preview: '梦境洞察',
+                    payload: {
+                        title: '梦境洞察',
+                        summary: '一些抽象感受浮现。',
+                    },
+                },
+            ],
+        });
+
+        expect(translated).toEqual([]);
+    });
+
+    it('关系形态的 entry_create 不会退化为 other 记忆块', () => {
+        const translator = new DreamMutationTranslator();
+        const translated = translator.translateMutations({
+            dreamId: 'dream_4',
+            mutations: [
+                {
+                    mutationId: 'm_relation_like',
+                    mutationType: 'entry_create',
+                    confidence: 0.82,
+                    reason: '载荷更像关系更新而不是普通条目。',
+                    sourceWave: 'mid',
+                    sourceEntryIds: ['entry_relation'],
+                    preview: '关系变化',
+                    payload: {
+                        title: '信任升温',
+                        sourceActorKey: 'user',
+                        targetActorKey: 'char_erin',
+                        relationTag: '伙伴',
+                        summary: '双方信任有所提升。',
+                    },
+                },
+            ],
+        });
+
+        expect(translated).toEqual([]);
+    });
 });

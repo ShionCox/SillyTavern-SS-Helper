@@ -178,7 +178,7 @@ async function resolveBucketChunkByLLM(input: {
                 '你当前处理的是一批同类冲突桶。',
                 '每个 bucket 必须独立裁决，不要跨 bucket 合并。',
                 '优先保守合并；拿不准就保留主记录。',
-                '只输出 patches，不要输出额外说明。',
+                '只输出一个 JSON 根对象，且根对象只允许包含 patches 字段；不要回显 domain、conflictType、buckets 或额外说明。',
             ].join('\n'),
         });
 

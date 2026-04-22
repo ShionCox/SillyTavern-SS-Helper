@@ -9,32 +9,34 @@ describe('takeover conflict resolver', () => {
     it('uses rules to merge same-participant relationship progression', () => {
         const bucket: PipelineConflictBucketRecord = {
             jobId: 'takeover:test',
-            bucketId: 'relationship/state_divergence/user_char_heying',
+            bucketId: 'relationship/state_divergence/user_actor_heying',
             domain: 'relationship',
             conflictType: 'state_divergence',
             resolutionStatus: 'pending',
             records: [
                 {
                     sourceActorKey: 'user',
-                    targetActorKey: 'char_heying',
-                    participants: ['user', 'char_heying'],
+                    targetActorKey: 'actor_heying',
+                    participants: ['user', 'actor_heying'],
                     relationTag: '暧昧',
                     state: '两人重新建立联系。',
                     summary: '旧情复燃的前奏。',
                     trust: 0.4,
                     affection: 0.8,
                     tension: 0.7,
+                    compareKey: 'ck:v2:relationship:user:actor_heying:暧昧',
                 },
                 {
                     sourceActorKey: 'user',
-                    targetActorKey: 'char_heying',
-                    participants: ['user', 'char_heying'],
+                    targetActorKey: 'actor_heying',
+                    participants: ['user', 'actor_heying'],
                     relationTag: '暧昧',
                     state: '两人已经在梦境中确认彼此依恋。',
                     summary: '关系推进到更深层亲密。',
                     trust: 0.8,
                     affection: 0.95,
                     tension: 0.5,
+                    compareKey: 'ck:v2:relationship:user:actor_heying:暧昧',
                 },
             ],
         };
@@ -79,7 +81,22 @@ describe('takeover conflict resolver', () => {
             },
         ];
 
-        const runTask = vi.fn(async () => {
+        const runTask = vi.fn(async (_args: unknown): Promise<{
+            ok: true;
+            data: {
+                patches: Array<{
+                    bucketId: string;
+                    domain: string;
+                    resolutions: Array<{
+                        action: string;
+                        primaryKey: string;
+                        secondaryKeys: string[];
+                        fieldOverrides: Record<string, unknown>;
+                        reasonCodes: string[];
+                    }>;
+                }>;
+            };
+        }> => {
             return {
                 ok: true as const,
                 data: {
@@ -133,5 +150,17 @@ describe('takeover conflict resolver', () => {
         expect(result.llmResolvedCount).toBe(2);
         expect(result.patches).toHaveLength(2);
         expect(result.patches.every((patch) => patch.resolutions[0].resolverSource === 'llm_batch_resolver')).toBe(true);
+
+        const runArg = runTask.mock.calls[0]?.[0] as {
+            schema?: { required?: string[]; properties?: Record<string, unknown> };
+            input?: { messages?: Array<{ content: string }> };
+        };
+        const promptText = runArg.input?.messages?.map((item) => item.content).join('\n') ?? '';
+        expect(runArg.schema?.required).toEqual(['patches']);
+        expect(runArg.schema?.properties).not.toHaveProperty('domain');
+        expect(runArg.schema?.properties).not.toHaveProperty('conflictType');
+        expect(runArg.schema?.properties).not.toHaveProperty('buckets');
+        expect(promptText).toContain('根对象只允许包含 patches 字段');
+        expect(promptText).toContain('不要回显 domain、conflictType、buckets');
     });
 });

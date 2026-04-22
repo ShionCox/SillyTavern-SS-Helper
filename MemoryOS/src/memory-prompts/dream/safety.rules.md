@@ -7,3 +7,4 @@
 6. mutation payload 必须能落到现有主链字段。
 7. mutation 数量不得超过运行时上限。
 8. 对角色身份、世界规则、核心设定等高风险内容保持保守。
+9. 不得用 `other` 承接梦境洞察；无法分类的洞察只保留在 narrative / highlights。

@@ -4,11 +4,9 @@ import type { PluginManifest, RegistryChangeEvent } from '../../../SDK/stx';
 import { EventBus } from '../../../SDK/bus/bus';
 import { MemorySDKImpl } from '../sdk/memory-sdk';
 import {
-    buildSdkChatKeyEvent,
+    buildSdkChatIdEvent,
     extractTavernPromptMessagesEvent,
     getTavernMessageTextEvent,
-    isFallbackTavernChatEvent,
-    parseTavernChatScopedKeyEvent,
 } from '../../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { db, rebuildSSHelperDatabase } from '../db/db';
@@ -445,7 +443,7 @@ export class MemoryOS {
                     return;
                 }
                 const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
-                const currentChatKey = String(memory?.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+                const currentChatKey = String(memory?.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
                 if (!currentChatKey || chatKey !== currentChatKey) {
                     return;
                 }
@@ -469,7 +467,7 @@ export class MemoryOS {
         try {
             const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
             if (!memory) return;
-            const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+            const chatKey = String(memory.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
             if (!chatKey) return;
             // 更新或创建状态服务。
             if (!this.dreamUiStateService || (this.dreamUiStateService as unknown as { chatKey: string }).chatKey !== chatKey) {
@@ -680,7 +678,7 @@ export class MemoryOS {
             toast.info('当前聊天尚未连接到记忆主链，请稍后再试。');
             return;
         }
-        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
         if (!chatKey) {
             toast.warning('当前无法识别聊天上下文，暂时不能启动梦境。');
             return;
@@ -727,9 +725,8 @@ export class MemoryOS {
             updateMemorySummaryProgressFloat(null);
             return;
         }
-        const currentChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
-        const hasActiveChat = currentChatKey
-            && !isFallbackTavernChatEvent(parseTavernChatScopedKeyEvent(currentChatKey).chatId);
+        const currentChatKey = String(buildSdkChatIdEvent() ?? '').trim();
+        const hasActiveChat = Boolean(currentChatKey);
         const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
         if (!memory) {
             setMemorySummaryProgressFloatEnabled(true);
@@ -818,11 +815,6 @@ export class MemoryOS {
         if (!normalizedChatKey) {
             return;
         }
-        const parsedChatRef = parseTavernChatScopedKeyEvent(normalizedChatKey);
-        if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
-            logger.info(`跳过聊天初始化：当前聊天仍是占位 chatId (${parsedChatRef.chatId})`);
-            return;
-        }
         const settings = this.readSettings();
         let detection = await sdk.chatState.detectTakeoverNeeded();
         if (Number(detection.currentFloorCount ?? 0) <= 0) {
@@ -868,7 +860,7 @@ export class MemoryOS {
             return false;
         }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
-        return String(buildSdkChatKeyEvent() ?? '').trim() === normalizedChatKey;
+        return String(buildSdkChatIdEvent() ?? '').trim() === normalizedChatKey;
     }
 
     /**
@@ -1069,7 +1061,7 @@ export class MemoryOS {
                 const mergedKeys = Array.from(new Set([
                     ...metaKeys.map((value: unknown): string => String(value ?? '').trim()).filter(Boolean),
                     ...eventKeys.map((value: unknown): string => String(value ?? '').trim()).filter(Boolean),
-                ]));
+                ])).filter((value: string): boolean => !value.includes('::'));
                 return {
                     chatKeys: mergedKeys,
                     updatedAt: Date.now(),
@@ -1177,17 +1169,8 @@ export class MemoryOS {
             } = {},
         ): Promise<void> => {
             const triggerColdStart = options.triggerColdStart === true;
-            const chatKey = String(buildSdkChatKeyEvent() ?? '').trim();
+            const chatKey = String(buildSdkChatIdEvent() ?? '').trim();
             if (!chatKey) {
-                currentChatKey = '';
-                this.clearActiveMemoryBinding();
-                return;
-            }
-            const parsedChatRef = parseTavernChatScopedKeyEvent(chatKey);
-            if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
-                if (currentChatKey) {
-                    logger.info(`跳过首页占位聊天绑定: ${chatKey}`);
-                }
                 currentChatKey = '';
                 this.clearActiveMemoryBinding();
                 return;
@@ -1337,7 +1320,7 @@ export class MemoryOS {
                 return;
             }
             if (settings.summaryAutoTriggerEnabled) {
-                const summaryKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+                const summaryKey = String(memory.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
                 if (summaryKey) {
                     this.summaryRunningChats.add(summaryKey);
                 }
@@ -1519,7 +1502,7 @@ export class MemoryOS {
         if (!this.dreamScheduler) {
             return;
         }
-        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatKeyEvent() ?? '').trim();
+        const chatKey = String(memory.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
         if (!chatKey) {
             return;
         }

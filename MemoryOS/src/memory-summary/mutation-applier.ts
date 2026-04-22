@@ -1,4 +1,4 @@
-import type { MemoryEntry, SummaryRefreshBinding, SummarySnapshot, SummaryEntryUpsert } from '../types';
+import type { LedgerMutation, MemoryEntry, SummaryRefreshBinding, SummarySnapshot, SummaryEntryUpsert } from '../types';
 import type { SummaryCandidateRecord } from '../memory-summary-planner';
 import { normalizeSummarySnapshot, type NormalizedSummaryDigest } from '../memory-summary-planner';
 import type { SummaryMutationDocument, SummaryMutationAction } from './mutation-types';
@@ -25,6 +25,7 @@ export interface MutationApplyDependencies {
         normalizedSummary?: NormalizedSummaryDigest;
         actorKeys: string[];
         entryUpserts?: SummaryEntryUpsert[];
+        relationshipMutations?: LedgerMutation[];
         refreshBindings?: SummaryRefreshBinding[];
     }): Promise<SummarySnapshot>;
     deleteEntry?(entryId: string, options?: {
@@ -59,6 +60,7 @@ export async function applySummaryMutation(input: ApplySummaryMutationInput): Pr
         input.candidateRecords.map((candidate: SummaryCandidateRecord): [string, SummaryCandidateRecord] => [candidate.candidateId, candidate]),
     );
     const entryUpserts: SummaryEntryUpsert[] = [];
+    const relationshipMutations: LedgerMutation[] = [];
     const refreshBindings: SummaryRefreshBinding[] = [];
 
     for (let actionIndex = 0; actionIndex < input.mutationDocument.actions.length; actionIndex += 1) {
@@ -70,6 +72,7 @@ export async function applySummaryMutation(input: ApplySummaryMutationInput): Pr
             dependencies: input.dependencies,
             candidateIdMap,
             entryUpserts,
+            relationshipMutations,
             refreshBindings,
             actorKeys: input.actorKeys,
             userDisplayName,
@@ -86,6 +89,7 @@ export async function applySummaryMutation(input: ApplySummaryMutationInput): Pr
         }),
         actorKeys: input.actorKeys,
         entryUpserts,
+        relationshipMutations,
         refreshBindings,
     });
 }
@@ -101,6 +105,7 @@ async function applySingleAction(input: {
     dependencies: MutationApplyDependencies;
     candidateIdMap: Map<string, SummaryCandidateRecord>;
     entryUpserts: SummaryEntryUpsert[];
+    relationshipMutations: LedgerMutation[];
     refreshBindings: SummaryRefreshBinding[];
     actorKeys: string[];
     userDisplayName: string;
@@ -112,6 +117,21 @@ async function applySingleAction(input: {
     const candidate = input.action.candidateId ? input.candidateIdMap.get(input.action.candidateId) : null;
     const resolvedRecordId = String(input.action.targetId ?? candidate?.recordId ?? '').trim();
     const payload = resolveActionPayload(input.action, input.userDisplayName);
+    if (normalizeTargetSchemaId(input.action.targetKind, candidate?.schemaId) === 'relationship') {
+        const relationshipMutation = await buildRelationshipMutation({
+            dependencies: input.dependencies,
+            action: input.action,
+            actionIndex: input.actionIndex,
+            candidate: candidate ?? null,
+            payload,
+            resolvedRecordId,
+            userDisplayName: input.userDisplayName,
+        });
+        if (relationshipMutation) {
+            input.relationshipMutations.push(relationshipMutation);
+        }
+        return;
+    }
     if (actionType === 'DELETE' && resolvedRecordId && input.dependencies.deleteEntry) {
         await input.dependencies.deleteEntry(resolvedRecordId, {
             actionType: 'DELETE',
@@ -209,6 +229,130 @@ async function applySingleAction(input: {
             entryTitle: upsert.title,
         });
     }
+}
+
+/**
+ * 功能：把总结中的关系 action 转换为关系主表 mutation。
+ * @param input 转换输入。
+ * @returns 关系 mutation；无法解析端点时返回 null。
+ */
+async function buildRelationshipMutation(input: {
+    dependencies: MutationApplyDependencies;
+    action: SummaryMutationAction;
+    actionIndex: number;
+    candidate: SummaryCandidateRecord | null;
+    payload: Record<string, unknown>;
+    resolvedRecordId: string;
+    userDisplayName: string;
+}): Promise<LedgerMutation | null> {
+    const existingEntry = input.resolvedRecordId ? await input.dependencies.getEntry(input.resolvedRecordId) : null;
+    const existingPayload = normalizeRecord(existingEntry?.detailPayload);
+    const existingFields = normalizeRecord(existingPayload.fields);
+    const payloadFields = normalizeRecord(input.payload.fields);
+    const sourceActorKey = normalizeRelationshipActorKey(
+        input.payload.sourceActorKey
+        ?? payloadFields.sourceActorKey
+        ?? existingPayload.sourceActorKey
+        ?? existingFields.sourceActorKey,
+    );
+    const targetActorKey = normalizeRelationshipActorKey(
+        input.payload.targetActorKey
+        ?? payloadFields.targetActorKey
+        ?? existingPayload.targetActorKey
+        ?? existingFields.targetActorKey,
+    );
+    const relationTag = String(
+        input.payload.relationTag
+        ?? payloadFields.relationTag
+        ?? existingPayload.relationTag
+        ?? existingFields.relationTag
+        ?? input.action.title
+        ?? input.candidate?.title
+        ?? '',
+    ).trim();
+    if (!sourceActorKey || !targetActorKey || !relationTag) {
+        return null;
+    }
+    const relationshipId = resolveRelationshipMutationId(input.resolvedRecordId, input.payload, existingPayload);
+    const participants = dedupeStrings([
+        ...toStringArray(input.payload.participants),
+        ...toStringArray(payloadFields.participants),
+        ...toStringArray(existingPayload.participants),
+        sourceActorKey,
+        targetActorKey,
+    ]);
+    const detailPayload = normalizeNarrativeValue({
+        ...existingPayload,
+        ...input.payload,
+        fields: {
+            ...existingFields,
+            ...payloadFields,
+            sourceActorKey,
+            targetActorKey,
+            relationTag,
+        },
+        relationshipId: relationshipId || undefined,
+        sourceActorKey,
+        targetActorKey,
+        relationTag,
+        participants,
+        state: input.payload.state ?? payloadFields.state ?? existingPayload.state ?? existingFields.state,
+        trust: input.payload.trust ?? payloadFields.trust ?? existingPayload.trust,
+        affection: input.payload.affection ?? payloadFields.affection ?? existingPayload.affection,
+        tension: input.payload.tension ?? payloadFields.tension ?? existingPayload.tension,
+    }, input.userDisplayName);
+    return {
+        targetKind: 'relationship',
+        action: input.action.action as LedgerMutation['action'],
+        title: relationTag,
+        summary: normalizeUserNarrativeText(
+            String(input.payload.summary ?? existingEntry?.summary ?? input.candidate?.summary ?? relationTag).trim(),
+            input.userDisplayName,
+        ),
+        detailPayload,
+        compareKey: input.action.compareKey ?? input.candidate?.compareKey,
+        reasonCodes: input.action.reasonCodes,
+        sourceContext: {
+            mutationId: `summary_relationship_${input.actionIndex + 1}`,
+            relationshipId: relationshipId || undefined,
+            sourceActorKey,
+            targetActorKey,
+            relationTag,
+        },
+        timeContext: input.action.timeContext,
+    };
+}
+
+/**
+ * 功能：归一化关系角色键。
+ * @param value 原始值。
+ * @returns 标准化后的角色键。
+ */
+function normalizeRelationshipActorKey(value: unknown): string {
+    return String(value ?? '').trim();
+}
+
+/**
+ * 功能：解析关系 mutation 的主表 ID。
+ * @param resolvedRecordId 已解析记录 ID。
+ * @param payload action payload。
+ * @param existingPayload 旧条目载荷。
+ * @returns 关系主表 ID。
+ */
+function resolveRelationshipMutationId(
+    resolvedRecordId: string,
+    payload: Record<string, unknown>,
+    existingPayload: Record<string, unknown>,
+): string {
+    const explicit = String(payload.relationshipId ?? existingPayload.relationshipId ?? '').trim();
+    if (explicit) {
+        return explicit;
+    }
+    return resolvedRecordId.startsWith('relationship:')
+        || resolvedRecordId.startsWith('rel_')
+        || resolvedRecordId.startsWith('rel-')
+        ? resolvedRecordId
+        : '';
 }
 
 /**

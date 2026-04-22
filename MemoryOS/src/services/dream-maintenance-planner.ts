@@ -281,7 +281,7 @@ export class DreamMaintenancePlanner {
         const payload = toRecord(proposal.payload);
         const saved = await this.repository.saveEntry({
             title: normalizeText(payload.candidateTitle) || '梦境洞察',
-            entryType: 'other',
+            entryType: 'dream_summary_candidate',
             summary: normalizeText(payload.candidateSummary),
             detail: normalizeText(payload.candidateSummary),
             tags: ['dream', 'dream_summary_candidate', 'summary_candidate'],
