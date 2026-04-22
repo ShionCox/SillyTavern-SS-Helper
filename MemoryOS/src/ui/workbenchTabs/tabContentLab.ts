@@ -48,6 +48,7 @@ export function buildContentLabViewMarkup(snapshot: WorkbenchSnapshot, state: Wo
             <div class="stx-memory-workbench__split stx-content-lab__split">
                 <!-- 左侧：规则编辑区 -->
                 <div class="stx-content-lab__column stx-content-lab__column--editor">
+                    ${buildContentSplitSwitch(state)}
                     ${buildTagRegistryTable(registry, state)}
                     ${buildUnknownTagPolicyEditor(state)}
                     ${buildClassifierToggles(state)}
@@ -75,6 +76,28 @@ export function buildContentLabViewMarkup(snapshot: WorkbenchSnapshot, state: Wo
                 </div>
             </div>
         </section>
+    `;
+}
+
+/**
+ * 功能：渲染旧聊天接管内容拆分总开关。
+ */
+function buildContentSplitSwitch(state: WorkbenchState): string {
+    return `
+        <div class="stx-memory-workbench__card" style="margin-bottom:12px;">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('takeover_split_switch'))}</div>
+            <div class="stx-memory-workbench__checkbox-row">
+                ${buildSharedBoxCheckbox({
+                    id: 'stx-content-lab-enable-content-split',
+                    appearance: 'check',
+                    inputAttributes: {
+                        checked: state.contentLabEnableContentSplit,
+                    },
+                })}
+                <label for="stx-content-lab-enable-content-split">${escapeHtml(resolveContentLabText('enable_takeover_content_split'))}</label>
+            </div>
+            <div class="stx-memory-workbench__meta" style="margin-top:6px;">${escapeHtml(resolveContentLabText('takeover_split_switch_desc'))}</div>
+        </div>
     `;
 }
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { buildTakeoverBatches, buildTakeoverPlan } from '../src/memory-takeover/takeover-planner';
 
 const DEFAULTS = {
-    detectMinFloors: 50,
     recentFloors: 60,
     batchSize: 30,
     prioritizeRecent: true,

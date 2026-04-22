@@ -12,6 +12,7 @@ const MEMORY_BOOTSTRAP_DIALOG_ID: string = 'stx-memory-bootstrap-dialog';
 const MEMORY_BOOTSTRAP_DIALOG_STYLE_ID: string = 'stx-memory-bootstrap-dialog-style';
 const MEMORY_BOOTSTRAP_CONFIRM_SELECTOR: string = '[data-memory-bootstrap-confirm="true"]';
 const MEMORY_BOOTSTRAP_CANCEL_SELECTOR: string = '[data-memory-bootstrap-cancel="true"]';
+const MEMORY_BOOTSTRAP_SUPPRESS_SELECTOR: string = '[data-memory-bootstrap-suppress="true"]';
 const MEMORY_BOOTSTRAP_BOOK_SELECTOR: string = '[data-memory-bootstrap-book]';
 const MEMORY_BOOTSTRAP_ENTRY_SELECTOR: string = '[data-memory-bootstrap-entry]';
 const MEMORY_BOOTSTRAP_EXPAND_SELECTOR: string = '[data-memory-bootstrap-expand]';
@@ -59,6 +60,7 @@ interface MemoryBootstrapDialogData {
  */
 export interface MemoryBootstrapDialogResult {
     confirmed: boolean;
+    suppressForChat: boolean;
     selectedWorldbooks: string[];
     selectedEntries: Array<{
         book: string;
@@ -552,6 +554,7 @@ function buildMemoryBootstrapDialogShellHtml(): string {
             </p>
             <div class="stx-memory-bootstrap-dialog__actions">
                 <button type="button" class="stx-memory-bootstrap-dialog__button" data-memory-bootstrap-cancel="true">暂不执行</button>
+                <button type="button" class="stx-memory-bootstrap-dialog__button" data-memory-bootstrap-suppress="true">本聊天不再显示冷启动</button>
                 <button type="button" class="stx-memory-bootstrap-dialog__button stx-memory-bootstrap-dialog__button--primary" data-memory-bootstrap-confirm="true">按当前选择执行冷启动</button>
             </div>
         </div>
@@ -723,6 +726,7 @@ export async function openMemoryBootstrapDialog(): Promise<MemoryBootstrapDialog
     return new Promise<MemoryBootstrapDialogResult>((resolve: (value: MemoryBootstrapDialogResult) => void): void => {
         let settled = false;
         let confirmed = false;
+        let suppressForChat = false;
         const selectedBooks = new Set<string>(dialogData.initialSelectedBooks);
         const selectedEntryKeys = new Set<string>(dialogData.initialSelectedEntryKeys);
         const expandedBooks = new Set<string>();
@@ -864,6 +868,7 @@ export async function openMemoryBootstrapDialog(): Promise<MemoryBootstrapDialog
                 });
             resolve({
                 confirmed,
+                suppressForChat,
                 selectedWorldbooks: dialogData.books
                     .map((book): string => book.name)
                     .filter((bookName): boolean => selectedBooks.has(bookName)),
@@ -890,12 +895,18 @@ export async function openMemoryBootstrapDialog(): Promise<MemoryBootstrapDialog
                 rerender(instance);
                 const confirmButton = instance.content.querySelector(MEMORY_BOOTSTRAP_CONFIRM_SELECTOR) as HTMLButtonElement | null;
                 const cancelButton = instance.content.querySelector(MEMORY_BOOTSTRAP_CANCEL_SELECTOR) as HTMLButtonElement | null;
+                const suppressButton = instance.content.querySelector(MEMORY_BOOTSTRAP_SUPPRESS_SELECTOR) as HTMLButtonElement | null;
                 confirmButton?.addEventListener('click', (): void => {
                     confirmed = true;
                     void instance.close('button');
                 });
                 cancelButton?.addEventListener('click', (): void => {
                     confirmed = false;
+                    void instance.close('button');
+                });
+                suppressButton?.addEventListener('click', (): void => {
+                    confirmed = false;
+                    suppressForChat = true;
                     void instance.close('button');
                 });
             },

@@ -168,6 +168,8 @@ export interface ClassifierToggleConfig {
  * 功能：定义内容实验室完整配置。
  */
 export interface ContentLabSettings {
+    /** 是否启用旧聊天接管内容拆分 */
+    enableContentSplit: boolean;
     /** 标签注册表 */
     tagRegistry: ContentBlockPolicy[];
     /** 未知标签处理策略 */
@@ -191,6 +193,7 @@ export const DEFAULT_CLASSIFIER_TOGGLES: ClassifierToggleConfig = {
  * 功能：默认内容实验室配置。
  */
 export const DEFAULT_CONTENT_LAB_SETTINGS: ContentLabSettings = {
+    enableContentSplit: false,
     tagRegistry: [...DEFAULT_CONTENT_TAG_REGISTRY],
     unknownTagPolicy: { ...DEFAULT_UNKNOWN_TAG_POLICY },
     classifierToggles: { ...DEFAULT_CLASSIFIER_TOGGLES },
@@ -251,6 +254,7 @@ export function applyContentLabSettings(settings: Partial<ContentLabSettings>): 
         tagRegistry: settings.tagRegistry ?? _runtimeContentLabSettings.tagRegistry,
         unknownTagPolicy: settings.unknownTagPolicy ?? _runtimeContentLabSettings.unknownTagPolicy,
         classifierToggles: settings.classifierToggles ?? _runtimeContentLabSettings.classifierToggles,
+        enableContentSplit: settings.enableContentSplit ?? _runtimeContentLabSettings.enableContentSplit,
         enableAIClassifier: settings.enableAIClassifier ?? _runtimeContentLabSettings.enableAIClassifier,
     });
     refreshContentLabRuntimeCache();
@@ -394,6 +398,7 @@ export function normalizeContentLabSettings(settings: Partial<ContentLabSettings
         })).filter((rule: ContentBlockPolicy): boolean => Boolean(rule.tagName))
         : [...DEFAULT_CONTENT_TAG_REGISTRY];
     return {
+        enableContentSplit: source.enableContentSplit === true,
         tagRegistry,
         unknownTagPolicy: {
             defaultKind: source.unknownTagPolicy?.defaultKind ?? DEFAULT_UNKNOWN_TAG_POLICY.defaultKind,
@@ -415,6 +420,7 @@ export function normalizeContentLabSettings(settings: Partial<ContentLabSettings
  */
 function cloneContentLabSettings(settings: ContentLabSettings): ContentLabSettings {
     return {
+        enableContentSplit: settings.enableContentSplit === true,
         tagRegistry: settings.tagRegistry.map((rule: ContentBlockPolicy): ContentBlockPolicy => ({
             ...rule,
             aliases: [...rule.aliases],

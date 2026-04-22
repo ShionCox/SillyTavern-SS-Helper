@@ -37,4 +37,10 @@ describe('normalizeMemoryOSSettings', () => {
         expect(normalizeMemoryOSSettings({ dreamExecutionMode: 'manual_review' }).dreamExecutionMode).toBe('manual_review');
         expect(normalizeMemoryOSSettings({ dreamExecutionMode: 'unknown' as any }).dreamExecutionMode).toBe('manual_review');
     });
+
+    it('不再保留旧聊天识别阈值设置项', () => {
+        const settings = normalizeMemoryOSSettings({ takeoverDetectMinFloors: 99 } as any);
+
+        expect('takeoverDetectMinFloors' in settings).toBe(false);
+    });
 });

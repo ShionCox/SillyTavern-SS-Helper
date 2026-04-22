@@ -18,7 +18,7 @@ import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
 import { getContentLabSettings } from '../config/content-tag-registry';
-import { buildFloorRecords, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
+import { buildFloorRecords, buildFullContentFloorRecords, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
 import { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
 import { runTakeoverRepairService } from './takeover-repair-service';
 import { logger } from '../runtime/runtime-services';
@@ -97,9 +97,11 @@ export async function assembleTakeoverBatchPromptAssembly(input: {
     pluginId: string;
     messages: MemoryTakeoverMessageSlice[];
 }): Promise<MemoryTakeoverBatchPromptAssembly> {
-    let floorRecords: RawFloorRecord[] = buildFloorRecords(input.messages);
     const contentLabSettings = getContentLabSettings();
-    if (contentLabSettings.enableAIClassifier) {
+    let floorRecords: RawFloorRecord[] = contentLabSettings.enableContentSplit
+        ? buildFloorRecords(input.messages)
+        : buildFullContentFloorRecords(input.messages);
+    if (contentLabSettings.enableContentSplit && contentLabSettings.enableAIClassifier) {
         floorRecords = await classifyFloorRecordsWithAI({
             llm: input.llm,
             pluginId: input.pluginId,

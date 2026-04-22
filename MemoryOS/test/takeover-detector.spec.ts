@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectTakeoverNeeded } from '../src/memory-takeover/takeover-detector';
+import { detectTakeoverNeeded, LEGACY_CHAT_MIN_FLOORS } from '../src/memory-takeover/takeover-detector';
 import type { MemoryTakeoverPlan } from '../src/types';
 
 /**
@@ -36,21 +36,22 @@ function createPlan(status: MemoryTakeoverPlan['status']): MemoryTakeoverPlan {
 }
 
 describe('旧聊天接管识别', (): void => {
-    it('楼层不足阈值时不应触发', (): void => {
-        const result = detectTakeoverNeeded({
-            currentFloorCount: 20,
-            threshold: 50,
-            existingPlan: null,
-        });
+    it('0/1/2 楼不应触发旧聊天接管', (): void => {
+        for (const currentFloorCount of [0, 1, 2]) {
+            const result = detectTakeoverNeeded({
+                currentFloorCount,
+                existingPlan: null,
+            });
 
-        expect(result.needed).toBe(false);
-        expect(result.reason).toBe('below_floor_threshold');
+            expect(result.needed).toBe(false);
+            expect(result.reason).toBe('below_floor_threshold');
+            expect(result.threshold).toBe(LEGACY_CHAT_MIN_FLOORS);
+        }
     });
 
     it('已有完成任务时不应重复触发', (): void => {
         const result = detectTakeoverNeeded({
             currentFloorCount: 200,
-            threshold: 50,
             existingPlan: createPlan('completed'),
         });
 
@@ -61,7 +62,6 @@ describe('旧聊天接管识别', (): void => {
     it('已有可恢复任务时应返回恢复信息', (): void => {
         const result = detectTakeoverNeeded({
             currentFloorCount: 200,
-            threshold: 50,
             existingPlan: createPlan('paused'),
         });
 
@@ -73,7 +73,6 @@ describe('旧聊天接管识别', (): void => {
     it('blocked_by_batch 状态也应视为可恢复接管', (): void => {
         const result = detectTakeoverNeeded({
             currentFloorCount: 200,
-            threshold: 50,
             existingPlan: createPlan('blocked_by_batch'),
         });
 
@@ -82,14 +81,14 @@ describe('旧聊天接管识别', (): void => {
         expect(result.recoverableTakeoverId).toBe('takeover:test');
     });
 
-    it('满足阈值且无历史任务时应识别为旧聊天', (): void => {
+    it('第 3 楼起无历史任务时应识别为旧聊天', (): void => {
         const result = detectTakeoverNeeded({
-            currentFloorCount: 120,
-            threshold: 50,
+            currentFloorCount: 3,
             existingPlan: null,
         });
 
         expect(result.needed).toBe(true);
         expect(result.reason).toBe('legacy_chat_detected');
+        expect(result.threshold).toBe(LEGACY_CHAT_MIN_FLOORS);
     });
 });

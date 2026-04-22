@@ -97,6 +97,57 @@ export function buildFloorRecord(
 }
 
 /**
+ * 功能：按整层原文构建楼层记录，不执行标签拆分或排除。
+ * @param message 消息片段。
+ * @param previewSourceMode 文本来源模式。
+ * @returns 该楼层的整层内容记录。
+ */
+export function buildFullContentFloorRecord(
+    message: MemoryTakeoverMessageSlice,
+    previewSourceMode: ContentPreviewSourceMode = 'content',
+): RawFloorRecord {
+    const floor = message.floor;
+    const normalizedPreviewSourceMode: ContentPreviewSourceMode = previewSourceMode === 'raw_visible_text'
+        ? 'raw_visible_text'
+        : 'content';
+    const text = normalizedPreviewSourceMode === 'raw_visible_text'
+        ? String(message.rawVisibleText ?? message.content ?? '')
+        : String(message.content ?? '');
+    const normalizedText = text.trim();
+    const parsedBlocks: ClassifiedContentBlock[] = normalizedText
+        ? [{
+            blockId: `raw_${floor}`,
+            floor,
+            rawText: text,
+            startOffset: 0,
+            endOffset: text.length,
+            resolvedKind: 'story_primary',
+            includeInPrimaryExtraction: true,
+            includeAsHint: false,
+            allowActorPromotion: true,
+            allowRelationPromotion: true,
+            reasonCodes: ['content_split_disabled'],
+        }]
+        : [];
+
+    return {
+        floor,
+        sourceFloor: message.sourceFloor,
+        originalText: text,
+        originalTextSource: normalizedPreviewSourceMode === 'raw_visible_text'
+            ? (message.rawVisibleTextSource ?? message.contentSource)
+            : message.contentSource,
+        originalTextMode: normalizedPreviewSourceMode,
+        originalRole: normalizeRoleString(message.role),
+        includedInBatch: true,
+        parsedBlocks,
+        hasPrimaryStory: parsedBlocks.length > 0,
+        hasHintOnly: false,
+        hasExcludedOnly: false,
+    };
+}
+
+/**
  * 功能：对一组消息执行完整管线，生成所有 RawFloorRecord。
  * @param messages 消息列表。
  * @param previewSourceMode 预览依据的文本模式。
@@ -107,6 +158,19 @@ export function buildFloorRecords(
     previewSourceMode: ContentPreviewSourceMode = 'content',
 ): RawFloorRecord[] {
     return messages.map((message: MemoryTakeoverMessageSlice): RawFloorRecord => buildFloorRecord(message, previewSourceMode));
+}
+
+/**
+ * 功能：对一组消息按整层原文生成楼层记录。
+ * @param messages 消息列表。
+ * @param previewSourceMode 文本来源模式。
+ * @returns 所有楼层的整层内容记录。
+ */
+export function buildFullContentFloorRecords(
+    messages: MemoryTakeoverMessageSlice[],
+    previewSourceMode: ContentPreviewSourceMode = 'content',
+): RawFloorRecord[] {
+    return messages.map((message: MemoryTakeoverMessageSlice): RawFloorRecord => buildFullContentFloorRecord(message, previewSourceMode));
 }
 
 /**

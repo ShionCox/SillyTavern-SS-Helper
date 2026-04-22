@@ -82,7 +82,6 @@ const SUMMARY_INTERVAL_ID = 'stx-memoryos-summary-interval-floors';
 const SUMMARY_MIN_MESSAGES_ID = 'stx-memoryos-summary-min-messages';
 const SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-rolling-digest-max-chars';
 const SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID = 'stx-memoryos-summary-second-stage-candidate-summary-max-chars';
-const TAKEOVER_DETECT_MIN_FLOORS_ID = 'stx-memoryos-takeover-detect-min-floors';
 const TAKEOVER_DEFAULT_RECENT_FLOORS_ID = 'stx-memoryos-takeover-default-recent-floors';
 const TAKEOVER_DEFAULT_BATCH_SIZE_ID = 'stx-memoryos-takeover-default-batch-size';
 const TAKEOVER_REQUEST_INTERVAL_SECONDS_ID = 'stx-memoryos-takeover-request-interval-seconds';
@@ -206,7 +205,6 @@ const SETTING_CONTROL_TOOLTIPS: Record<string, string> = {
     [SUMMARY_MIN_MESSAGES_ID]: '设置自动总结需要的最少消息数。',
     [SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID]: '限制第二阶段滚动摘要长度。',
     [SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID]: '限制候选摘要长度。',
-    [TAKEOVER_DETECT_MIN_FLOORS_ID]: '设置检测旧聊天时需要的最少楼数。',
     [TAKEOVER_DEFAULT_RECENT_FLOORS_ID]: '设置旧聊天接管时保留的最近楼数。',
     [TAKEOVER_DEFAULT_BATCH_SIZE_ID]: '设置旧聊天接管每批处理的消息数。',
     [TAKEOVER_REQUEST_INTERVAL_SECONDS_ID]: '设置旧聊天接管请求间隔。',
@@ -557,8 +555,7 @@ function buildSettingsContentHtml(): string {
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID}">候选内容最长字数</label>${numberField(SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID,0,10000,20)}<span class="stx-ui-field-hint">填 0 表示保留完整候选内容。</span></div>
             </div></div>
             ${divider('旧聊天接管')}
-            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">接管默认参数</div><div class="stx-ui-item-desc">控制识别旧聊天的阈值、默认范围和批处理策略。</div></div><div class="stx-ui-form-grid">
-                <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DETECT_MIN_FLOORS_ID}">识别阈值楼层</label>${numberField(TAKEOVER_DETECT_MIN_FLOORS_ID,1,2000,1)}</div>
+            <div class="stx-ui-item stx-ui-item-stack"><div class="stx-ui-item-main"><div class="stx-ui-item-title">接管默认参数</div><div class="stx-ui-item-desc">超过 2 楼的未初始化聊天会进入旧聊天接管；这里控制默认范围和批处理策略。</div></div><div class="stx-ui-form-grid">
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_RECENT_FLOORS_ID}">默认最近楼层</label>${numberField(TAKEOVER_DEFAULT_RECENT_FLOORS_ID,1,2000,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_DEFAULT_BATCH_SIZE_ID}">默认每批楼层数</label>${numberField(TAKEOVER_DEFAULT_BATCH_SIZE_ID,1,500,1)}</div>
                 <div class="stx-ui-field"><label class="stx-ui-field-label" for="${TAKEOVER_REQUEST_INTERVAL_SECONDS_ID}">每轮请求间隔秒数</label>${numberField(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID,0,600,1)}<span class="stx-ui-field-hint">控制旧聊天接管每一轮 LLM 请求之间的等待时间，并同步驱动 LLMHub 右下角紧凑提示的自动关闭时间，默认 3 秒。</span></div>
@@ -756,7 +753,6 @@ function syncSettingsToForm(settings: MemoryOSSettings): void {
         [SUMMARY_MIN_MESSAGES_ID, String(settings.summaryMinMessages)],
         [SUMMARY_SECOND_STAGE_ROLLING_DIGEST_MAX_CHARS_ID, String(settings.summarySecondStageRollingDigestMaxChars)],
         [SUMMARY_SECOND_STAGE_CANDIDATE_SUMMARY_MAX_CHARS_ID, String(settings.summarySecondStageCandidateSummaryMaxChars)],
-        [TAKEOVER_DETECT_MIN_FLOORS_ID, String(settings.takeoverDetectMinFloors)],
         [TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(settings.takeoverDefaultRecentFloors)],
         [TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(settings.takeoverDefaultBatchSize)],
         [TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(settings.takeoverRequestIntervalSeconds)],
@@ -953,7 +949,6 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         pipelineMaxFinalizerItemsPerDomain: Number(text(PIPELINE_MAX_FINALIZER_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineMaxFinalizerItemsPerDomain))),
         pipelineStagingRetentionDays: Number(text(PIPELINE_STAGING_RETENTION_DAYS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.pipelineStagingRetentionDays))),
         pipelineResolveOnlyUnresolvedConflicts: checked(PIPELINE_RESOLVE_UNRESOLVED_ONLY_ID, DEFAULT_MEMORY_OS_SETTINGS.pipelineResolveOnlyUnresolvedConflicts),
-        takeoverDetectMinFloors: Number(text(TAKEOVER_DETECT_MIN_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors))),
         takeoverDefaultRecentFloors: Number(text(TAKEOVER_DEFAULT_RECENT_FLOORS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors))),
         takeoverDefaultBatchSize: Number(text(TAKEOVER_DEFAULT_BATCH_SIZE_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultBatchSize))),
         takeoverRequestIntervalSeconds: Number(text(TAKEOVER_REQUEST_INTERVAL_SECONDS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.takeoverRequestIntervalSeconds))),

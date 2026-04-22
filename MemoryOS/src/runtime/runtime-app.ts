@@ -7,7 +7,6 @@ import {
     buildSdkChatKeyEvent,
     extractTavernPromptMessagesEvent,
     getTavernMessageTextEvent,
-    getTavernRuntimeContextEvent,
     isFallbackTavernChatEvent,
     parseTavernChatScopedKeyEvent,
 } from '../../../SDK/tavern';
@@ -35,6 +34,8 @@ import { DreamSchedulerService, initializeDreamScheduler } from '../services/dre
 import { DreamUiStateService, type DreamUiStateSnapshot } from '../ui/dream-ui-state-service';
 import { DreamNotificationService } from '../ui/dream-notification-service';
 import { updateDreamTaskPill, getDreamTaskPillElement, hideDreamTaskPill } from '../ui/dream-task-pill';
+import { resolveMemoryChatInitializationDecision } from './chat-initialization-decision';
+import type { MemoryTakeoverDetectionResult } from '../types';
 
 type HostEventSource = {
     on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
@@ -476,10 +477,11 @@ export class MemoryOS {
                 this.dreamNotificationService.reset();
             }
             snapshot = await this.dreamUiStateService.getSnapshot();
+            const currentSnapshot = snapshot;
             // 更新任务入口。
-            updateDreamTaskPill(snapshot, (): void => {
-                if (snapshot.inbox.pendingApprovalCount > 0) {
-                    this.openPendingDreamReview(snapshot.inbox.pendingDreamIds[0]);
+            updateDreamTaskPill(currentSnapshot, (): void => {
+                if (currentSnapshot.inbox.pendingApprovalCount > 0) {
+                    this.openPendingDreamReview(currentSnapshot.inbox.pendingDreamIds[0]);
                 } else {
                     openUnifiedMemoryWorkbench({ initialView: 'dream' });
                 }
@@ -806,45 +808,88 @@ export class MemoryOS {
     }
 
     /**
-     * 功能：在新聊天绑定后按需弹出冷启动确认框。
+     * 功能：打开聊天时统一决策冷启动或旧聊天接管。
      * @param chatKey 当前聊天键。
      * @param sdk 当前聊天的 Memory SDK。
      * @returns 异步完成。
      */
-    private async maybePromptColdStart(chatKey: string, sdk: MemorySDKImpl): Promise<void> {
+    private async maybePromptChatInitialization(chatKey: string, sdk: MemorySDKImpl): Promise<void> {
         const normalizedChatKey = String(chatKey ?? '').trim();
         if (!normalizedChatKey) {
             return;
         }
         const parsedChatRef = parseTavernChatScopedKeyEvent(normalizedChatKey);
         if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
-            logger.info(`跳过冷启动确认：当前聊天仍是占位 chatId (${parsedChatRef.chatId})`);
+            logger.info(`跳过聊天初始化：当前聊天仍是占位 chatId (${parsedChatRef.chatId})`);
             return;
         }
         const settings = this.readSettings();
-        if (!settings.enabled || !settings.coldStartEnabled) {
+        let detection = await sdk.chatState.detectTakeoverNeeded();
+        if (Number(detection.currentFloorCount ?? 0) <= 0) {
+            const stillActive = await this.waitForChatInitializationSnapshot(normalizedChatKey);
+            if (!stillActive) {
+                return;
+            }
+            detection = await sdk.chatState.detectTakeoverNeeded();
+        }
+        const [coldStartStatus, takeoverStatus] = await Promise.all([
+            sdk.chatState.getColdStartStatus(),
+            sdk.chatState.getTakeoverStatus(),
+        ]);
+        const decision = resolveMemoryChatInitializationDecision({
+            settingsEnabled: settings.enabled,
+            coldStartEnabled: settings.coldStartEnabled,
+            takeoverEnabled: settings.takeoverEnabled,
+            coldStartCompleted: coldStartStatus.completed,
+            coldStartSuppressed: coldStartStatus.suppressedAt !== undefined,
+            currentFloorCount: detection.currentFloorCount,
+            takeoverPlanStatus: takeoverStatus.plan?.status,
+            coldStartBusy: this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey),
+            takeoverBusy: this.takeoverPromptedChats.has(normalizedChatKey) || this.takeoverRunningChats.has(normalizedChatKey),
+        });
+
+        if (decision.action === 'takeover') {
+            await this.promptTakeover(normalizedChatKey, sdk, detection, settings);
             return;
         }
-        let takeoverDetection = await sdk.chatState.detectTakeoverNeeded();
-        if (!takeoverDetection.needed && Number(takeoverDetection.currentFloorCount ?? 0) <= 0) {
-            await this.waitForChatHydration(normalizedChatKey);
-            takeoverDetection = await sdk.chatState.detectTakeoverNeeded();
+        if (decision.action === 'cold_start') {
+            await this.promptColdStart(normalizedChatKey, sdk);
         }
-        if (takeoverDetection.needed) {
-            logger.info(`跳过冷启动确认：当前聊天识别为旧聊天接管 (${normalizedChatKey})`);
-            return;
+    }
+
+    /**
+     * 功能：给宿主一次短暂机会完成当前聊天快照刷新。
+     * @param chatKey 当前聊天键。
+     * @returns 延迟后是否仍停留在同一聊天。
+     */
+    private async waitForChatInitializationSnapshot(chatKey: string): Promise<boolean> {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        if (!normalizedChatKey) {
+            return false;
         }
-        if (this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
-            return;
-        }
-        const coldStartStatus = await sdk.chatState.getColdStartStatus();
-        if (coldStartStatus.completed) {
-            this.coldStartPromptedChats.add(normalizedChatKey);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+        return String(buildSdkChatKeyEvent() ?? '').trim() === normalizedChatKey;
+    }
+
+    /**
+     * 功能：弹出冷启动确认框并执行冷启动。
+     * @param chatKey 当前聊天键。
+     * @param sdk 当前聊天的 Memory SDK。
+     * @returns 异步完成。
+     */
+    private async promptColdStart(chatKey: string, sdk: MemorySDKImpl): Promise<void> {
+        const normalizedChatKey = String(chatKey ?? '').trim();
+        if (!normalizedChatKey || this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
             return;
         }
 
         this.coldStartPromptedChats.add(normalizedChatKey);
         const selection = await openMemoryBootstrapDialog();
+        if (selection.suppressForChat) {
+            await sdk.chatState.markColdStartSuppressed();
+            toast.info('当前聊天已设置为不再显示冷启动。');
+            return;
+        }
         if (!selection.confirmed) {
             await sdk.chatState.markColdStartDismissed();
             return;
@@ -892,73 +937,22 @@ export class MemoryOS {
     }
 
     /**
-     * 功能：等待宿主聊天消息完成初次注水，避免导入聊天时过早触发冷启动。
-     * @param chatKey 当前聊天键。
-     * @returns 异步完成。
-     */
-    private async waitForChatHydration(chatKey: string): Promise<void> {
-        const normalizedChatKey = String(chatKey ?? '').trim();
-        if (!normalizedChatKey) {
-            return;
-        }
-        const deadline = Date.now() + 1800;
-        while (Date.now() < deadline) {
-            const activeChatKey = String(buildSdkChatKeyEvent() ?? '').trim();
-            if (activeChatKey !== normalizedChatKey) {
-                return;
-            }
-            const runtimeContext = getTavernRuntimeContextEvent();
-            const hostMessages = Array.isArray(runtimeContext?.chat) ? runtimeContext.chat : [];
-            const hydratedCount = hostMessages.filter((item: unknown): boolean => {
-                if (!item || typeof item !== 'object') {
-                    return false;
-                }
-                return String(getTavernMessageTextEvent(item as Record<string, unknown>) ?? '').trim().length > 0;
-            }).length;
-            if (hydratedCount > 0) {
-                return;
-            }
-            await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
-        }
-    }
-
-    /**
-     * 功能：在旧聊天绑定后按需弹出接管配置。
+     * 功能：弹出旧聊天接管配置并启动接管。
      * @param chatKey 当前聊天键。
      * @param sdk 当前聊天的 Memory SDK。
-     * @returns 是否已处理接管流程。
+     * @param detection 当前接管检测结果。
+     * @param settings 当前 MemoryOS 设置。
+     * @returns 异步完成。
      */
-    private async maybePromptTakeover(chatKey: string, sdk: MemorySDKImpl): Promise<boolean> {
+    private async promptTakeover(
+        chatKey: string,
+        sdk: MemorySDKImpl,
+        detection: MemoryTakeoverDetectionResult,
+        settings: MemoryOSSettings,
+    ): Promise<void> {
         const normalizedChatKey = String(chatKey ?? '').trim();
-        if (!normalizedChatKey) {
-            return false;
-        }
-        const parsedChatRef = parseTavernChatScopedKeyEvent(normalizedChatKey);
-        if (isFallbackTavernChatEvent(parsedChatRef.chatId)) {
-            return false;
-        }
-        const settings = this.readSettings();
-        if (!settings.enabled || !settings.takeoverEnabled) {
-            return false;
-        }
-        if (this.takeoverPromptedChats.has(normalizedChatKey) || this.takeoverRunningChats.has(normalizedChatKey)) {
-            return true;
-        }
-
-        const takeoverStatus = await sdk.chatState.getTakeoverStatus();
-        const currentPlanStatus = String(takeoverStatus.plan?.status ?? '').trim();
-        if (currentPlanStatus === 'completed' || currentPlanStatus === 'degraded') {
-            this.takeoverPromptedChats.add(normalizedChatKey);
-            return false;
-        }
-
-        let detection = await sdk.chatState.detectTakeoverNeeded();
-        if (!detection.needed && Number(detection.currentFloorCount ?? 0) <= 0) {
-            await this.waitForChatHydration(normalizedChatKey);
-            detection = await sdk.chatState.detectTakeoverNeeded();
-        }
-        if (!detection.needed) {
-            return false;
+        if (!normalizedChatKey || this.takeoverPromptedChats.has(normalizedChatKey) || this.takeoverRunningChats.has(normalizedChatKey)) {
+            return;
         }
 
         this.takeoverPromptedChats.add(normalizedChatKey);
@@ -979,7 +973,7 @@ export class MemoryOS {
             },
         });
         if (!selection.confirmed) {
-            return true;
+            return;
         }
 
         const activeChatKey = String(
@@ -987,7 +981,7 @@ export class MemoryOS {
             ?? '',
         ).trim();
         if (activeChatKey !== normalizedChatKey) {
-            return true;
+            return;
         }
 
         this.takeoverRunningChats.add(normalizedChatKey);
@@ -1003,7 +997,7 @@ export class MemoryOS {
                 const canRetry = result.progress?.plan?.status === 'paused' || result.progress?.plan?.status === 'failed';
                 if (!canRetry || !confirmTakeoverRetry(result.errorMessage, result.reasonCode)) {
                     toast.error(`旧聊天接管失败：${formatLLMFailureReason(result.errorMessage, result.reasonCode)}`);
-                    return true;
+                    return;
                 }
                 const latestActiveChatKey = String(
                     ((window as unknown as { STX?: { memory?: { getChatKey?: () => string } } })?.STX?.memory?.getChatKey?.())
@@ -1011,17 +1005,15 @@ export class MemoryOS {
                 ).trim();
                 if (latestActiveChatKey !== normalizedChatKey) {
                     toast.warning('当前聊天已切换，已取消本次自动重试。');
-                    return true;
+                    return;
                 }
                 toast.info('正在重试旧聊天接管...');
                 result = await sdk.chatState.resumeTakeover();
             }
             toast.success('旧聊天接管任务已启动，可在统一工作台查看进度。');
-            return true;
         } catch (error) {
             this.takeoverPromptedChats.delete(normalizedChatKey);
             toast.error(`旧聊天接管失败：${String((error as Error)?.message ?? error)}`);
-            return true;
         } finally {
             this.takeoverRunningChats.delete(normalizedChatKey);
         }
@@ -1157,27 +1149,24 @@ export class MemoryOS {
         let bindingSerial = 0;
         let lastUserMessageRenderedAt = 0;
         let lastUserMessageRenderedId = '';
-        const coldStartFlowCheckingChats = new Set<string>();
+        const chatInitializationCheckingChats = new Set<string>();
 
         /**
-         * 功能：执行接管优先的冷启动检查流程。
+         * 功能：执行聊天打开后的初始化检查流程。
          * @param chatKey 当前聊天键。
          * @param sdk 当前聊天的 Memory SDK。
          * @returns 异步完成。
          */
-        const maybeRunColdStartFlow = async (chatKey: string, sdk: MemorySDKImpl): Promise<void> => {
+        const maybeRunChatInitialization = async (chatKey: string, sdk: MemorySDKImpl): Promise<void> => {
             const normalizedChatKey = String(chatKey ?? '').trim();
-            if (!normalizedChatKey || coldStartFlowCheckingChats.has(normalizedChatKey)) {
+            if (!normalizedChatKey || chatInitializationCheckingChats.has(normalizedChatKey)) {
                 return;
             }
-            coldStartFlowCheckingChats.add(normalizedChatKey);
+            chatInitializationCheckingChats.add(normalizedChatKey);
             try {
-                const takeoverHandled = await this.maybePromptTakeover(normalizedChatKey, sdk);
-                if (!takeoverHandled) {
-                    await this.maybePromptColdStart(normalizedChatKey, sdk);
-                }
+                await this.maybePromptChatInitialization(normalizedChatKey, sdk);
             } finally {
-                coldStartFlowCheckingChats.delete(normalizedChatKey);
+                chatInitializationCheckingChats.delete(normalizedChatKey);
             }
         };
 
@@ -1207,13 +1196,15 @@ export class MemoryOS {
                 if (triggerColdStart) {
                     const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
                     if (memory) {
-                        void maybeRunColdStartFlow(chatKey, memory).catch((error: unknown): void => {
-                            logger.warn('冷启动确认流程失败', error);
+                        void maybeRunChatInitialization(chatKey, memory).catch((error: unknown): void => {
+                            logger.warn('聊天初始化流程失败', error);
                         });
                     }
                 }
                 return;
             }
+            this.coldStartPromptedChats.delete(chatKey);
+            this.takeoverPromptedChats.delete(chatKey);
             const serial = ++bindingSerial;
             let sdk = new MemorySDKImpl(chatKey);
             try {
@@ -1276,12 +1267,12 @@ export class MemoryOS {
             this.queueDreamUiRefresh(0);
             void (async (): Promise<void> => {
                 if (triggerColdStart) {
-                    await maybeRunColdStartFlow(chatKey, sdk);
+                    await maybeRunChatInitialization(chatKey, sdk);
                     return;
                 }
-                await this.maybePromptTakeover(chatKey, sdk);
+                await this.maybePromptChatInitialization(chatKey, sdk);
             })().catch((error: unknown): void => {
-                logger.warn('冷启动确认流程失败', error);
+                logger.warn('聊天初始化流程失败', error);
             });
         };
 

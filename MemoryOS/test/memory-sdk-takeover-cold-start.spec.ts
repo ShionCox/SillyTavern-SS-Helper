@@ -320,7 +320,6 @@ vi.mock('../src/settings/store', () => {
             summaryAutoTriggerEnabled: false,
             summaryIntervalFloors: 10,
             summaryMinMessages: 10,
-            takeoverDetectMinFloors: 50,
             takeoverDefaultRecentFloors: 60,
             takeoverDefaultBatchSize: 30,
             takeoverDefaultPrioritizeRecent: true,
@@ -373,7 +372,6 @@ describe('memory sdk takeover cold start sync', () => {
             summaryAutoTriggerEnabled: false,
             summaryIntervalFloors: 10,
             summaryMinMessages: 10,
-            takeoverDetectMinFloors: 50,
             takeoverDefaultRecentFloors: 60,
             takeoverDefaultBatchSize: 30,
             takeoverDefaultPrioritizeRecent: true,
@@ -383,8 +381,26 @@ describe('memory sdk takeover cold start sync', () => {
         } as ReturnType<typeof readMemoryOSSettings>);
     });
 
+    it('marks cold start as suppressed for the current chat without completing it', async () => {
+        const sdk = new MemorySDKImpl('chat-1');
+
+        await sdk.chatState.markColdStartSuppressed();
+
+        const status = await sdk.chatState.getColdStartStatus();
+        const state = stateStore.get('chat-1');
+        expect(status.completed).toBe(false);
+        expect(status.completedAt).toBeUndefined();
+        expect(status.suppressedAt).toBeTypeOf('number');
+        expect(state?.coldStartSuppressedAt).toBeTypeOf('number');
+        expect(state?.coldStartCompletedAt).toBeUndefined();
+    });
+
     it('marks cold start as completed and binds world profile after takeover consolidation is applied', async () => {
         const sdk = new MemorySDKImpl('chat-1');
+        stateStore.set('chat-1', {
+            coldStartDismissedAt: 123,
+            coldStartSuppressedAt: 456,
+        });
         (sdk as unknown as { eventsManager: { countByTypes: ReturnType<typeof vi.fn> } }).eventsManager.countByTypes.mockResolvedValue(24);
         const result: MemoryTakeoverConsolidationResult = {
             takeoverId: 'takeover-1',
@@ -448,6 +464,8 @@ describe('memory sdk takeover cold start sync', () => {
         expect(status.completed).toBe(true);
         expect(status.completedAt).toBeTypeOf('number');
         expect(stateStore.get('chat-1')?.coldStartLastReasonCode).toBe('old_chat_takeover_completed');
+        expect(stateStore.get('chat-1')?.coldStartDismissedAt).toBeUndefined();
+        expect(stateStore.get('chat-1')?.coldStartSuppressedAt).toBeUndefined();
         expect(summaryProgress.lastSummarizedIndex).toBe(24);
         expect(summaryProgress.pendingStartIndex).toBe(25);
         expect(summaryProgress.pendingEndIndex).toBe(24);
@@ -555,7 +573,6 @@ describe('memory sdk takeover cold start sync', () => {
             summaryIntervalFloors: 30,
             summaryMinMessages: 10,
             takeoverDefaultBatchSize: 30,
-            takeoverDetectMinFloors: 50,
             takeoverDefaultRecentFloors: 60,
             takeoverDefaultPrioritizeRecent: true,
             takeoverDefaultAutoContinue: true,

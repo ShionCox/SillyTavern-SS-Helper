@@ -95,6 +95,7 @@ function createWorkbenchState(): WorkbenchState {
         contentLabPrimaryPreview: '',
         contentLabHintPreview: '',
         contentLabExcludedPreview: '',
+        contentLabEnableContentSplit: false,
         contentLabUnknownTagDefaultKind: '',
         contentLabUnknownTagAllowHint: false,
         contentLabEnableRuleClassifier: false,

@@ -29,7 +29,6 @@ export async function buildTakeoverPreviewEstimate(input: {
     llm: MemoryLLMApi | null;
     pluginId: string;
     defaults: {
-        detectMinFloors: number;
         recentFloors: number;
         batchSize: number;
         prioritizeRecent: boolean;

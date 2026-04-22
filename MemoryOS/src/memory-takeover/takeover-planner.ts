@@ -30,7 +30,6 @@ export function buildTakeoverPlan(input: {
     takeoverId: string;
     totalFloors: number;
     defaults: {
-        detectMinFloors: number;
         recentFloors: number;
         batchSize: number;
         prioritizeRecent: boolean;

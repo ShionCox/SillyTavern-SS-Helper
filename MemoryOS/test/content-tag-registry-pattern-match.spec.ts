@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    DEFAULT_CONTENT_LAB_SETTINGS,
     lookupTagPolicy,
     normalizeContentLabSettings,
     resetContentLabSettings,
@@ -9,6 +10,12 @@ import {
 } from '../src/config/content-tag-registry';
 
 describe('content tag registry pattern match', (): void => {
+    it('内容拆分总开关默认关闭，历史配置缺字段时也保持关闭', (): void => {
+        expect(DEFAULT_CONTENT_LAB_SETTINGS.enableContentSplit).toBe(false);
+        expect(normalizeContentLabSettings({}).enableContentSplit).toBe(false);
+        expect(normalizeContentLabSettings({ enableContentSplit: true }).enableContentSplit).toBe(true);
+    });
+
     it('支持 prefix 和 regex 模式匹配奇怪标签', (): void => {
         const rules: ContentBlockPolicy[] = [
             {

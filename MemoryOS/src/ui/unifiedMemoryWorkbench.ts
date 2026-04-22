@@ -394,6 +394,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         contentLabPrimaryPreview: '',
         contentLabHintPreview: '',
         contentLabExcludedPreview: '',
+        contentLabEnableContentSplit: false,
         contentLabUnknownTagDefaultKind: 'unknown',
         contentLabUnknownTagAllowHint: true,
         contentLabEnableRuleClassifier: true,
@@ -475,6 +476,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      * @returns 无返回值。
      */
     const applyContentLabSettingsToState = (contentLabSettings: ContentLabSettings): void => {
+        state.contentLabEnableContentSplit = contentLabSettings.enableContentSplit;
         state.contentLabUnknownTagDefaultKind = contentLabSettings.unknownTagPolicy.defaultKind;
         state.contentLabUnknownTagAllowHint = contentLabSettings.unknownTagPolicy.allowAsHint;
         state.contentLabEnableRuleClassifier = contentLabSettings.classifierToggles.enableRuleClassifier;
@@ -647,6 +649,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             applyContentLabSettingsToState(contentLabSettingsCache);
         }
         const saved = await memory.chatState.saveContentLabSettings({
+            enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
             tagRegistry: registry,
             unknownTagPolicy: {
                 defaultKind: readInputValue(root, '#stx-content-lab-unknown-kind') as ContentLabSettings['unknownTagPolicy']['defaultKind'],
@@ -1303,6 +1306,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.contentLabPreviewLoading = true;
                 state.contentLabSelectedFloor = String(selectedFloor);
                 state.contentLabPreviewSourceMode = previewSourceMode;
+                state.contentLabEnableContentSplit = readCheckedValue(root, '#stx-content-lab-enable-content-split');
                 await render();
                 try {
                     await loadContentLabSnapshot();
@@ -1343,6 +1347,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.contentLabStartFloor = String(startFloor);
                 state.contentLabEndFloor = String(endFloor);
                 state.contentLabPreviewSourceMode = previewSourceMode;
+                state.contentLabEnableContentSplit = readCheckedValue(root, '#stx-content-lab-enable-content-split');
                 await render();
                 try {
                     await loadContentLabSnapshot();
@@ -1367,6 +1372,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }
             if (action === 'content-lab-reset-rules') {
                 const saved = await memory.chatState.saveContentLabSettings({
+                    enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
                     tagRegistry: [],
                     unknownTagPolicy: { defaultKind: 'unknown', allowAsHint: true },
                     classifierToggles: {

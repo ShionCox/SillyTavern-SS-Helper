@@ -228,6 +228,7 @@ export interface WorkbenchState {
     contentLabPrimaryPreview: string;
     contentLabHintPreview: string;
     contentLabExcludedPreview: string;
+    contentLabEnableContentSplit: boolean;
     contentLabUnknownTagDefaultKind: string;
     contentLabUnknownTagAllowHint: boolean;
     contentLabEnableRuleClassifier: boolean;

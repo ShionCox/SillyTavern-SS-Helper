@@ -25,6 +25,7 @@ vi.mock('../src/memory-prompts/prompt-loader', () => ({
 
 import { buildTakeoverPreviewEstimate } from '../src/memory-takeover/takeover-preview';
 import type { MemoryTakeoverSourceBundle } from '../src/memory-takeover/takeover-source';
+import { applyContentLabSettings, resetContentLabSettings } from '../src/config/content-tag-registry';
 
 function createSourceBundle(totalFloors: number, content: string): MemoryTakeoverSourceBundle {
     return {
@@ -44,7 +45,6 @@ function createSourceBundle(totalFloors: number, content: string): MemoryTakeove
 }
 
 const DEFAULTS = {
-    detectMinFloors: 50,
     recentFloors: 20,
     batchSize: 30,
     prioritizeRecent: true,
@@ -56,6 +56,7 @@ const DEFAULTS = {
 describe('旧聊天接管 token 预估', (): void => {
     beforeEach((): void => {
         vi.clearAllMocks();
+        resetContentLabSettings();
     });
 
     it('应同时预估 active 与 history 批次', async (): Promise<void> => {
@@ -98,5 +99,32 @@ describe('旧聊天接管 token 预估', (): void => {
         expect(estimate.hasOverflow).toBe(true);
         expect(estimate.overflowWarnings.length).toBeGreaterThan(0);
         expect(estimate.batches.some((item) => item.overWarningThreshold)).toBe(true);
+    });
+
+    it('内容拆分开关会影响预估时实际发送的楼层数量', async (): Promise<void> => {
+        const sourceBundle = createSourceBundle(3, '');
+        sourceBundle.messages[0]!.content = '<game>主线剧情推进</game>';
+        sourceBundle.messages[1]!.content = '<summary>这是总结提示</summary>';
+        sourceBundle.messages[2]!.content = '<details>这是排除内容</details>';
+
+        const disabledEstimate = await buildTakeoverPreviewEstimate({
+            chatKey: 'chat:test',
+            chatId: 'chat:test',
+            totalFloors: 3,
+            defaults: DEFAULTS,
+            sourceBundle,
+        });
+
+        applyContentLabSettings({ enableContentSplit: true });
+        const enabledEstimate = await buildTakeoverPreviewEstimate({
+            chatKey: 'chat:test',
+            chatId: 'chat:test',
+            totalFloors: 3,
+            defaults: DEFAULTS,
+            sourceBundle,
+        });
+
+        expect(disabledEstimate.batches[0]?.messageCount).toBe(3);
+        expect(enabledEstimate.batches[0]?.messageCount).toBe(1);
     });
 });

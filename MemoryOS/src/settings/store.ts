@@ -79,7 +79,6 @@ export type MemoryOSSettings = {
     pipelineMaxFinalizerItemsPerDomain: number;
     pipelineStagingRetentionDays: number;
     pipelineResolveOnlyUnresolvedConflicts: boolean;
-    takeoverDetectMinFloors: number;
     takeoverDefaultRecentFloors: number;
     takeoverDefaultBatchSize: number;
     takeoverRequestIntervalSeconds: number;
@@ -234,7 +233,6 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     pipelineMaxFinalizerItemsPerDomain: 50,
     pipelineStagingRetentionDays: 7,
     pipelineResolveOnlyUnresolvedConflicts: true,
-    takeoverDetectMinFloors: 50,
     takeoverDefaultRecentFloors: 60,
     takeoverDefaultBatchSize: 30,
     takeoverRequestIntervalSeconds: 3,
@@ -462,10 +460,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         1,
         Math.min(365, Math.trunc(Number(candidate.pipelineStagingRetentionDays) || DEFAULT_MEMORY_OS_SETTINGS.pipelineStagingRetentionDays)),
     );
-    const takeoverDetectMinFloors: number = Math.max(
-        10,
-        Math.min(2000, Math.trunc(Number(candidate.takeoverDetectMinFloors) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDetectMinFloors)),
-    );
     const takeoverDefaultRecentFloors: number = Math.max(
         10,
         Math.min(2000, Math.trunc(Number(candidate.takeoverDefaultRecentFloors) || DEFAULT_MEMORY_OS_SETTINGS.takeoverDefaultRecentFloors)),
@@ -652,7 +646,6 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         pipelineMaxFinalizerItemsPerDomain,
         pipelineStagingRetentionDays,
         pipelineResolveOnlyUnresolvedConflicts: candidate.pipelineResolveOnlyUnresolvedConflicts !== false,
-        takeoverDetectMinFloors,
         takeoverDefaultRecentFloors,
         takeoverDefaultBatchSize,
         takeoverRequestIntervalSeconds,

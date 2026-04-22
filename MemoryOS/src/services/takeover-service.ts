@@ -35,6 +35,7 @@ import {
 } from '../config/content-tag-registry';
 import {
     buildFloorRecords,
+    buildFullContentFloorRecords,
     classifyFloorRecordsWithAI,
     sliceTakeoverMessages,
     type ContentPreviewSourceMode,
@@ -142,6 +143,7 @@ export class TakeoverService {
         const merged = normalizeContentLabSettings({
             ...current,
             ...patch,
+            enableContentSplit: patch.enableContentSplit ?? current.enableContentSplit,
             tagRegistry: patch.tagRegistry ?? current.tagRegistry,
             unknownTagPolicy: patch.unknownTagPolicy ?? current.unknownTagPolicy,
             classifierToggles: patch.classifierToggles ?? current.classifierToggles,
@@ -198,8 +200,10 @@ export class TakeoverService {
             endFloor: Math.max(Math.trunc(Number(input.startFloor) || 1), Math.trunc(Number(input.endFloor) || Number(input.startFloor) || 1)),
         };
         const messages = sliceTakeoverMessages(sourceBundle, range);
-        let records = buildFloorRecords(messages, previewSourceMode);
-        if (settings.enableAIClassifier) {
+        let records = settings.enableContentSplit
+            ? buildFloorRecords(messages, previewSourceMode)
+            : buildFullContentFloorRecords(messages, previewSourceMode);
+        if (settings.enableContentSplit && settings.enableAIClassifier) {
             records = await classifyFloorRecordsWithAI({
                 llm: input.llm ?? readMemoryLLMApi(),
                 pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
@@ -216,10 +220,8 @@ export class TakeoverService {
      * @returns 检测结果。
      */
     async detectNeeded(currentFloorCount: number, existingPlan: MemoryTakeoverPlan | null): Promise<MemoryTakeoverDetectionResult> {
-        const settings = readMemoryOSSettings();
         return detectTakeoverNeeded({
             currentFloorCount,
-            threshold: settings.takeoverDetectMinFloors,
             existingPlan,
         });
     }
@@ -240,7 +242,6 @@ export class TakeoverService {
             llm: readMemoryLLMApi(),
             pluginId: MEMORY_OS_PLUGIN_ID,
             defaults: {
-                detectMinFloors: settings.takeoverDetectMinFloors,
                 recentFloors: settings.takeoverDefaultRecentFloors,
                 batchSize: settings.takeoverDefaultBatchSize,
                 prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
@@ -272,7 +273,6 @@ export class TakeoverService {
             takeoverId: `takeover:payload_preview:${this.chatKey}`,
             totalFloors: Math.max(1, sourceBundle.totalFloors),
             defaults: {
-                detectMinFloors: settings.takeoverDetectMinFloors,
                 recentFloors: settings.takeoverDefaultRecentFloors,
                 batchSize: settings.takeoverDefaultBatchSize,
                 prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
@@ -366,7 +366,6 @@ export class TakeoverService {
             takeoverId: `takeover:${this.chatKey}:${crypto.randomUUID()}`,
             totalFloors,
             defaults: {
-                detectMinFloors: settings.takeoverDetectMinFloors,
                 recentFloors: settings.takeoverDefaultRecentFloors,
                 batchSize: settings.takeoverDefaultBatchSize,
                 prioritizeRecent: settings.takeoverDefaultPrioritizeRecent,
@@ -654,6 +653,7 @@ export class TakeoverService {
         plan: MemoryTakeoverPlan,
         input: Omit<TakeoverSchedulerExecutionInput, 'currentFloorCount' | 'takeoverId'>,
     ): Promise<MemoryTakeoverProgressSnapshot> {
+        await this.readContentLabSettings();
         return this.runScheduler({
             chatKey: this.chatKey,
             plan,

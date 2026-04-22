@@ -56,7 +56,7 @@ vi.mock('../src/memory-takeover', () => {
         buildTakeoverPreviewEstimate: vi.fn(),
         buildTakeoverStructuredTaskRequest: vi.fn(),
         collectTakeoverSourceBundle: vi.fn(() => ({ totalFloors: 100, messages: [] })),
-        detectTakeoverNeeded: vi.fn(async () => ({ needed: false, currentFloorCount: 100, threshold: 50 })),
+        detectTakeoverNeeded: vi.fn(async () => ({ needed: false, currentFloorCount: 100, threshold: 3 })),
         runTakeoverConsolidation: vi.fn(),
         runTakeoverScheduler: runSchedulerMock,
         assembleTakeoverBatchPromptAssembly: vi.fn(),
@@ -66,7 +66,6 @@ vi.mock('../src/memory-takeover', () => {
 vi.mock('../src/settings/store', () => {
     return {
         readMemoryOSSettings: vi.fn(() => ({
-            takeoverDetectMinFloors: 50,
             takeoverDefaultRecentFloors: 60,
             takeoverDefaultBatchSize: 30,
             takeoverDefaultPrioritizeRecent: true,

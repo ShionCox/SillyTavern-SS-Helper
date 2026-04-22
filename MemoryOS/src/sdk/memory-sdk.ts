@@ -163,6 +163,7 @@ export interface MemoryColdStartStatus {
     completed: boolean;
     completedAt?: number;
     dismissedAt?: number;
+    suppressedAt?: number;
     selectedLorebookEntryIds?: string[];
     lastTriggeredAt?: number;
     lastFailedAt?: number;
@@ -410,6 +411,7 @@ export class MemorySDKImpl {
         ) => Promise<MemoryColdStartExecutionResult>;
         confirmColdStartCandidates: (selectedCandidateIds: string[]) => Promise<MemoryColdStartExecutionResult>;
         markColdStartDismissed: () => Promise<void>;
+        markColdStartSuppressed: () => Promise<void>;
         rollbackDreamSession: (dreamId: string) => Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }>;
         rollbackDreamMutation: (dreamId: string, mutationId: string) => Promise<{ ok: boolean; reasonCode?: string; rolledBackEntryIds: string[]; rolledBackRelationshipIds: string[] }>;
         applyDreamMaintenanceProposal: (proposalId: string) => Promise<{ ok: boolean; reasonCode?: string }>;
@@ -1084,6 +1086,7 @@ export class MemorySDKImpl {
                     coldStartCompletedAt: Date.now(),
                     coldStartConfirmedAt: Date.now(),
                     coldStartDismissedAt: undefined,
+                    coldStartSuppressedAt: undefined,
                     coldStartSelectedCandidateIds: selectedCandidates.map((candidate: ColdStartCandidate): string => candidate.id),
                     coldStartResumeRunId: undefined,
                     coldStartResumeSourceBundle: undefined,
@@ -1098,6 +1101,14 @@ export class MemorySDKImpl {
                 this.pendingColdStartDraft = null;
                 await this.writeColdStartState({
                     coldStartDismissedAt: Date.now(),
+                    coldStartResumeRunId: undefined,
+                    coldStartResumeSourceBundle: undefined,
+                });
+            },
+            markColdStartSuppressed: async (): Promise<void> => {
+                this.pendingColdStartDraft = null;
+                await this.writeColdStartState({
+                    coldStartSuppressedAt: Date.now(),
                     coldStartResumeRunId: undefined,
                     coldStartResumeSourceBundle: undefined,
                 });
@@ -3461,6 +3472,7 @@ export class MemorySDKImpl {
             coldStartCompletedAt: now,
             coldStartConfirmedAt: now,
             coldStartDismissedAt: undefined,
+            coldStartSuppressedAt: undefined,
             coldStartLastReasonCode: 'old_chat_takeover_completed',
             coldStartResumeRunId: undefined,
             coldStartResumeSourceBundle: undefined,
@@ -4035,6 +4047,7 @@ export class MemorySDKImpl {
                 completed: true,
                 completedAt: persistedCompletedAt,
                 dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+                suppressedAt: this.toOptionalTimestamp(state.coldStartSuppressedAt),
                 selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
                 lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
                 lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
@@ -4048,6 +4061,7 @@ export class MemorySDKImpl {
                 completed: true,
                 completedAt: Number(worldProfileBinding.updatedAt ?? worldProfileBinding.createdAt ?? Date.now()),
                 dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+                suppressedAt: this.toOptionalTimestamp(state.coldStartSuppressedAt),
                 selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
                 lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
                 lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),
@@ -4059,6 +4073,7 @@ export class MemorySDKImpl {
             completed: false,
             completedAt: undefined,
             dismissedAt: this.toOptionalTimestamp(state.coldStartDismissedAt),
+            suppressedAt: this.toOptionalTimestamp(state.coldStartSuppressedAt),
             selectedLorebookEntryIds: this.toOptionalStringArray(state.coldStartSelectedLorebookEntryIds),
             lastTriggeredAt: this.toOptionalTimestamp(state.coldStartLastTriggeredAt),
             lastFailedAt: this.toOptionalTimestamp(state.coldStartLastFailedAt),

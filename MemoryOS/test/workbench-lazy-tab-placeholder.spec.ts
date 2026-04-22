@@ -86,6 +86,7 @@ function createState(): WorkbenchState {
         contentLabPrimaryPreview: '',
         contentLabHintPreview: '',
         contentLabExcludedPreview: '',
+        contentLabEnableContentSplit: false,
         contentLabUnknownTagDefaultKind: 'unknown',
         contentLabUnknownTagAllowHint: true,
         contentLabEnableRuleClassifier: true,
@@ -148,5 +149,19 @@ describe('workbench lazy tab placeholders', (): void => {
         const markup = buildContentLabViewMarkup(snapshot, state);
 
         expect(markup).toContain('进入本页后将按需加载内容拆分规则与聊天楼层');
+    });
+
+    it('content-lab 已加载时显示接管内容拆分开关且默认关闭', (): void => {
+        const snapshot = createSnapshot();
+        const state = createState();
+        state.currentView = 'content-lab';
+        snapshot.contentLabSnapshot.loaded = true;
+
+        const markup = buildContentLabViewMarkup(snapshot, state);
+        const splitInput = markup.match(/<input[\s\S]*?id="stx-content-lab-enable-content-split"[\s\S]*?\/>/)?.[0] ?? '';
+
+        expect(markup).toContain('启用旧聊天接管内容拆分');
+        expect(markup).toContain('id="stx-content-lab-enable-content-split"');
+        expect(splitInput).not.toContain('checked');
     });
 });

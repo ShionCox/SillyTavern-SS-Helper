@@ -1,5 +1,8 @@
 const CONTENT_LAB_TEXT_MAP: Record<string, string> = {
     section_title: '内容拆分实验室',
+    takeover_split_switch: '接管内容拆分',
+    enable_takeover_content_split: '启用旧聊天接管内容拆分',
+    takeover_split_switch_desc: '关闭时，旧聊天接管会直接使用每层完整内容；开启后才按下方规则拆分 primary / hint / excluded。',
     tag_registry: '标签注册表',
     no_tag_rules: '暂无标签规则。',
     tag_name: '主标签',

@@ -12,7 +12,9 @@ vi.mock('../../SDK/tavern', (): Record<string, unknown> => {
         getCurrentTavernUserSnapshotEvent: (): Record<string, unknown> => ({ userName: '用户' }),
         getTavernSemanticSnapshotEvent: (): Record<string, unknown> => ({ roleKey: 'role:test' }),
         getTavernRuntimeContextEvent: vi.fn(),
+        extractTavernMessageOriginalTextEvent: vi.fn(() => ({ text: '', source: 'message.empty' })),
         extractTavernMessageTextEvent: vi.fn(),
+        stripRuntimePlaceholderArtifactsEvent: vi.fn((text: string) => String(text ?? '')),
     };
 });
 
