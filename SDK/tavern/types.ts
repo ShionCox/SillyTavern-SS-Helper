@@ -305,6 +305,10 @@ export interface SdkTavernPromptMessageEvent {
   role?: string;
   is_user?: boolean;
   is_system?: boolean;
+  is_hidden?: boolean;
+  isHidden?: boolean;
+  hide?: boolean;
+  hidden?: boolean;
   content?: unknown;
   mes?: string;
   text?: string;
@@ -380,4 +384,3 @@ export interface SdkUnifiedTavernChatDirectoryItemEvent {
   fromDraft: boolean;
   fromTagged: boolean;
 }
-

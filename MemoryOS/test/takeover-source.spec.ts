@@ -14,6 +14,10 @@ vi.mock('../../SDK/tavern', (): Record<string, unknown> => {
         getTavernRuntimeContextEvent: vi.fn(),
         extractTavernMessageOriginalTextEvent: vi.fn(() => ({ text: '', source: 'message.empty' })),
         extractTavernMessageTextEvent: vi.fn(),
+        isTavernMessageHiddenEvent: vi.fn((message: unknown) => {
+            const record = message as Record<string, unknown>;
+            return record?.is_hidden === true || record?.isHidden === true || record?.hide === true || record?.extra?.hidden === true;
+        }),
         stripRuntimePlaceholderArtifactsEvent: vi.fn((text: string) => String(text ?? '')),
     };
 });
@@ -97,6 +101,7 @@ describe('旧聊天接管源收集', (): void => {
         expect(bundle.messages[0]?.role).toBe('user');
         expect(hoistedMocks.loggerInfo).toHaveBeenCalledWith('[takeover][source] 跳过统计=', {
             system_message: 1,
+            hidden_message: 0,
             empty_after_normalize: 0,
             unsupported_shape: 1,
         });
@@ -121,5 +126,31 @@ describe('旧聊天接管源收集', (): void => {
         expect(bundle.messages[0]?.role).toBe('user');
         expect(bundle.messages[1]?.role).toBe('assistant');
         expect(bundle.messages[1]?.normalizedFrom).toBe('is_system_fallback_assistant');
+    });
+
+    it('应跳过 hide 隐藏消息，并保持可见楼层连续编号', (): void => {
+        vi.mocked(getTavernRuntimeContextEvent).mockReturnValue({
+            chat: [
+                { is_user: true, name: '用户', mes: '第一层' },
+                { is_hidden: true, name: '旁白', mes: '这层被隐藏' },
+                { is_user: false, name: '角色', mes: '第三条可见消息' },
+            ],
+        });
+        vi.mocked(extractTavernMessageTextEvent)
+            .mockReturnValueOnce(createExtractionResult('第一层', 'mes'))
+            .mockReturnValueOnce(createExtractionResult('第三条可见消息', 'mes'));
+
+        const bundle = collectTakeoverSourceBundle();
+
+        expect(bundle.totalFloors).toBe(2);
+        expect(bundle.messages.map((item) => item.floor)).toEqual([1, 2]);
+        expect(bundle.messages.map((item) => item.sourceFloor)).toEqual([1, 3]);
+        expect(bundle.messages.map((item) => item.content)).toEqual(['第一层', '第三条可见消息']);
+        expect(hoistedMocks.loggerInfo).toHaveBeenCalledWith('[takeover][source] 跳过统计=', {
+            system_message: 0,
+            hidden_message: 1,
+            empty_after_normalize: 0,
+            unsupported_shape: 0,
+        });
     });
 });

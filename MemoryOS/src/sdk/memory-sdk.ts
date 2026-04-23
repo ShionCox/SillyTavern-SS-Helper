@@ -2,6 +2,7 @@ import {
     buildSdkChatIdEvent,
     getCurrentTavernCharacterEvent,
     getTavernMessageTextEvent,
+    isTavernMessageHiddenEvent,
     getTavernRuntimeContextEvent,
     getCurrentTavernUserSnapshotEvent,
     getTavernSemanticSnapshotEvent,
@@ -387,8 +388,8 @@ export class MemorySDKImpl {
         markTakeoverHandled: () => Promise<MemoryTakeoverProgressSnapshot>;
         getContentLabSettings: () => Promise<ContentLabSettings>;
         saveContentLabSettings: (patch: Partial<ContentLabSettings>) => Promise<ContentLabSettings>;
-        previewFloorContentBlocks: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text' }) => Promise<RawFloorRecord>;
-        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text' }) => Promise<RawFloorRecord[]>;
+        previewFloorContentBlocks: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }) => Promise<RawFloorRecord>;
+        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }) => Promise<RawFloorRecord[]>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -788,21 +789,23 @@ export class MemorySDKImpl {
             saveContentLabSettings: async (patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> => {
                 return this.takeoverService.saveContentLabSettings(patch);
             },
-            previewFloorContentBlocks: async (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text' }): Promise<RawFloorRecord> => {
+            previewFloorContentBlocks: async (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }): Promise<RawFloorRecord> => {
                 this.tryRegisterLLMTasks();
                 return this.takeoverService.previewFloorContentBlocks({
                     floor: input.floor,
                     previewSourceMode: input.previewSourceMode,
+                    forceContentSplit: input.forceContentSplit,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
             },
-            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text' }): Promise<RawFloorRecord[]> => {
+            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }): Promise<RawFloorRecord[]> => {
                 this.tryRegisterLLMTasks();
                 return this.takeoverService.previewFloorRangeContentBlocks({
                     startFloor: input.startFloor,
                     endFloor: input.endFloor,
                     previewSourceMode: input.previewSourceMode,
+                    forceContentSplit: input.forceContentSplit,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
@@ -4325,6 +4328,9 @@ export class MemorySDKImpl {
                 continue;
             }
             const record = row as Record<string, unknown>;
+            if (isTavernMessageHiddenEvent(record)) {
+                continue;
+            }
             const content = String(getTavernMessageTextEvent(record) ?? '').trim();
             if (!content) {
                 continue;

@@ -1,27 +1,29 @@
 /**
- * 功能：渲染「内容拆分实验室」Tab 视图。
- * 左侧：规则编辑区；右侧：预览区。
+ * 功能：渲染「内容拆分台」五模式工作台。
  */
 
-import { escapeHtml } from '../editorShared';
-import {
-    escapeAttr,
-    type WorkbenchSnapshot,
-    type WorkbenchState,
-} from './shared';
-import type { ContentBlockPolicy } from '../../config/content-tag-registry';
-import type { ClassifiedContentBlock } from '../../memory-takeover/content-block-classifier';
 import { buildSharedBoxCheckbox } from '../../../../_Components/sharedBoxCheckbox';
+import { DEFAULT_CONTENT_SPLIT_RULES, type ContentSplitMode, type ContentSplitRule } from '../../config/content-tag-registry';
+import type { ClassifiedContentBlock } from '../../memory-takeover/content-block-classifier';
+import { escapeHtml } from '../editorShared';
+import { escapeAttr, type WorkbenchSnapshot, type WorkbenchState } from './shared';
 import {
     resolveContentLabKindLabel,
-    resolveContentLabReasonCodeLabel,
     resolveContentLabRoleLabel,
     resolveContentLabSourceLabel,
     resolveContentLabText,
 } from '../workbenchLocale';
 
+const CONTENT_SPLIT_MODES: Array<{ mode: ContentSplitMode; label: string; icon: string }> = [
+    { mode: 'xml', label: 'XML', icon: 'fa-code' },
+    { mode: 'delimiter', label: '分隔符', icon: 'fa-link' },
+    { mode: 'regex', label: '正则', icon: 'fa-wand-magic-sparkles' },
+    { mode: 'markdown', label: 'Markdown', icon: 'fa-list' },
+    { mode: 'jsonpath', label: 'JSONPath', icon: 'fa-route' },
+];
+
 /**
- * 功能：渲染内容拆分实验室整体视图。
+ * 功能：渲染内容拆分台整体视图。
  */
 export function buildContentLabViewMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState): string {
     const lab = snapshot.contentLabSnapshot;
@@ -37,486 +39,337 @@ export function buildContentLabViewMarkup(snapshot: WorkbenchSnapshot, state: Wo
             </section>
         `;
     }
-    const registry = lab.tagRegistry;
-    const floors = lab.availableFloors;
 
     return `
         <section class="stx-memory-workbench__view stx-content-lab"${state.currentView !== 'content-lab' ? ' hidden' : ''}>
-            <div class="stx-memory-workbench__view-head">
-                <div class="stx-memory-workbench__section-title">${escapeHtml(resolveContentLabText('section_title'))}</div>
-            </div>
-            <div class="stx-memory-workbench__split stx-content-lab__split">
-                <!-- 左侧：规则编辑区 -->
-                <div class="stx-content-lab__column stx-content-lab__column--editor">
-                    ${buildContentSplitSwitch(state)}
-                    ${buildTagRegistryTable(registry, state)}
-                    ${buildUnknownTagPolicyEditor(state)}
-                    ${buildClassifierToggles(state)}
-                    <div class="stx-memory-workbench__toolbar" style="margin-top:12px;gap:8px;">
-                        <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-add-rule">
-                            <i class="fa-solid fa-plus"></i> ${escapeHtml(resolveContentLabText('add_rule'))}
-                        </button>
-                        <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-reset-rules">
-                            <i class="fa-solid fa-rotate-left"></i> ${escapeHtml(resolveContentLabText('reset_rules'))}
-                        </button>
-                        <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-export-rules">
-                            <i class="fa-solid fa-download"></i> ${escapeHtml(resolveContentLabText('export_rules'))}
-                        </button>
-                        <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-import-rules">
-                            <i class="fa-solid fa-upload"></i> ${escapeHtml(resolveContentLabText('import_rules'))}
-                        </button>
-                    </div>
+            <input id="stx-content-lab-mode" type="hidden" value="${escapeAttr(state.contentLabSplitMode)}">
+            ${buildModeTabs(state)}
+            <div class="stx-content-lab__workspace">
+                <div class="stx-content-lab__pane stx-content-lab__pane--source">
+                    ${buildSourcePanel(lab.availableFloors, state, lab.previewFloor)}
                 </div>
-                <!-- 右侧：预览区 -->
-                <div class="stx-content-lab__column stx-content-lab__column--preview">
-                    ${buildFloorSelector(floors, state)}
-                    ${buildRawContentPreview(state, lab.previewFloor)}
-                    ${buildBlockPreview(state)}
-                    ${buildChannelPreview(state)}
+                <div class="stx-content-lab__pane stx-content-lab__pane--rules">
+                    ${buildRulePanel(state)}
+                </div>
+                <div class="stx-content-lab__pane stx-content-lab__pane--preview">
+                    ${buildResultPreview(state, lab.previewFloor)}
+                    ${buildValidationPanel(state)}
                 </div>
             </div>
+            ${buildBlockTable(state)}
         </section>
     `;
 }
 
-/**
- * 功能：渲染旧聊天接管内容拆分总开关。
- */
-function buildContentSplitSwitch(state: WorkbenchState): string {
+function buildModeTabs(state: WorkbenchState): string {
     return `
-        <div class="stx-memory-workbench__card" style="margin-bottom:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('takeover_split_switch'))}</div>
-            <div class="stx-memory-workbench__checkbox-row">
+        <div class="stx-content-lab__topbar">
+            <div class="stx-content-lab__mode-tabs" role="tablist">
+                ${CONTENT_SPLIT_MODES.map((item) => `
+                    <button class="stx-content-lab__mode-tab${state.contentLabSplitMode === item.mode ? ' is-active' : ''}" data-action="content-lab-set-mode" data-mode="${escapeAttr(item.mode)}">
+                        <i class="fa-solid ${escapeAttr(item.icon)}"></i>
+                        <span>${escapeHtml(item.label)}</span>
+                    </button>
+                `).join('')}
+                <span class="stx-content-lab__mode-hint"><i class="fa-solid fa-sparkles"></i> 支持多种内容切分策略</span>
+            </div>
+            <label class="stx-content-lab__global-switch">
                 ${buildSharedBoxCheckbox({
                     id: 'stx-content-lab-enable-content-split',
                     appearance: 'check',
-                    inputAttributes: {
-                        checked: state.contentLabEnableContentSplit,
-                    },
+                    inputAttributes: { checked: state.contentLabEnableContentSplit },
                 })}
-                <label for="stx-content-lab-enable-content-split">${escapeHtml(resolveContentLabText('enable_takeover_content_split'))}</label>
-            </div>
-            <div class="stx-memory-workbench__meta" style="margin-top:6px;">${escapeHtml(resolveContentLabText('takeover_split_switch_desc'))}</div>
+                <span class="stx-content-lab__global-switch-text">
+                    <strong>${escapeHtml(resolveContentLabText('floor_split_switch'))}</strong>
+                    <small>${escapeHtml(resolveContentLabText('floor_split_switch_desc'))}</small>
+                </span>
+            </label>
         </div>
     `;
 }
 
-/**
- * 功能：渲染标签规则表。
- */
-function buildTagRegistryTable(registry: ContentBlockPolicy[], state: WorkbenchState): string {
-    if (registry.length === 0) {
-        return `
-            <div class="stx-memory-workbench__card">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('tag_registry'))}</div>
-                <div class="stx-memory-workbench__empty">${escapeHtml(resolveContentLabText('no_tag_rules'))}</div>
-            </div>
-        `;
-    }
-    const kindOptions: ContentBlockPolicy['kind'][] = ['story_primary', 'story_secondary', 'summary', 'tool_artifact', 'thought', 'meta_commentary', 'instruction', 'unknown'];
-    const rows = registry.map((rule, idx) => {
-        const isEditing = state.contentLabEditingRuleIndex === idx;
-        const kindSelect = `
-            <select class="stx-memory-workbench__select stx-content-lab__table-select" data-rule-kind="${idx}">
-                ${kindOptions.map((kind) => `<option value="${escapeAttr(kind)}"${rule.kind === kind ? ' selected' : ''}>${escapeHtml(resolveContentLabKindLabel(kind))}</option>`).join('')}
-            </select>
-        `;
-        const patternModeValue = rule.patternMode === 'regex' || rule.patternMode === 'prefix'
-            ? rule.patternMode
-            : '';
-        const patternModeSelect = `
-            <select class="stx-memory-workbench__select stx-content-lab__table-select" data-rule-pattern-mode="${idx}">
-                <option value="">${escapeHtml(resolveContentLabText('pattern_mode_none'))}</option>
-                <option value="prefix"${patternModeValue === 'prefix' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('pattern_mode_prefix'))}</option>
-                <option value="regex"${patternModeValue === 'regex' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('pattern_mode_regex'))}</option>
-            </select>
-        `;
-        const primaryCheckboxId = `stx-content-lab-rule-primary-${idx}`;
-        const hintCheckboxId = `stx-content-lab-rule-hint-${idx}`;
-        return `
-            <tr>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-tag-name="${idx}" value="${escapeAttr(rule.tagName)}">`
-                    : `<span class="stx-content-lab__table-text">${escapeHtml(rule.tagName)}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-aliases="${idx}" value="${escapeAttr(rule.aliases.join(', '))}">`
-                    : `<span class="stx-content-lab__table-text">${escapeHtml(rule.aliases.join(', '))}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? kindSelect
-                    : `<span class="stx-memory-workbench__badge">${escapeHtml(resolveContentLabKindLabel(rule.kind))}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-pattern="${idx}" value="${escapeAttr(rule.pattern ?? '')}" placeholder="^think(?:[_-].+)?$ / tableedit">`
-                    : `<span class="stx-content-lab__table-text">${escapeHtml(rule.pattern || resolveContentLabText('empty_value'))}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? patternModeSelect
-                    : `<span class="stx-memory-workbench__badge">${escapeHtml(resolveContentLabText(rule.patternMode === 'prefix' ? 'pattern_mode_prefix' : rule.patternMode === 'regex' ? 'pattern_mode_regex' : 'pattern_mode_none'))}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-priority="${idx}" type="number" value="${escapeAttr(String(rule.priority ?? 0))}">`
-                    : `<span class="stx-content-lab__table-text">${escapeHtml(String(rule.priority ?? 0))}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell stx-content-lab__table-cell--toggle">
-                        ${isEditing
-                    ? buildSharedBoxCheckbox({
-                        id: primaryCheckboxId,
-                        appearance: 'check',
-                        containerClassName: 'stx-content-lab__table-checkbox',
-                        inputAttributes: {
-                            'data-rule-primary': idx,
-                            checked: rule.includeInPrimaryExtraction,
-                        },
-                    })
-                    : `<span class="stx-content-lab__table-flag">${rule.includeInPrimaryExtraction ? '✅' : '❌'}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell stx-content-lab__table-cell--toggle">
-                        ${isEditing
-                    ? buildSharedBoxCheckbox({
-                        id: hintCheckboxId,
-                        appearance: 'check',
-                        containerClassName: 'stx-content-lab__table-checkbox',
-                        inputAttributes: {
-                            'data-rule-hint': idx,
-                            checked: rule.includeAsHint,
-                        },
-                    })
-                    : `<span class="stx-content-lab__table-flag">${rule.includeAsHint ? '✅' : '❌'}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell">
-                        ${isEditing
-                    ? `<input class="stx-memory-workbench__input stx-content-lab__table-input" data-rule-notes="${idx}" value="${escapeAttr(rule.notes)}">`
-                    : `<span class="stx-content-lab__table-text">${escapeHtml(rule.notes)}</span>`}
-                    </div>
-                </td>
-                <td>
-                    <div class="stx-content-lab__table-cell stx-content-lab__table-actions">
-                        <button class="stx-memory-workbench__ghost-btn" data-action="${isEditing ? 'content-lab-save-rule' : 'content-lab-edit-rule'}" data-rule-index="${idx}" style="padding:2px 8px;">
-                            <i class="fa-solid ${isEditing ? 'fa-floppy-disk' : 'fa-pen'}"></i> ${escapeHtml(resolveContentLabText(isEditing ? 'save' : 'edit'))}
-                        </button>
-                        <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-delete-rule" data-rule-index="${idx}" style="padding:2px 8px;border-color:rgba(239,68,68,0.35);color:var(--mw-warn);">
-                            <i class="fa-solid fa-trash"></i> ${escapeHtml(resolveContentLabText('delete'))}
-                        </button>
-                    </div>
-                </td>
-            </tr>
-        `;
-    }).join('');
-
+function buildSourcePanel(
+    floors: Array<{ floor: number; role: string; charCount: number }>,
+    state: WorkbenchState,
+    previewFloor?: import('../../memory-takeover/content-block-pipeline').RawFloorRecord,
+): string {
+    const rawText = previewFloor?.originalText ?? '';
     return `
-        <div class="stx-memory-workbench__card">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('tag_registry'))}</div>
-            <div class="stx-content-lab__table-scroll">
-                <table class="stx-memory-workbench__table stx-content-lab__table">
-                    <colgroup>
-                        <col style="width:160px;">
-                        <col style="width:220px;">
-                        <col style="width:150px;">
-                        <col style="width:240px;">
-                        <col style="width:140px;">
-                        <col style="width:110px;">
-                        <col style="width:120px;">
-                        <col style="width:120px;">
-                        <col style="width:220px;">
-                        <col style="width:180px;">
-                    </colgroup>
-                    <thead>
-                        <tr>
-                            <th>${escapeHtml(resolveContentLabText('tag_name'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('aliases'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('kind'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('pattern'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('pattern_mode'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('priority'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('primary_extraction'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('hint'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('notes'))}</th>
-                            <th>${escapeHtml(resolveContentLabText('actions'))}</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>
-        </div>
-    `;
-}
-
-/**
- * 功能：渲染未知标签策略编辑区。
- */
-function buildUnknownTagPolicyEditor(state: WorkbenchState): string {
-    const kindOptions = ['unknown', 'meta_commentary', 'story_secondary', 'story_primary', 'summary', 'tool_artifact', 'thought', 'instruction'];
-    const optionsHtml = kindOptions.map((k) =>
-        `<option value="${escapeAttr(k)}"${state.contentLabUnknownTagDefaultKind === k ? ' selected' : ''}>${escapeHtml(resolveContentLabKindLabel(k))}</option>`
-    ).join('');
-
-    return `
-        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('unknown_tag_policy'))}</div>
-            <div class="stx-memory-workbench__info-list">
-                <div class="stx-memory-workbench__info-row">
-                    <span>${escapeHtml(resolveContentLabText('default_kind'))}</span>
-                    <select class="stx-memory-workbench__select" id="stx-content-lab-unknown-kind" style="width:180px;">
-                        ${optionsHtml}
-                    </select>
-                </div>
-                <div class="stx-memory-workbench__checkbox-row">
-                    ${buildSharedBoxCheckbox({
-                        id: 'stx-content-lab-unknown-hint',
-                        appearance: 'check',
-                        inputAttributes: {
-                            checked: state.contentLabUnknownTagAllowHint,
-                        },
-                    })}
-                    <label for="stx-content-lab-unknown-hint">${escapeHtml(resolveContentLabText('unknown_allow_hint'))}</label>
+        <div class="stx-content-lab__panel">
+            <div class="stx-content-lab__panel-head">
+                <strong>源内容</strong>
+                <div class="stx-content-lab__mini-actions">
+                    <button class="stx-content-lab__icon-btn" data-action="content-lab-import-rules" title="导入配置"><i class="fa-solid fa-upload"></i></button>
+                    <button class="stx-content-lab__icon-btn" data-action="content-lab-export-rules" title="导出配置"><i class="fa-solid fa-download"></i></button>
+                    <button class="stx-content-lab__icon-btn" data-action="content-lab-reset-rules" title="重置"><i class="fa-solid fa-trash"></i></button>
                 </div>
             </div>
-        </div>
-    `;
-}
-
-/**
- * 功能：渲染分类器开关。
- */
-function buildClassifierToggles(state: WorkbenchState): string {
-    return `
-        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('classifier_toggles'))}</div>
-            <div class="stx-memory-workbench__info-list">
-                <div class="stx-memory-workbench__checkbox-row">
-                    ${buildSharedBoxCheckbox({
-                        id: 'stx-content-lab-enable-rule',
-                        appearance: 'check',
-                        inputAttributes: {
-                            checked: state.contentLabEnableRuleClassifier,
-                        },
-                    })}
-                    <label for="stx-content-lab-enable-rule">${escapeHtml(resolveContentLabText('enable_rule_classifier'))}</label>
-                </div>
-                <div class="stx-memory-workbench__checkbox-row">
-                    ${buildSharedBoxCheckbox({
-                        id: 'stx-content-lab-enable-meta',
-                        appearance: 'check',
-                        inputAttributes: {
-                            checked: state.contentLabEnableMetaKeywordDetection,
-                        },
-                    })}
-                    <label for="stx-content-lab-enable-meta">${escapeHtml(resolveContentLabText('enable_meta_detection'))}</label>
-                </div>
-                <div class="stx-memory-workbench__checkbox-row">
-                    ${buildSharedBoxCheckbox({
-                        id: 'stx-content-lab-enable-tool',
-                        appearance: 'check',
-                        inputAttributes: {
-                            checked: state.contentLabEnableToolArtifactDetection,
-                        },
-                    })}
-                    <label for="stx-content-lab-enable-tool">${escapeHtml(resolveContentLabText('enable_tool_detection'))}</label>
-                </div>
-                <div class="stx-memory-workbench__checkbox-row">
-                    ${buildSharedBoxCheckbox({
-                        id: 'stx-content-lab-enable-ai',
-                        appearance: 'check',
-                        inputAttributes: {
-                            checked: state.contentLabEnableAIClassifier,
-                        },
-                    })}
-                    <label for="stx-content-lab-enable-ai">${escapeHtml(resolveContentLabText('enable_ai_classifier'))}</label>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-/**
- * 功能：渲染楼层选择器。
- */
-function buildFloorSelector(floors: Array<{ floor: number; role: string; charCount: number }>, state: WorkbenchState): string {
-    return `
-        <div class="stx-memory-workbench__card">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('floor_selector'))}</div>
-            <div class="stx-content-lab__toolbar-scroll">
-                <div class="stx-memory-workbench__toolbar stx-content-lab__toolbar-line">
-                <select class="stx-memory-workbench__select" id="stx-content-lab-preview-source-mode" style="width:180px;">
+            <div class="stx-content-lab__source-toolbar">
+                <select class="stx-memory-workbench__select" id="stx-content-lab-preview-source-mode">
                     <option value="content"${state.contentLabPreviewSourceMode === 'content' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('preview_source_content'))}</option>
                     <option value="raw_visible_text"${state.contentLabPreviewSourceMode === 'raw_visible_text' ? ' selected' : ''}>${escapeHtml(resolveContentLabText('preview_source_raw_visible_text'))}</option>
                 </select>
-                <input class="stx-memory-workbench__input" id="stx-content-lab-start-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('start_floor_placeholder'))}" value="${escapeAttr(state.contentLabStartFloor)}" style="width:110px;">
-                <input class="stx-memory-workbench__input" id="stx-content-lab-end-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('end_floor_placeholder'))}" value="${escapeAttr(state.contentLabEndFloor)}" style="width:110px;">
-                <input class="stx-memory-workbench__input" id="stx-content-lab-selected-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('selected_floor_placeholder'))}" value="${escapeAttr(state.contentLabSelectedFloor)}" style="width:110px;">
+                <input class="stx-memory-workbench__input" id="stx-content-lab-start-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('start_floor_placeholder'))}" value="${escapeAttr(state.contentLabStartFloor)}">
+                <input class="stx-memory-workbench__input" id="stx-content-lab-end-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('end_floor_placeholder'))}" value="${escapeAttr(state.contentLabEndFloor)}">
+                <input class="stx-memory-workbench__input" id="stx-content-lab-selected-floor" type="number" min="1" placeholder="${escapeAttr(resolveContentLabText('selected_floor_placeholder'))}" value="${escapeAttr(state.contentLabSelectedFloor)}">
+            </div>
+            <div class="stx-content-lab__source-actions">
                 <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-preview-floor"${state.contentLabPreviewLoading ? ' disabled' : ''}>
                     <i class="fa-solid fa-eye"></i> ${escapeHtml(state.contentLabPreviewLoading ? resolveContentLabText('preview_loading') : resolveContentLabText('preview_floor'))}
                 </button>
                 <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-preview-range"${state.contentLabPreviewLoading ? ' disabled' : ''}>
                     <i class="fa-solid fa-layer-group"></i> ${escapeHtml(state.contentLabPreviewLoading ? resolveContentLabText('preview_range_loading') : resolveContentLabText('preview_range'))}
                 </button>
-                </div>
+                <button class="stx-content-lab__icon-btn" data-action="content-lab-refresh-preview" title="刷新最新拆分结果"${state.contentLabPreviewLoading ? ' disabled' : ''}>
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
             </div>
-            ${floors.length > 0 ? `
-                <div style="margin-top:8px;font-size:12px;opacity:.7;">
-                    ${escapeHtml(resolveContentLabText('available_floors'))}：${floors.length} ${escapeHtml(resolveContentLabText('floor_unit'))}（${floors[0]!.floor} - ${floors[floors.length - 1]!.floor}）
-                </div>
-            ` : `<div class="stx-memory-workbench__empty" style="margin-top:8px;">${escapeHtml(resolveContentLabText('load_chat_hint'))}</div>`}
+            <pre class="stx-content-lab__source-code">${escapeHtml(rawText || resolveContentLabText('raw_content_empty'))}</pre>
+            <div class="stx-content-lab__source-stats">
+                <span>总字符 ${escapeHtml(String(rawText.length))}</span>
+                <span>总行数 ${escapeHtml(String(rawText ? rawText.split('\n').length : 0))}</span>
+                <span>${floors.length > 0 ? `可用楼层 ${floors[0]!.floor}-${floors[floors.length - 1]!.floor}` : resolveContentLabText('load_chat_hint')}</span>
+            </div>
         </div>
     `;
 }
 
-/**
- * 功能：渲染原始内容预览。
- */
-function buildRawContentPreview(state: WorkbenchState, previewFloor?: import('../../memory-takeover/content-block-pipeline').RawFloorRecord): string {
-    if (!previewFloor) {
-        return `
-            <div class="stx-memory-workbench__card" style="margin-top:12px;">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('raw_content'))}</div>
-                <div class="stx-memory-workbench__empty">${escapeHtml(resolveContentLabText('raw_content_empty'))}</div>
+function buildRulePanel(state: WorkbenchState): string {
+    const allRules = Array.isArray(state.contentLabRules) ? state.contentLabRules : DEFAULT_CONTENT_SPLIT_RULES;
+    const modeRules = allRules.filter((rule: ContentSplitRule): boolean => rule.mode === state.contentLabSplitMode);
+    return `
+        <div class="stx-content-lab__panel">
+            <div class="stx-content-lab__panel-head">
+                <strong>拆分规则配置</strong>
+                <button class="stx-memory-workbench__ghost-btn" data-action="content-lab-add-split-rule"><i class="fa-solid fa-plus"></i> ${escapeHtml(resolveContentLabText('add_rule'))}</button>
             </div>
+            <div class="stx-content-lab__rule-list">
+                ${modeRules.length > 0 ? modeRules.map((rule: ContentSplitRule) => buildRuleEditor(rule)).join('') : `<div class="stx-memory-workbench__empty">当前模式暂无规则。</div>`}
+            </div>
+            ${buildCleanupPanel(state)}
+        </div>
+    `;
+}
+
+function buildRuleEditor(rule: ContentSplitRule): string {
+    return `
+        <div class="stx-content-lab__rule-card" data-content-split-rule="true" data-rule-id="${escapeAttr(rule.id)}" data-rule-mode="${escapeAttr(rule.mode)}">
+            <div class="stx-content-lab__rule-head stx-content-lab__rule-head--${escapeAttr(rule.mode)}">
+                ${fieldInput('规则名', 'label', rule.label)}
+                ${fieldSelect('默认通道', 'channel', buildChannelOptions(rule.channel))}
+                ${fieldInput('优先级', 'priority', String(rule.priority ?? 0), 'number', 'stx-content-lab__priority-input')}
+                ${buildModeFields(rule)}
+                ${buildSharedBoxCheckbox({
+                    id: `stx-content-rule-enabled-${rule.id}`,
+                    appearance: 'check',
+                    containerClassName: 'stx-content-lab__rule-enabled',
+                    inputAttributes: { 'data-rule-field': 'enabled', checked: rule.enabled },
+                })}
+                <button class="stx-content-lab__icon-btn" data-action="content-lab-delete-split-rule" data-rule-id="${escapeAttr(rule.id)}" title="删除规则"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>
+    `;
+}
+
+function buildModeFields(rule: ContentSplitRule): string {
+    if (rule.mode === 'xml') {
+        return `
+            ${fieldInput('XML 节点', 'tagName', rule.tagName ?? '')}
+            ${fieldInput('别名', 'aliases', (rule.aliases ?? []).join(', '))}
+            ${fieldInput('模式', 'pattern', rule.pattern ?? '')}
+            <label class="stx-content-lab__field"><span>模式类型</span><select class="stx-memory-workbench__select" data-rule-field="patternMode">
+                <option value="">无</option>
+                <option value="prefix"${rule.patternMode === 'prefix' ? ' selected' : ''}>前缀</option>
+                <option value="regex"${rule.patternMode === 'regex' ? ' selected' : ''}>正则</option>
+            </select></label>
         `;
     }
+    if (rule.mode === 'delimiter') {
+        return `
+            ${fieldInput('分隔符列表', 'delimiters', (rule.delimiters ?? []).join(', '))}
+            <label class="stx-content-lab__checkbox-field">
+                ${buildSharedBoxCheckbox({
+                    id: `stx-content-rule-keep-${rule.id}`,
+                    appearance: 'check',
+                    inputAttributes: { 'data-rule-field': 'keepDelimiter', checked: rule.keepDelimiter },
+                })}
+                <span>保留分隔符</span>
+            </label>
+        `;
+    }
+    if (rule.mode === 'regex') {
+        return `
+            ${fieldInput('表达式', 'regex', rule.regex ?? '')}
+            ${fieldInput('Flags', 'flags', rule.flags ?? 'g')}
+            ${fieldInput('捕获组', 'captureGroup', String(rule.captureGroup ?? 0), 'number')}
+        `;
+    }
+    if (rule.mode === 'markdown') {
+        return `
+            <label class="stx-content-lab__field"><span>切分方式</span><select class="stx-memory-workbench__select" data-rule-field="markdownStrategy">
+                <option value="heading_or_hr"${rule.markdownStrategy !== 'heading' && rule.markdownStrategy !== 'hr' ? ' selected' : ''}>标题或分隔线</option>
+                <option value="heading"${rule.markdownStrategy === 'heading' ? ' selected' : ''}>标题</option>
+                <option value="hr"${rule.markdownStrategy === 'hr' ? ' selected' : ''}>分隔线</option>
+            </select></label>
+        `;
+    }
+    return fieldInput('JSONPath', 'jsonPath', rule.jsonPath ?? '$');
+}
+
+function buildCleanupPanel(state: WorkbenchState): string {
     return `
-        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('raw_content'))}</div>
-            <div class="stx-content-lab__metrics-scroll">
-                <div class="stx-content-lab__metrics-grid">
-                    ${buildMetricCard(resolveContentLabText('floor_number'), String(previewFloor.floor))}
-                    ${buildMetricCard(resolveContentLabText('role'), resolveContentLabRoleLabel(previewFloor.originalRole))}
-                    ${buildMetricCard(resolveContentLabText('raw_text_basis'), escapeHtml(resolveContentLabText(previewFloor.originalTextMode === 'raw_visible_text' ? 'preview_source_raw_visible_text' : 'preview_source_content')), true)}
-                    ${buildMetricCard(resolveContentLabText('source'), resolveContentLabSourceLabel(previewFloor.originalTextSource || 'unknown'))}
-                    ${buildMetricCard(resolveContentLabText('char_count'), String(previewFloor.originalText.length))}
-                    ${buildMetricCard(resolveContentLabText('block_count'), String(previewFloor.parsedBlocks.length))}
-                    ${buildMetricCard(resolveContentLabText('has_primary_story'), previewFloor.hasPrimaryStory ? '是' : '否')}
-                    ${buildMetricCard(resolveContentLabText('hint_only'), previewFloor.hasHintOnly ? '是' : '否')}
-                    ${buildMetricCard(resolveContentLabText('excluded_only'), previewFloor.hasExcludedOnly ? '是' : '否')}
-                </div>
+        <div class="stx-content-lab__advanced">
+            <div class="stx-content-lab__cleanup-grid">
+                ${cleanupSwitch('stx-content-lab-cleanup-trim', '忽略空白', state.contentLabCleanupTrimWhitespace)}
+                ${cleanupSwitch('stx-content-lab-cleanup-strip-wrapper', '去除包裹', state.contentLabCleanupStripWrapper)}
+                ${cleanupSwitch('stx-content-lab-cleanup-drop-empty', '过滤空段', state.contentLabCleanupDropEmptyBlocks)}
+                <label><span>最大分段长度</span><input class="stx-memory-workbench__input" id="stx-content-lab-max-length" type="number" min="0" value="${escapeAttr(state.contentLabCleanupMaxBlockLength)}"></label>
+                <label><span>最小分段长度</span><input class="stx-memory-workbench__input" id="stx-content-lab-min-length" type="number" min="0" value="${escapeAttr(state.contentLabCleanupMinBlockLength)}"></label>
             </div>
-            <details class="stx-memory-workbench__details" style="margin-top:8px;">
-                <summary>${escapeHtml(resolveContentLabText('raw_text'))}</summary>
-                <pre style="white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;font-size:12px;">${escapeHtml(previewFloor.originalText)}</pre>
-            </details>
         </div>
     `;
 }
 
-/**
- * 功能：渲染分块预览。
- */
-function buildBlockPreview(state: WorkbenchState): string {
+function buildResultPreview(state: WorkbenchState, previewFloor?: import('../../memory-takeover/content-block-pipeline').RawFloorRecord): string {
     const blocks = state.contentLabBlocks;
+    const validRate = blocks.length > 0
+        ? Math.round((blocks.filter((block: ClassifiedContentBlock): boolean => !block.diagnostics?.length).length / blocks.length) * 100)
+        : 0;
+    return `
+        <div class="stx-content-lab__panel">
+            <div class="stx-content-lab__panel-head"><strong>拆分结果预览</strong></div>
+            <div class="stx-content-lab__summary-grid">
+                <div><span>预计生成</span><strong>${escapeHtml(String(blocks.length))}</strong><small>段</small></div>
+                <div><span>平均长度</span><strong>${escapeHtml(String(resolveAverageLength(blocks)))}</strong></div>
+                <div><span>有效率</span><strong class="is-good">${escapeHtml(String(validRate))}%</strong></div>
+            </div>
+            <div class="stx-content-lab__result-list">
+                ${blocks.length > 0 ? blocks.map((block: ClassifiedContentBlock, index: number) => buildResultCard(block, index, state.contentLabSplitMode)).join('') : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveContentLabText('block_preview_empty'))}</div>`}
+            </div>
+            ${previewFloor ? `<div class="stx-content-lab__floor-meta">楼层 ${escapeHtml(String(previewFloor.floor))} / ${escapeHtml(resolveContentLabRoleLabel(previewFloor.originalRole))} / ${escapeHtml(resolveContentLabSourceLabel(previewFloor.originalTextSource || 'unknown'))}</div>` : ''}
+        </div>
+    `;
+}
+
+function buildResultCard(block: ClassifiedContentBlock, index: number, mode: ContentSplitMode): string {
+    return `
+        <div class="stx-content-lab__result-card" data-content-block-index="${escapeAttr(String(index))}" data-block-start="${escapeAttr(String(block.startOffset))}" data-block-end="${escapeAttr(String(block.endOffset))}">
+            <div class="stx-content-lab__result-head">
+                <strong>#${escapeHtml(String(index + 1).padStart(3, '0'))} ${escapeHtml(block.title || block.blockId)}</strong>
+                <span class="stx-content-lab__channel-badge is-${escapeAttr(resolveChannelClass(block))}">${escapeHtml(resolveBlockChannelLabel(block))}</span>
+                <span>长度 ${escapeHtml(String(block.rawText.length))}</span>
+            </div>
+            <p>${escapeHtml(block.rawText)}</p>
+            <div class="stx-content-lab__result-actions">
+                <button type="button" data-action="content-lab-toggle-block-view" data-block-index="${escapeAttr(String(index))}"><i class="fa-solid fa-eye"></i> 查看</button>
+                <button type="button" data-action="content-lab-copy-block" data-block-index="${escapeAttr(String(index))}"><i class="fa-regular fa-copy"></i> 复制</button>
+                <button type="button" data-action="content-lab-locate-block" data-block-index="${escapeAttr(String(index))}"><i class="fa-solid fa-location-crosshairs"></i> 定位原文</button>
+            </div>
+        </div>
+    `;
+}
+
+function buildValidationPanel(state: WorkbenchState): string {
+    const diagnostics = state.contentLabBlocks.flatMap((block: ClassifiedContentBlock): string[] => block.diagnostics ?? []);
+    return `
+        <div class="stx-content-lab__panel stx-content-lab__panel--compact">
+            <div class="stx-content-lab__panel-head"><strong>规则验证 / 调试</strong></div>
+            <div class="stx-content-lab__debug-list">
+                ${diagnostics.length > 0
+                    ? diagnostics.map((item: string) => `<div class="is-warn">${escapeHtml(item)}</div>`).join('')
+                    : `<div class="is-pass">当前预览未发现规则错误。</div>`}
+            </div>
+        </div>
+    `;
+}
+
+function buildBlockTable(state: WorkbenchState): string {
+    const rows = state.contentLabBlocks.map((block: ClassifiedContentBlock, index: number) => `
+        <tr>
+            <td>${escapeHtml(String(index + 1))}</td>
+            <td>${escapeHtml(block.title || block.blockId)}</td>
+            <td><span class="stx-memory-workbench__badge">${escapeHtml(String(block.splitMode || state.contentLabSplitMode).toUpperCase())}</span></td>
+            <td>${escapeHtml(String(block.startOffset))}</td>
+            <td>${escapeHtml(String(block.endOffset))}</td>
+            <td>${escapeHtml(String(block.rawText.length))}</td>
+            <td>${escapeHtml(resolveContentLabKindLabel(block.resolvedKind))}</td>
+            <td>${state.contentLabSplitMode === 'delimiter' ? buildBlockChannelSelect(block, index) : `<span class="stx-content-lab__channel-badge is-${escapeAttr(resolveChannelClass(block))}">${escapeHtml(resolveBlockChannelLabel(block))}</span>`}</td>
+        </tr>
+    `).join('');
+    return `
+        <div class="stx-content-lab__table-panel">
+            <div class="stx-content-lab__table-head">
+                <strong>拆分片段明细</strong>
+                <span>${escapeHtml(String(state.contentLabBlocks.length))} 段</span>
+            </div>
+            <div class="stx-content-lab__table-scroll">
+                <table class="stx-memory-workbench__table stx-content-lab__block-table">
+                    <thead><tr><th>#</th><th>标题</th><th>模式</th><th>起始位置</th><th>结束位置</th><th>长度</th><th>元数据</th><th>状态</th></tr></thead>
+                    <tbody>${rows || `<tr><td colspan="8">${escapeHtml(resolveContentLabText('block_preview_empty'))}</td></tr>`}</tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
+function fieldInput(label: string, field: string, value: string, type = 'text', className = ''): string {
+    return `<label class="stx-content-lab__field"><span>${escapeHtml(label)}</span><input class="stx-memory-workbench__input ${escapeAttr(className)}" data-rule-field="${escapeAttr(field)}" type="${escapeAttr(type)}" value="${escapeAttr(value)}"></label>`;
+}
+
+function fieldSelect(label: string, field: string, options: string): string {
+    return `<label class="stx-content-lab__field"><span>${escapeHtml(label)}</span><select class="stx-memory-workbench__select" data-rule-field="${escapeAttr(field)}">${options}</select></label>`;
+}
+
+function buildBlockChannelSelect(block: ClassifiedContentBlock, index: number): string {
+    const channel = resolveChannelClass(block) as 'primary' | 'hint' | 'excluded';
+    const blockIndex = resolveLocalBlockIndex(block, index);
+    return `
+        <select class="stx-memory-workbench__select stx-content-lab__block-channel-select" data-content-block-channel="true" data-block-index="${escapeAttr(String(blockIndex))}" aria-label="分块通道">
+            ${buildChannelOptions(channel)}
+        </select>
+    `;
+}
+
+function resolveLocalBlockIndex(block: ClassifiedContentBlock, fallbackIndex: number): number {
+    const match = String(block.blockId ?? '').match(/_(\d+)$/);
+    if (!match) {
+        return fallbackIndex;
+    }
+    return Math.max(0, Number(match[1]) - 1);
+}
+
+function cleanupSwitch(id: string, label: string, checked: boolean): string {
+    return `
+        <label class="stx-content-lab__checkbox-field">
+            ${buildSharedBoxCheckbox({ id, appearance: 'check', inputAttributes: { checked } })}
+            <span>${escapeHtml(label)}</span>
+        </label>
+    `;
+}
+
+function buildChannelOptions(channel: string | undefined): string {
+    return `
+        <option value="primary"${channel === 'primary' || !channel ? ' selected' : ''}>主正文</option>
+        <option value="hint"${channel === 'hint' ? ' selected' : ''}>辅助上下文</option>
+        <option value="excluded"${channel === 'excluded' ? ' selected' : ''}>排除</option>
+    `;
+}
+
+function resolveAverageLength(blocks: ClassifiedContentBlock[]): number {
     if (blocks.length === 0) {
-        return `
-            <div class="stx-memory-workbench__card" style="margin-top:12px;">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('block_preview'))}</div>
-                <div class="stx-memory-workbench__empty">${escapeHtml(resolveContentLabText('block_preview_empty'))}</div>
-            </div>
-        `;
+        return 0;
     }
-
-    const blockRows = blocks.map((block) => {
-        const color = resolveBlockColor(block);
-        const textPreview = block.rawText.length > 120 ? block.rawText.substring(0, 120) + '…' : block.rawText;
-        return `
-            <div class="stx-memory-workbench__card" style="border-left:3px solid ${color};margin-bottom:8px;">
-                <div class="stx-content-lab__metrics-scroll">
-                    <div class="stx-content-lab__metrics-grid stx-content-lab__metrics-grid--blocks">
-                        ${buildMetricCard(resolveContentLabText('block_id'), block.blockId)}
-                        ${block.rawTagName ? buildMetricCard(resolveContentLabText('tag'), block.rawTagName) : ''}
-                        ${buildMetricCard(resolveContentLabText('resolved_kind'), `<span class="stx-memory-workbench__badge" style="background:${color};color:#fff;">${escapeHtml(resolveContentLabKindLabel(block.resolvedKind))}</span>`, true)}
-                        ${buildMetricCard(resolveContentLabText('primary_extraction'), block.includeInPrimaryExtraction ? '是' : '否')}
-                        ${buildMetricCard(resolveContentLabText('hint'), block.includeAsHint ? '是' : '否')}
-                        ${buildMetricCard(resolveContentLabText('reason'), block.reasonCodes.map(resolveContentLabReasonCodeLabel).join('、'))}
-                    </div>
-                </div>
-                <div style="margin-top:4px;font-size:12px;opacity:.8;white-space:pre-wrap;word-break:break-all;">${escapeHtml(textPreview)}</div>
-            </div>
-        `;
-    }).join('');
-
-    return `
-        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('block_preview'))}（${blocks.length} ${escapeHtml(resolveContentLabText('block_preview_title_suffix'))}）</div>
-            <div style="max-height:400px;overflow-y:auto;">${blockRows}</div>
-        </div>
-    `;
+    return Math.round(blocks.reduce((sum: number, block: ClassifiedContentBlock): number => sum + block.rawText.length, 0) / blocks.length);
 }
 
-/**
- * 功能：渲染送模三通道预览。
- */
-function buildChannelPreview(state: WorkbenchState): string {
-    if (!state.contentLabPrimaryPreview && !state.contentLabHintPreview && !state.contentLabExcludedPreview) {
-        return `
-            <div class="stx-memory-workbench__card" style="margin-top:12px;">
-                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('channel_preview'))}</div>
-                <div class="stx-memory-workbench__empty">${escapeHtml(resolveContentLabText('channel_preview_empty'))}</div>
-            </div>
-        `;
-    }
-
-    return `
-        <div class="stx-memory-workbench__card" style="margin-top:12px;">
-            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveContentLabText('channel_preview'))}</div>
-            <details class="stx-memory-workbench__details" open>
-                <summary style="color:#22c55e;">${escapeHtml(resolveContentLabText('primary_channel'))}</summary>
-                <pre style="white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;font-size:12px;border-left:2px solid #22c55e;padding-left:8px;margin-left:2px;">${escapeHtml(state.contentLabPrimaryPreview || `（${resolveContentLabText('empty_value')}）`)}</pre>
-            </details>
-            <details class="stx-memory-workbench__details" style="margin-top:8px;">
-                <summary style="color:#eab308;">${escapeHtml(resolveContentLabText('hint_channel'))}</summary>
-                <pre style="white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;font-size:12px;border-left:2px solid #eab308;padding-left:8px;margin-left:2px;">${escapeHtml(state.contentLabHintPreview || `（${resolveContentLabText('empty_value')}）`)}</pre>
-            </details>
-            <details class="stx-memory-workbench__details" style="margin-top:8px;">
-                <summary style="color:#ef4444;">${escapeHtml(resolveContentLabText('excluded_channel'))}</summary>
-                <pre style="white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto;font-size:12px;border-left:2px solid #ef4444;padding-left:8px;margin-left:2px;">${escapeHtml(state.contentLabExcludedPreview || `（${resolveContentLabText('empty_value')}）`)}</pre>
-            </details>
-        </div>
-    `;
+function resolveChannelClass(block: ClassifiedContentBlock): string {
+    if (block.includeInPrimaryExtraction) return 'primary';
+    if (block.includeAsHint) return 'hint';
+    return 'excluded';
 }
 
-/**
- * 功能：渲染内容实验室指标卡。
- * @param label 标签。
- * @param value 值。
- * @param allowHtml 是否允许值包含 HTML。
- * @returns HTML 片段。
- */
-function buildMetricCard(label: string, value: string, allowHtml = false): string {
-    return `
-        <div class="stx-content-lab__metric-card">
-            <span class="stx-content-lab__metric-label">${escapeHtml(label)}</span>
-            <strong class="stx-content-lab__metric-value">${allowHtml ? value : escapeHtml(value)}</strong>
-        </div>
-    `;
-}
-
-/**
- * 功能：根据 block 分类返回对应颜色。
- */
-function resolveBlockColor(block: ClassifiedContentBlock): string {
-    if (block.includeInPrimaryExtraction) return '#22c55e';
-    if (block.includeAsHint) return '#eab308';
-    return '#ef4444';
+function resolveBlockChannelLabel(block: ClassifiedContentBlock): string {
+    if (block.includeInPrimaryExtraction) return '主正文';
+    if (block.includeAsHint) return '辅助';
+    return '排除';
 }

@@ -19,7 +19,7 @@ import {
     validateSummaryMutationDocument,
     type EditableFieldMap,
 } from './mutation-validator';
-import { buildSummaryWindow, type SummaryWindowMessage } from './summary-window';
+import { buildSummaryWindow, type SummaryWindowMessage, type SummaryWindowOptions } from './summary-window';
 import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
 import type { MemoryLLMApi } from './llm-types';
 import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
@@ -58,6 +58,7 @@ export interface RunSummaryOrchestratorInput {
     pluginId: string;
     chatKey?: string;
     messages: SummaryWindowMessage[];
+    windowOptions?: SummaryWindowOptions;
     retrievalRulePack: 'native' | 'perocore' | 'hybrid';
 }
 
@@ -93,7 +94,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         payload: { messageCount: input.messages.length },
     });
 
-    const window = buildSummaryWindow(input.messages);
+    const window = buildSummaryWindow(input.messages, input.windowOptions);
     if (!window.summaryText.trim()) {
         await input.dependencies.appendMutationHistory({
             action: 'summary_failed',

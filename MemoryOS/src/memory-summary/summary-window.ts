@@ -30,6 +30,8 @@ export interface SummaryWindowOptions {
     pendingEndIndex?: number;
     /** 近景窗口消息数量，默认 5。 */
     recentContextSize?: number;
+    /** 内容拆分产生的辅助上下文。 */
+    auxiliaryContextText?: string;
 }
 
 /**
@@ -66,7 +68,7 @@ export function buildSummaryWindow(messages: SummaryWindowMessage[], options?: S
         ? Math.max(fromTurn, Math.trunc(Number(mainSlice[mainSlice.length - 1].turnIndex) || mainSlice.length))
         : 0;
     const summaryText = formatMessages(mainSlice);
-    const recentContextText = formatMessages(recentSlice);
+    const recentContextText = appendAuxiliaryContext(formatMessages(recentSlice), options?.auxiliaryContextText);
     const actorHints = extractActorHintsFromSummary(summaryText + '\n' + recentContextText);
     return {
         fromTurn,
@@ -75,6 +77,20 @@ export function buildSummaryWindow(messages: SummaryWindowMessage[], options?: S
         actorHints,
         recentContextText,
     };
+}
+
+/**
+ * 功能：追加内容拆分辅助上下文。
+ * @param recentContextText 近景上下文。
+ * @param auxiliaryContextText 辅助通道文本。
+ * @returns 合并后的近景上下文。
+ */
+function appendAuxiliaryContext(recentContextText: string, auxiliaryContextText: string | undefined): string {
+    const auxiliary = String(auxiliaryContextText ?? '').trim();
+    if (!auxiliary) {
+        return recentContextText;
+    }
+    return [recentContextText, `辅助上下文：\n${auxiliary}`].filter((part: string): boolean => Boolean(part.trim())).join('\n\n');
 }
 
 /**

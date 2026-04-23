@@ -22,6 +22,74 @@ export type ContentBlockKind =
 export type ContentTagPatternMode = 'prefix' | 'regex';
 
 /**
+ * 功能：定义内容拆分台支持的拆分模式。
+ */
+export type ContentSplitMode = 'xml' | 'delimiter' | 'regex' | 'markdown' | 'jsonpath';
+
+/**
+ * 功能：定义拆分块进入送模链路的通道。
+ */
+export type ContentSplitChannel = 'primary' | 'hint' | 'excluded';
+
+/**
+ * 功能：定义内容拆分通用清理配置。
+ */
+export interface ContentSplitCleanupConfig {
+    /** 是否 trim 每个分段 */
+    trimWhitespace: boolean;
+    /** 是否去除 XML/Markdown 等外层包裹标记 */
+    stripWrapper: boolean;
+    /** 是否丢弃空白分段 */
+    dropEmptyBlocks: boolean;
+    /** 最小分段长度 */
+    minBlockLength: number;
+    /** 最大分段长度 */
+    maxBlockLength: number;
+}
+
+/**
+ * 功能：定义五模式内容拆分规则。
+ */
+export interface ContentSplitRule {
+    /** 规则唯一标识 */
+    id: string;
+    /** 规则显示名称 */
+    label: string;
+    /** 规则所属模式 */
+    mode: ContentSplitMode;
+    /** 是否启用 */
+    enabled: boolean;
+    /** 命中后的送模通道 */
+    channel: ContentSplitChannel;
+    /** 多规则命中优先级 */
+    priority: number;
+    /** XML 标签名 */
+    tagName?: string;
+    /** XML 标签别名 */
+    aliases?: string[];
+    /** XML 标签匹配模式 */
+    pattern?: string;
+    /** XML 标签匹配方式 */
+    patternMode?: ContentTagPatternMode;
+    /** 分隔符列表 */
+    delimiters?: string[];
+    /** 是否保留分隔符 */
+    keepDelimiter?: boolean;
+    /** 正则表达式 */
+    regex?: string;
+    /** 正则 flags */
+    flags?: string;
+    /** 捕获组索引 */
+    captureGroup?: number;
+    /** Markdown 切分方式 */
+    markdownStrategy?: 'heading' | 'hr' | 'heading_or_hr';
+    /** JSONPath 路径 */
+    jsonPath?: string;
+    /** 预览块通道覆盖，key 为块序号 */
+    blockChannels?: Record<string, ContentSplitChannel>;
+}
+
+/**
  * 功能：定义单条内容标签策略。
  */
 export interface ContentBlockPolicy {
@@ -168,8 +236,14 @@ export interface ClassifierToggleConfig {
  * 功能：定义内容实验室完整配置。
  */
 export interface ContentLabSettings {
-    /** 是否启用旧聊天接管内容拆分 */
+    /** 是否启用楼层送模内容拆分 */
     enableContentSplit: boolean;
+    /** 当前拆分模式 */
+    splitMode: ContentSplitMode;
+    /** 五模式拆分规则 */
+    rules: ContentSplitRule[];
+    /** 通用清理配置 */
+    cleanup: ContentSplitCleanupConfig;
     /** 标签注册表 */
     tagRegistry: ContentBlockPolicy[];
     /** 未知标签处理策略 */
@@ -190,10 +264,70 @@ export const DEFAULT_CLASSIFIER_TOGGLES: ClassifierToggleConfig = {
 };
 
 /**
+ * 功能：默认内容拆分清理配置。
+ */
+export const DEFAULT_CONTENT_SPLIT_CLEANUP: ContentSplitCleanupConfig = {
+    trimWhitespace: true,
+    stripWrapper: true,
+    dropEmptyBlocks: true,
+    minBlockLength: 0,
+    maxBlockLength: 1200,
+};
+
+/**
+ * 功能：默认五模式拆分规则。
+ */
+export const DEFAULT_CONTENT_SPLIT_RULES: ContentSplitRule[] = [
+    ...DEFAULT_CONTENT_TAG_REGISTRY.map((rule: ContentBlockPolicy, index: number): ContentSplitRule => contentBlockPolicyToSplitRule(rule, index)),
+    {
+        id: 'delimiter-default',
+        label: '默认分隔符',
+        mode: 'delimiter',
+        enabled: true,
+        channel: 'primary',
+        priority: 0,
+        delimiters: ['---', '###', '[章节]', '\\n\\n'],
+        keepDelimiter: false,
+    },
+    {
+        id: 'regex-heading',
+        label: '标题块',
+        mode: 'regex',
+        enabled: true,
+        channel: 'primary',
+        priority: 0,
+        regex: '(?:^|\\n)(#{1,6}\\s+[^\\n]+[\\s\\S]*?)(?=\\n#{1,6}\\s+|$)',
+        flags: 'g',
+        captureGroup: 1,
+    },
+    {
+        id: 'markdown-heading',
+        label: 'Markdown 标题',
+        mode: 'markdown',
+        enabled: true,
+        channel: 'primary',
+        priority: 0,
+        markdownStrategy: 'heading_or_hr',
+    },
+    {
+        id: 'jsonpath-root',
+        label: 'JSON 根节点',
+        mode: 'jsonpath',
+        enabled: true,
+        channel: 'primary',
+        priority: 0,
+        jsonPath: '$',
+    },
+];
+
+/**
  * 功能：默认内容实验室配置。
  */
 export const DEFAULT_CONTENT_LAB_SETTINGS: ContentLabSettings = {
     enableContentSplit: false,
+    splitMode: 'xml',
+    rules: cloneContentSplitRules(DEFAULT_CONTENT_SPLIT_RULES),
+    cleanup: { ...DEFAULT_CONTENT_SPLIT_CLEANUP },
     tagRegistry: [...DEFAULT_CONTENT_TAG_REGISTRY],
     unknownTagPolicy: { ...DEFAULT_UNKNOWN_TAG_POLICY },
     classifierToggles: { ...DEFAULT_CLASSIFIER_TOGGLES },
@@ -255,6 +389,9 @@ export function applyContentLabSettings(settings: Partial<ContentLabSettings>): 
         unknownTagPolicy: settings.unknownTagPolicy ?? _runtimeContentLabSettings.unknownTagPolicy,
         classifierToggles: settings.classifierToggles ?? _runtimeContentLabSettings.classifierToggles,
         enableContentSplit: settings.enableContentSplit ?? _runtimeContentLabSettings.enableContentSplit,
+        splitMode: settings.splitMode ?? _runtimeContentLabSettings.splitMode,
+        rules: settings.rules ?? _runtimeContentLabSettings.rules,
+        cleanup: settings.cleanup ?? _runtimeContentLabSettings.cleanup,
         enableAIClassifier: settings.enableAIClassifier ?? _runtimeContentLabSettings.enableAIClassifier,
     });
     refreshContentLabRuntimeCache();
@@ -397,8 +534,15 @@ export function normalizeContentLabSettings(settings: Partial<ContentLabSettings
             notes: String(rule.notes ?? '').trim(),
         })).filter((rule: ContentBlockPolicy): boolean => Boolean(rule.tagName))
         : [...DEFAULT_CONTENT_TAG_REGISTRY];
+    const splitMode = normalizeSplitMode(source.splitMode);
+    const migratedRules = Array.isArray(source.rules) && source.rules.length > 0
+        ? source.rules
+        : tagRegistry.map((rule: ContentBlockPolicy, index: number): ContentSplitRule => contentBlockPolicyToSplitRule(rule, index));
     return {
         enableContentSplit: source.enableContentSplit === true,
+        splitMode,
+        rules: normalizeContentSplitRules(migratedRules),
+        cleanup: normalizeContentSplitCleanup(source.cleanup),
         tagRegistry,
         unknownTagPolicy: {
             defaultKind: source.unknownTagPolicy?.defaultKind ?? DEFAULT_UNKNOWN_TAG_POLICY.defaultKind,
@@ -421,6 +565,9 @@ export function normalizeContentLabSettings(settings: Partial<ContentLabSettings
 function cloneContentLabSettings(settings: ContentLabSettings): ContentLabSettings {
     return {
         enableContentSplit: settings.enableContentSplit === true,
+        splitMode: normalizeSplitMode(settings.splitMode),
+        rules: cloneContentSplitRules(settings.rules),
+        cleanup: normalizeContentSplitCleanup(settings.cleanup),
         tagRegistry: settings.tagRegistry.map((rule: ContentBlockPolicy): ContentBlockPolicy => ({
             ...rule,
             aliases: [...rule.aliases],
@@ -432,6 +579,135 @@ function cloneContentLabSettings(settings: ContentLabSettings): ContentLabSettin
         classifierToggles: { ...settings.classifierToggles },
         enableAIClassifier: settings.enableAIClassifier,
     };
+}
+
+/**
+ * 功能：把旧 XML 标签策略迁移为新拆分规则。
+ */
+export function contentBlockPolicyToSplitRule(policy: ContentBlockPolicy, index = 0): ContentSplitRule {
+    return {
+        id: `xml-${String(policy.tagName ?? `rule-${index}`).trim().toLowerCase() || `rule-${index}`}`,
+        label: String(policy.notes || policy.tagName || `XML 规则 ${index + 1}`),
+        mode: 'xml',
+        enabled: true,
+        channel: resolvePolicyChannel(policy),
+        priority: normalizePriority(policy.priority),
+        tagName: String(policy.tagName ?? '').trim(),
+        aliases: Array.isArray(policy.aliases) ? [...policy.aliases] : [],
+        pattern: String(policy.pattern ?? '').trim() || undefined,
+        patternMode: normalizePatternMode(policy.patternMode),
+    };
+}
+
+/**
+ * 功能：把新 XML 拆分规则同步回旧标签策略。
+ */
+export function splitRuleToContentBlockPolicy(rule: ContentSplitRule): ContentBlockPolicy {
+    const channel = normalizeSplitChannel(rule.channel);
+    return {
+        tagName: String(rule.tagName || rule.label || rule.id || '').trim(),
+        aliases: Array.isArray(rule.aliases) ? rule.aliases.map((alias: string): string => String(alias ?? '').trim()).filter(Boolean) : [],
+        pattern: String(rule.pattern ?? '').trim() || undefined,
+        patternMode: normalizePatternMode(rule.patternMode),
+        priority: normalizePriority(rule.priority),
+        kind: channel === 'primary' ? 'story_primary' : channel === 'hint' ? 'summary' : 'meta_commentary',
+        includeInPrimaryExtraction: channel === 'primary',
+        includeAsHint: channel === 'primary' || channel === 'hint',
+        allowActorPromotion: channel === 'primary',
+        allowRelationPromotion: channel === 'primary',
+        notes: String(rule.label ?? '').trim(),
+    };
+}
+
+/**
+ * 功能：归一化内容拆分规则列表。
+ */
+function normalizeContentSplitRules(rules: unknown): ContentSplitRule[] {
+    const sourceRules = Array.isArray(rules) && rules.length > 0
+        ? rules
+        : DEFAULT_CONTENT_SPLIT_RULES;
+    const normalized = sourceRules.map((rawRule: unknown, index: number): ContentSplitRule | null => {
+        const rule = rawRule && typeof rawRule === 'object' ? rawRule as Partial<ContentSplitRule> : {};
+        const mode = normalizeSplitMode(rule.mode);
+        const id = String(rule.id ?? `${mode}-${index + 1}`).trim() || `${mode}-${index + 1}`;
+        const label = String(rule.label ?? rule.tagName ?? rule.jsonPath ?? rule.regex ?? `规则 ${index + 1}`).trim() || `规则 ${index + 1}`;
+        return {
+            id,
+            label,
+            mode,
+            enabled: rule.enabled !== false,
+            channel: normalizeSplitChannel(rule.channel),
+            priority: normalizePriority(rule.priority),
+            tagName: String(rule.tagName ?? '').trim() || undefined,
+            aliases: Array.isArray(rule.aliases) ? rule.aliases.map((alias: string): string => String(alias ?? '').trim()).filter(Boolean) : [],
+            pattern: String(rule.pattern ?? '').trim() || undefined,
+            patternMode: normalizePatternMode(rule.patternMode),
+            delimiters: Array.isArray(rule.delimiters) ? rule.delimiters.map((delimiter: string): string => String(delimiter ?? '')).filter(Boolean) : undefined,
+            keepDelimiter: rule.keepDelimiter === true,
+            regex: String(rule.regex ?? '').trim() || undefined,
+            flags: normalizeRegexFlags(rule.flags),
+            captureGroup: Math.max(0, Math.trunc(Number(rule.captureGroup) || 0)),
+            markdownStrategy: normalizeMarkdownStrategy(rule.markdownStrategy),
+            jsonPath: String(rule.jsonPath ?? '').trim() || undefined,
+            blockChannels: normalizeBlockChannels(rule.blockChannels),
+        };
+    }).filter(Boolean) as ContentSplitRule[];
+    return normalized.length > 0 ? cloneContentSplitRules(normalized) : cloneContentSplitRules(DEFAULT_CONTENT_SPLIT_RULES);
+}
+
+/**
+ * 功能：深拷贝拆分规则。
+ */
+function cloneContentSplitRules(rules: ContentSplitRule[]): ContentSplitRule[] {
+    return rules.map((rule: ContentSplitRule): ContentSplitRule => ({
+        ...rule,
+        aliases: Array.isArray(rule.aliases) ? [...rule.aliases] : undefined,
+        delimiters: Array.isArray(rule.delimiters) ? [...rule.delimiters] : undefined,
+        blockChannels: rule.blockChannels ? { ...rule.blockChannels } : undefined,
+    }));
+}
+
+/**
+ * 功能：归一化分块通道覆盖。
+ */
+function normalizeBlockChannels(value: unknown): Record<string, ContentSplitChannel> | undefined {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+    const result: Record<string, ContentSplitChannel> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([key, channel]) => {
+        const normalizedKey = String(key ?? '').trim();
+        if (!normalizedKey) return;
+        result[normalizedKey] = normalizeSplitChannel(channel);
+    });
+    return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * 功能：归一化通用清理配置。
+ */
+function normalizeContentSplitCleanup(cleanup: unknown): ContentSplitCleanupConfig {
+    const source = cleanup && typeof cleanup === 'object' ? cleanup as Partial<ContentSplitCleanupConfig> : {};
+    return {
+        trimWhitespace: source.trimWhitespace ?? DEFAULT_CONTENT_SPLIT_CLEANUP.trimWhitespace,
+        stripWrapper: source.stripWrapper ?? DEFAULT_CONTENT_SPLIT_CLEANUP.stripWrapper,
+        dropEmptyBlocks: source.dropEmptyBlocks ?? DEFAULT_CONTENT_SPLIT_CLEANUP.dropEmptyBlocks,
+        minBlockLength: Math.max(0, Math.trunc(Number(source.minBlockLength ?? DEFAULT_CONTENT_SPLIT_CLEANUP.minBlockLength) || 0)),
+        maxBlockLength: Math.max(0, Math.trunc(Number(source.maxBlockLength ?? DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength) || DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength)),
+    };
+}
+
+/**
+ * 功能：根据旧策略推导三通道。
+ */
+function resolvePolicyChannel(policy: ContentBlockPolicy): ContentSplitChannel {
+    if (policy.includeInPrimaryExtraction) {
+        return 'primary';
+    }
+    if (policy.includeAsHint) {
+        return 'hint';
+    }
+    return 'excluded';
 }
 
 /**
@@ -521,6 +797,51 @@ function normalizePatternMode(value: unknown): ContentTagPatternMode | undefined
         return normalized;
     }
     return undefined;
+}
+
+/**
+ * 功能：归一化拆分模式。
+ */
+function normalizeSplitMode(value: unknown): ContentSplitMode {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'delimiter' || normalized === 'regex' || normalized === 'markdown' || normalized === 'jsonpath') {
+        return normalized;
+    }
+    return 'xml';
+}
+
+/**
+ * 功能：归一化拆分通道。
+ */
+function normalizeSplitChannel(value: unknown): ContentSplitChannel {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'hint' || normalized === 'excluded') {
+        return normalized;
+    }
+    return 'primary';
+}
+
+/**
+ * 功能：归一化正则 flags。
+ */
+function normalizeRegexFlags(value: unknown): string {
+    const raw = String(value ?? 'g').trim() || 'g';
+    const chars = Array.from(new Set(raw.split('').filter((char: string): boolean => 'dgimsuvy'.includes(char))));
+    if (!chars.includes('g')) {
+        chars.push('g');
+    }
+    return chars.join('');
+}
+
+/**
+ * 功能：归一化 Markdown 拆分策略。
+ */
+function normalizeMarkdownStrategy(value: unknown): ContentSplitRule['markdownStrategy'] {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'heading' || normalized === 'hr') {
+        return normalized;
+    }
+    return 'heading_or_hr';
 }
 
 /**

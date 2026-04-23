@@ -86,6 +86,7 @@ describe('assembleTakeoverBatchPromptAssembly', (): void => {
         expect(assembly.extractionMessages.map((message) => message.floor)).toEqual([1]);
         expect(assembly.channels.hintText).toContain('这是总结提示');
         expect(assembly.channels.excludedSummary.join('\n')).toContain('[Floor 3][meta_commentary] 这是排除内容');
+        expect(assembly.sourceSegments.map((segment) => segment.text).join('\n')).not.toContain('这是排除内容');
         expect(assembly.floorRecords.find((record) => record.floor === 2)?.hasHintOnly).toBe(true);
         expect(assembly.floorRecords.find((record) => record.floor === 3)?.hasExcludedOnly).toBe(true);
     });

@@ -22,6 +22,7 @@ import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallS
 import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
 import type { ContentPreviewSourceMode, RawFloorRecord } from '../../memory-takeover/content-block-pipeline';
+import type { ContentLabSettings, ContentSplitMode, ContentSplitRule } from '../../config/content-tag-registry';
 import type { DreamMaintenanceProposalRecord, DreamQualityReport, DreamSchedulerStateRecord, DreamSessionRecord } from '../../services/dream-types';
 import type { DreamUiStateSnapshot } from '../dream-ui-state-service';
 import type { MemoryDatabaseSnapshotInspectionReport } from '../../db/database-snapshot-inspector';
@@ -241,6 +242,13 @@ export interface WorkbenchState {
     contentLabEnableToolArtifactDetection: boolean;
     contentLabEnableAIClassifier: boolean;
     contentLabEditingRuleIndex: number;
+    contentLabSplitMode: ContentSplitMode;
+    contentLabRules: ContentSplitRule[];
+    contentLabCleanupTrimWhitespace: boolean;
+    contentLabCleanupStripWrapper: boolean;
+    contentLabCleanupDropEmptyBlocks: boolean;
+    contentLabCleanupMinBlockLength: string;
+    contentLabCleanupMaxBlockLength: string;
     dreamSubView: 'overview' | 'workbench';
     dreamWorkbenchTab: 'session' | 'diagnostics' | 'maintenance' | 'applied' | 'rollback';
     /** 时间模式过滤 */
@@ -268,6 +276,7 @@ export interface WorkbenchSnapshot {
     contentLabSnapshot: {
         loaded: boolean;
         tagRegistry: import('../../config/content-tag-registry').ContentBlockPolicy[];
+        settings?: ContentLabSettings;
         availableFloors: Array<{ floor: number; role: string; charCount: number }>;
         previewFloor?: RawFloorRecord;
     };

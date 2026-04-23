@@ -3,6 +3,7 @@ import {
     getCurrentTavernUserSnapshotEvent,
     extractTavernMessageTextEvent,
     extractTavernMessageOriginalTextEvent,
+    isTavernMessageHiddenEvent,
     getTavernRuntimeContextEvent,
     getTavernSemanticSnapshotEvent,
     stripRuntimePlaceholderArtifactsEvent,
@@ -42,6 +43,7 @@ export interface MemoryTakeoverSourceBundle {
  */
 interface MemoryTakeoverSkippedReasonStats {
     system_message: number;
+    hidden_message: number;
     empty_after_normalize: number;
     unsupported_shape: number;
 }
@@ -325,6 +327,7 @@ export function collectTakeoverSourceBundle(): MemoryTakeoverSourceBundle {
     const rows: unknown[] = Array.isArray(runtimeContext?.chat) ? runtimeContext.chat : [];
     const skippedStats: MemoryTakeoverSkippedReasonStats = {
         system_message: 0,
+        hidden_message: 0,
         empty_after_normalize: 0,
         unsupported_shape: 0,
     };
@@ -335,6 +338,10 @@ export function collectTakeoverSourceBundle(): MemoryTakeoverSourceBundle {
                 return null;
             }
             const record = row as Record<string, unknown>;
+            if (isTavernMessageHiddenEvent(record)) {
+                skippedStats.hidden_message += 1;
+                return null;
+            }
             const roleResult = normalizeTakeoverMessageRole(record);
             if (!roleResult) {
                 skippedStats.system_message += 1;

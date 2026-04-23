@@ -60,8 +60,13 @@ import {
 import type { MemoryPromptTestBundle } from '../db/db';
 import { buildTakeoverFallbackEstimate, parseTakeoverFormDraft } from './takeoverFormShared';
 import {
+    DEFAULT_CONTENT_SPLIT_CLEANUP,
+    DEFAULT_CONTENT_SPLIT_RULES,
     type ContentLabSettings,
     type ContentBlockPolicy,
+    splitRuleToContentBlockPolicy,
+    type ContentSplitMode,
+    type ContentSplitRule,
 } from '../config/content-tag-registry';
 import type { RawFloorRecord } from '../memory-takeover/content-block-pipeline';
 import { assembleContentChannels } from '../memory-takeover';
@@ -407,6 +412,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         contentLabEnableToolArtifactDetection: true,
         contentLabEnableAIClassifier: false,
         contentLabEditingRuleIndex: -1,
+        contentLabSplitMode: 'xml',
+        contentLabRules: DEFAULT_CONTENT_SPLIT_RULES,
+        contentLabCleanupTrimWhitespace: DEFAULT_CONTENT_SPLIT_CLEANUP.trimWhitespace,
+        contentLabCleanupStripWrapper: DEFAULT_CONTENT_SPLIT_CLEANUP.stripWrapper,
+        contentLabCleanupDropEmptyBlocks: DEFAULT_CONTENT_SPLIT_CLEANUP.dropEmptyBlocks,
+        contentLabCleanupMinBlockLength: String(DEFAULT_CONTENT_SPLIT_CLEANUP.minBlockLength),
+        contentLabCleanupMaxBlockLength: String(DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength),
         entryTimeFilter: 'all',
         entrySortOrder: 'updated-desc',
         dreamSubView: 'overview',
@@ -476,6 +488,22 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
+     * 功能：使内容拆分台缓存失效，确保楼层源与预览按最新聊天重载。
+     * @returns 无返回值。
+     */
+    const invalidateContentLabSnapshot = (): void => {
+        contentLabLoadSequence += 1;
+        contentLabSourceMessages = [];
+        contentLabPreviewFloor = undefined;
+        state.contentLabTabLoaded = false;
+        state.contentLabTabLoading = false;
+        state.contentLabBlocks = [];
+        state.contentLabPrimaryPreview = '';
+        state.contentLabHintPreview = '';
+        state.contentLabExcludedPreview = '';
+    };
+
+    /**
      * 功能：将内容实验室配置同步到工作台状态。
      * @param contentLabSettings 内容实验室配置。
      * @returns 无返回值。
@@ -488,6 +516,13 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         state.contentLabEnableMetaKeywordDetection = contentLabSettings.classifierToggles.enableMetaKeywordDetection;
         state.contentLabEnableToolArtifactDetection = contentLabSettings.classifierToggles.enableToolArtifactDetection;
         state.contentLabEnableAIClassifier = contentLabSettings.enableAIClassifier;
+        state.contentLabSplitMode = contentLabSettings.splitMode;
+        state.contentLabRules = contentLabSettings.rules;
+        state.contentLabCleanupTrimWhitespace = contentLabSettings.cleanup.trimWhitespace;
+        state.contentLabCleanupStripWrapper = contentLabSettings.cleanup.stripWrapper;
+        state.contentLabCleanupDropEmptyBlocks = contentLabSettings.cleanup.dropEmptyBlocks;
+        state.contentLabCleanupMinBlockLength = String(contentLabSettings.cleanup.minBlockLength);
+        state.contentLabCleanupMaxBlockLength = String(contentLabSettings.cleanup.maxBlockLength);
     };
 
     /**
@@ -502,6 +537,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         return {
             loaded: state.contentLabTabLoaded,
             tagRegistry: contentLabSettingsCache?.tagRegistry ?? [],
+            settings: contentLabSettingsCache ?? undefined,
             availableFloors,
             previewFloor: contentLabPreviewFloor,
         };
@@ -667,24 +703,174 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             contentLabSettingsCache = await memory.chatState.getContentLabSettings();
             applyContentLabSettingsToState(contentLabSettingsCache);
         }
+        const nextRules = collectContentSplitRules(root, contentLabSettingsCache.rules);
+        const xmlRegistry = nextRules
+            .filter((rule: ContentSplitRule): boolean => rule.mode === 'xml' && Boolean(rule.tagName || rule.label))
+            .map(splitRuleToContentBlockPolicy);
         const saved = await memory.chatState.saveContentLabSettings({
             enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
-            tagRegistry: registry,
+            splitMode: normalizeContentLabSplitMode(readInputValue(root, '#stx-content-lab-mode')),
+            rules: nextRules,
+            cleanup: {
+                trimWhitespace: readCheckedValue(root, '#stx-content-lab-cleanup-trim'),
+                stripWrapper: readCheckedValue(root, '#stx-content-lab-cleanup-strip-wrapper'),
+                dropEmptyBlocks: readCheckedValue(root, '#stx-content-lab-cleanup-drop-empty'),
+                minBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-content-lab-min-length')) || 0)),
+                maxBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-content-lab-max-length')) || DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength)),
+            },
+            tagRegistry: registry ?? (xmlRegistry.length > 0 ? xmlRegistry : undefined),
             unknownTagPolicy: {
-                defaultKind: readInputValue(root, '#stx-content-lab-unknown-kind') as ContentLabSettings['unknownTagPolicy']['defaultKind'],
-                allowAsHint: readCheckedValue(root, '#stx-content-lab-unknown-hint'),
+                defaultKind: contentLabSettingsCache.unknownTagPolicy.defaultKind,
+                allowAsHint: contentLabSettingsCache.unknownTagPolicy.allowAsHint,
             },
             classifierToggles: {
-                enableRuleClassifier: readCheckedValue(root, '#stx-content-lab-enable-rule'),
-                enableMetaKeywordDetection: readCheckedValue(root, '#stx-content-lab-enable-meta'),
-                enableToolArtifactDetection: readCheckedValue(root, '#stx-content-lab-enable-tool'),
+                enableRuleClassifier: contentLabSettingsCache.classifierToggles.enableRuleClassifier,
+                enableMetaKeywordDetection: contentLabSettingsCache.classifierToggles.enableMetaKeywordDetection,
+                enableToolArtifactDetection: contentLabSettingsCache.classifierToggles.enableToolArtifactDetection,
             },
-            enableAIClassifier: readCheckedValue(root, '#stx-content-lab-enable-ai'),
+            enableAIClassifier: contentLabSettingsCache.enableAIClassifier,
         });
         contentLabSettingsCache = saved;
         applyContentLabSettingsToState(saved);
         state.contentLabTabLoaded = true;
         return saved.tagRegistry;
+    };
+
+    /**
+     * 功能：从内容拆分台表单收集五模式规则。
+     */
+    const collectContentSplitRules = (root: HTMLElement, fallbackRules: ContentSplitRule[]): ContentSplitRule[] => {
+        const existingById = new Map(fallbackRules.map((rule: ContentSplitRule): [string, ContentSplitRule] => [rule.id, rule]));
+        const visibleRules: ContentSplitRule[] = [];
+        root.querySelectorAll<HTMLElement>('[data-content-split-rule]').forEach((row: HTMLElement, index: number): void => {
+            const id = String(row.dataset.ruleId ?? `rule-${index + 1}`).trim();
+            const existing = existingById.get(id);
+            const mode = normalizeContentLabSplitMode(row.dataset.ruleMode ?? existing?.mode ?? state.contentLabSplitMode);
+            const label = readInputValue(row, '[data-rule-field="label"]') || existing?.label || `规则 ${index + 1}`;
+            const channelValue = readInputValue(row, '[data-rule-field="channel"]');
+            const channel = channelValue === 'hint' || channelValue === 'excluded' ? channelValue : 'primary';
+            const priority = Math.trunc(Number(readInputValue(row, '[data-rule-field="priority"]')) || existing?.priority || 0);
+            const rule: ContentSplitRule = {
+                ...(existing ?? {
+                    id,
+                    mode,
+                    enabled: true,
+                    channel,
+                    priority,
+                    label,
+                }),
+                id,
+                mode,
+                label,
+                enabled: readCheckedValue(row, '[data-rule-field="enabled"]'),
+                channel,
+                priority,
+            };
+            if (mode === 'xml') {
+                rule.tagName = readInputValue(row, '[data-rule-field="tagName"]') || existing?.tagName || label;
+                rule.aliases = parseTagText(readInputValue(row, '[data-rule-field="aliases"]'));
+                rule.pattern = readInputValue(row, '[data-rule-field="pattern"]') || undefined;
+                rule.patternMode = readInputValue(row, '[data-rule-field="patternMode"]') === 'regex' || readInputValue(row, '[data-rule-field="patternMode"]') === 'prefix'
+                    ? readInputValue(row, '[data-rule-field="patternMode"]') as ContentBlockPolicy['patternMode']
+                    : undefined;
+            } else if (mode === 'delimiter') {
+                rule.delimiters = parseTagText(readInputValue(row, '[data-rule-field="delimiters"]'));
+                rule.keepDelimiter = readCheckedValue(row, '[data-rule-field="keepDelimiter"]');
+                const blockChannels: Record<string, 'primary' | 'hint' | 'excluded'> = {};
+                root.querySelectorAll<HTMLSelectElement>('[data-content-block-channel]').forEach((select: HTMLSelectElement): void => {
+                    const index = String(select.dataset.blockIndex ?? '').trim();
+                    const value = String(select.value ?? '').trim();
+                    if (!index) return;
+                    blockChannels[index] = value === 'hint' || value === 'excluded' ? value : 'primary';
+                });
+                rule.blockChannels = Object.keys(blockChannels).length > 0 ? blockChannels : rule.blockChannels;
+            } else if (mode === 'regex') {
+                rule.regex = readInputValue(row, '[data-rule-field="regex"]') || undefined;
+                rule.flags = readInputValue(row, '[data-rule-field="flags"]') || 'g';
+                rule.captureGroup = Math.max(0, Math.trunc(Number(readInputValue(row, '[data-rule-field="captureGroup"]')) || 0));
+            } else if (mode === 'markdown') {
+                const strategy = readInputValue(row, '[data-rule-field="markdownStrategy"]');
+                rule.markdownStrategy = strategy === 'heading' || strategy === 'hr' ? strategy : 'heading_or_hr';
+            } else if (mode === 'jsonpath') {
+                rule.jsonPath = readInputValue(row, '[data-rule-field="jsonPath"]') || '$';
+            }
+            visibleRules.push(rule);
+        });
+        if (visibleRules.length === 0) {
+            return fallbackRules;
+        }
+        const visibleIds = new Set(visibleRules.map((rule: ContentSplitRule): string => rule.id));
+        const visibleModes = new Set(visibleRules.map((rule: ContentSplitRule): ContentSplitMode => rule.mode));
+        return [
+            ...fallbackRules.filter((rule: ContentSplitRule): boolean => !visibleIds.has(rule.id) && !visibleModes.has(rule.mode)),
+            ...visibleRules,
+        ];
+    };
+
+    /**
+     * 功能：归一化内容拆分台模式。
+     */
+    const normalizeContentLabSplitMode = (value: unknown): ContentSplitMode => {
+        const normalized = String(value ?? '').trim().toLowerCase();
+        if (normalized === 'delimiter' || normalized === 'regex' || normalized === 'markdown' || normalized === 'jsonpath') {
+            return normalized;
+        }
+        return 'xml';
+    };
+
+    /**
+     * 功能：保存规则后按当前楼层或范围实时刷新内容拆分预览。
+     */
+    const refreshContentLabPreviewFromCurrentForm = async (snapshot: WorkbenchSnapshot): Promise<boolean> => {
+        const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+            ? 'raw_visible_text'
+            : 'content';
+        const selectedFloor = Number(readInputValue(root, '#stx-content-lab-selected-floor') || state.contentLabSelectedFloor);
+        const startFloor = Number(readInputValue(root, '#stx-content-lab-start-floor') || state.contentLabStartFloor);
+        const endFloor = Number(readInputValue(root, '#stx-content-lab-end-floor') || state.contentLabEndFloor);
+        await loadContentLabSnapshot();
+        await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
+        if (startFloor && endFloor && endFloor >= startFloor) {
+            state.contentLabStartFloor = String(startFloor);
+            state.contentLabEndFloor = String(endFloor);
+            const records = await memory.chatState.previewFloorRangeContentBlocks({
+                startFloor,
+                endFloor,
+                previewSourceMode,
+                forceContentSplit: true,
+            });
+            const channels = assembleContentChannels(records);
+            contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor)) ?? records[0];
+            state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
+            state.contentLabPrimaryPreview = channels.primaryText;
+            state.contentLabHintPreview = channels.hintText;
+            state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+            return true;
+        }
+        if (selectedFloor) {
+            state.contentLabSelectedFloor = String(selectedFloor);
+            const record = await memory.chatState.previewFloorContentBlocks({
+                floor: selectedFloor,
+                previewSourceMode,
+                forceContentSplit: true,
+            });
+            contentLabPreviewFloor = record;
+            state.contentLabBlocks = record.parsedBlocks;
+            const channels = assembleContentChannels([record]);
+            state.contentLabPrimaryPreview = channels.primaryText;
+            state.contentLabHintPreview = channels.hintText;
+            state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+            return true;
+        }
+        return false;
+    };
+
+    /**
+     * 功能：转义 CSS 属性选择器标识。
+     */
+    const escapeCssIdentifier = (value: string): string => {
+        const cssEscape = (globalThis as { CSS?: { escape?: (input: string) => string } }).CSS?.escape;
+        return cssEscape ? cssEscape(value) : value.replace(/["\\\]]/g, '\\$&');
     };
 
     /**
@@ -1390,6 +1576,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     const record = await memory.chatState.previewFloorContentBlocks({
                         floor: selectedFloor,
                         previewSourceMode,
+                        forceContentSplit: true,
                     });
                     contentLabPreviewFloor = record;
                     state.contentLabBlocks = record.parsedBlocks;
@@ -1397,6 +1584,20 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     state.contentLabPrimaryPreview = channels.primaryText;
                     state.contentLabHintPreview = channels.hintText;
                     state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                } finally {
+                    state.contentLabPreviewLoading = false;
+                    await render();
+                }
+                return;
+            }
+            if (action === 'content-lab-refresh-preview') {
+                state.contentLabPreviewLoading = true;
+                await render();
+                try {
+                    const refreshed = await refreshContentLabPreviewFromCurrentForm(snapshot);
+                    if (!refreshed) {
+                        toast.warning('请先输入预览楼层或楼层范围。');
+                    }
                 } finally {
                     state.contentLabPreviewLoading = false;
                     await render();
@@ -1426,11 +1627,12 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                         startFloor,
                         endFloor,
                         previewSourceMode,
+                        forceContentSplit: true,
                     });
                     const channels = assembleContentChannels(records);
                     contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor))
                         ?? records[0];
-                    state.contentLabBlocks = contentLabPreviewFloor?.parsedBlocks ?? [];
+                    state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
                     state.contentLabPrimaryPreview = channels.primaryText;
                     state.contentLabHintPreview = channels.hintText;
                     state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
@@ -1440,17 +1642,117 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 }
                 return;
             }
+            if (action === 'content-lab-set-mode') {
+                const nextMode = normalizeContentLabSplitMode(button.dataset.mode);
+                const nextRules = contentLabSettingsCache
+                    ? collectContentSplitRules(root, contentLabSettingsCache.rules)
+                    : state.contentLabRules;
+                state.contentLabSplitMode = nextMode;
+                state.contentLabPreviewLoading = Boolean(state.contentLabSelectedFloor || (state.contentLabStartFloor && state.contentLabEndFloor));
+                await render();
+                if (contentLabSettingsCache) {
+                    contentLabSettingsCache = await memory.chatState.saveContentLabSettings({
+                        ...contentLabSettingsCache,
+                        splitMode: nextMode,
+                        rules: nextRules,
+                    });
+                    applyContentLabSettingsToState(contentLabSettingsCache);
+                }
+                try {
+                    const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+                        ? 'raw_visible_text'
+                        : 'content';
+                    if (state.contentLabStartFloor && state.contentLabEndFloor) {
+                        const startFloor = Math.max(1, Math.trunc(Number(state.contentLabStartFloor) || 1));
+                        const endFloor = Math.max(startFloor, Math.trunc(Number(state.contentLabEndFloor) || startFloor));
+                        const records = await memory.chatState.previewFloorRangeContentBlocks({
+                            startFloor,
+                            endFloor,
+                            previewSourceMode,
+                            forceContentSplit: true,
+                        });
+                        const channels = assembleContentChannels(records);
+                        contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor)) ?? records[0];
+                        state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
+                        state.contentLabPrimaryPreview = channels.primaryText;
+                        state.contentLabHintPreview = channels.hintText;
+                        state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                    } else if (state.contentLabSelectedFloor) {
+                        const selectedFloor = Math.max(1, Math.trunc(Number(state.contentLabSelectedFloor) || 1));
+                        const record = await memory.chatState.previewFloorContentBlocks({
+                            floor: selectedFloor,
+                            previewSourceMode,
+                            forceContentSplit: true,
+                        });
+                        contentLabPreviewFloor = record;
+                        state.contentLabBlocks = record.parsedBlocks;
+                        const channels = assembleContentChannels([record]);
+                        state.contentLabPrimaryPreview = channels.primaryText;
+                        state.contentLabHintPreview = channels.hintText;
+                        state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                    }
+                } finally {
+                    state.contentLabPreviewLoading = false;
+                    await render();
+                }
+                return;
+            }
+            if (action === 'content-lab-add-split-rule') {
+                if (!contentLabSettingsCache) {
+                    contentLabSettingsCache = await memory.chatState.getContentLabSettings();
+                    applyContentLabSettingsToState(contentLabSettingsCache);
+                }
+                const mode = normalizeContentLabSplitMode(readInputValue(root, '#stx-content-lab-mode') || state.contentLabSplitMode);
+                const nextRule: ContentSplitRule = {
+                    id: `${mode}-${Date.now().toString(36)}`,
+                    label: '新规则',
+                    mode,
+                    enabled: true,
+                    channel: 'primary',
+                    priority: 0,
+                    tagName: mode === 'xml' ? 'custom' : undefined,
+                    delimiters: mode === 'delimiter' ? ['---'] : undefined,
+                    keepDelimiter: false,
+                    regex: mode === 'regex' ? '([\\s\\S]+)' : undefined,
+                    flags: mode === 'regex' ? 'g' : undefined,
+                    captureGroup: mode === 'regex' ? 1 : undefined,
+                    markdownStrategy: mode === 'markdown' ? 'heading_or_hr' : undefined,
+                    jsonPath: mode === 'jsonpath' ? '$' : undefined,
+                };
+                await memory.chatState.saveContentLabSettings({
+                    ...contentLabSettingsCache,
+                    splitMode: mode,
+                    rules: [...contentLabSettingsCache.rules, nextRule],
+                });
+                contentLabSettingsCache = await memory.chatState.getContentLabSettings();
+                applyContentLabSettingsToState(contentLabSettingsCache);
+                toast.success('已新增拆分规则。');
+                await render();
+                return;
+            }
+            if (action === 'content-lab-delete-split-rule') {
+                if (!contentLabSettingsCache) {
+                    contentLabSettingsCache = await memory.chatState.getContentLabSettings();
+                }
+                const ruleId = String(button.dataset.ruleId ?? '').trim();
+                if (!ruleId) return;
+                const rules = collectContentSplitRules(root, contentLabSettingsCache.rules)
+                    .filter((rule: ContentSplitRule): boolean => rule.id !== ruleId);
+                contentLabSettingsCache = await memory.chatState.saveContentLabSettings({
+                    ...contentLabSettingsCache,
+                    rules,
+                });
+                applyContentLabSettingsToState(contentLabSettingsCache);
+                toast.success('拆分规则已删除。');
+                await render();
+                return;
+            }
             if (action === 'content-lab-reset-rules') {
                 const saved = await memory.chatState.saveContentLabSettings({
                     enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
-                    tagRegistry: [],
-                    unknownTagPolicy: { defaultKind: 'unknown', allowAsHint: true },
-                    classifierToggles: {
-                        enableRuleClassifier: true,
-                        enableMetaKeywordDetection: true,
-                        enableToolArtifactDetection: true,
-                    },
-                    enableAIClassifier: false,
+                    splitMode: 'xml',
+                    rules: DEFAULT_CONTENT_SPLIT_RULES,
+                    cleanup: DEFAULT_CONTENT_SPLIT_CLEANUP,
                 });
                 contentLabSettingsCache = saved;
                 applyContentLabSettingsToState(saved);
@@ -1547,15 +1849,15 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'content-lab-export-rules') {
-                const registry = snapshot.contentLabSnapshot.tagRegistry;
-                const blob = new Blob([JSON.stringify(registry, null, 2)], { type: 'application/json' });
+                const settings = contentLabSettingsCache ?? await memory.chatState.getContentLabSettings();
+                const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'content-tag-registry.json';
+                a.download = 'content-split-lab-settings.json';
                 a.click();
                 URL.revokeObjectURL(url);
-                toast.success('规则已导出。');
+                toast.success('内容拆分配置已导出。');
                 return;
             }
             if (action === 'content-lab-import-rules') {
@@ -1567,19 +1869,54 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     if (!file) return;
                     try {
                         const text = await file.text();
-                        const rules = JSON.parse(text);
-                        if (!Array.isArray(rules)) {
+                        const parsed = JSON.parse(text);
+                        if (Array.isArray(parsed)) {
+                            await persistContentLabSettings(root, parsed as ContentBlockPolicy[]);
+                        } else if (parsed && typeof parsed === 'object') {
+                            contentLabSettingsCache = await memory.chatState.saveContentLabSettings(parsed as Partial<ContentLabSettings>);
+                            applyContentLabSettingsToState(contentLabSettingsCache);
+                        } else {
                             toast.error('导入文件格式不正确。');
                             return;
                         }
-                        await persistContentLabSettings(root, rules as ContentBlockPolicy[]);
-                        toast.success('规则已导入。');
+                        toast.success('内容拆分配置已导入。');
                         await render();
                     } catch {
                         toast.error('导入失败，请检查文件格式。');
                     }
                 };
                 input.click();
+                return;
+            }
+            if (action === 'content-lab-toggle-block-view') {
+                const blockIndex = String(button.dataset.blockIndex ?? '').trim();
+                const card = root.querySelector(`[data-content-block-index="${escapeCssIdentifier(blockIndex)}"]`) as HTMLElement | null;
+                card?.classList.toggle('is-expanded');
+                return;
+            }
+            if (action === 'content-lab-copy-block') {
+                const blockIndex = Math.trunc(Number(button.dataset.blockIndex) || 0);
+                const block = state.contentLabBlocks[blockIndex];
+                if (!block) {
+                    toast.warning('未找到可复制的拆分块。');
+                    return;
+                }
+                try {
+                    await navigator.clipboard.writeText(block.rawText);
+                    toast.success('拆分块已复制。');
+                } catch {
+                    toast.error('复制失败，请检查浏览器剪贴板权限。');
+                }
+                return;
+            }
+            if (action === 'content-lab-locate-block') {
+                const blockIndex = String(button.dataset.blockIndex ?? '').trim();
+                const card = root.querySelector(`[data-content-block-index="${escapeCssIdentifier(blockIndex)}"]`) as HTMLElement | null;
+                const source = root.querySelector('.stx-content-lab__source-code') as HTMLElement | null;
+                source?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                card?.classList.add('is-located');
+                window.setTimeout(() => card?.classList.remove('is-located'), 1400);
+                toast.info('已定位到源内容预览，可参考该块的起止位置。');
                 return;
             }
         } catch (error) {
@@ -1842,6 +2179,30 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 void handleAction(String(button.dataset.action ?? '').trim(), snapshot, button);
             });
         });
+
+        let contentLabRuleRefreshTimer: number | undefined;
+        const scheduleContentLabRuleRefresh = (): void => {
+            window.clearTimeout(contentLabRuleRefreshTimer);
+            contentLabRuleRefreshTimer = window.setTimeout((): void => {
+                if (state.currentView !== 'content-lab') return;
+                state.contentLabPreviewLoading = true;
+                void (async (): Promise<void> => {
+                    try {
+                        await refreshContentLabPreviewFromCurrentForm(snapshot);
+                    } catch (error) {
+                        logger.warn('内容拆分规则实时刷新失败', error);
+                    } finally {
+                        state.contentLabPreviewLoading = false;
+                        await render();
+                    }
+                })();
+            }, 260);
+        };
+        root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-rule-field], #stx-content-lab-cleanup-trim, #stx-content-lab-cleanup-strip-wrapper, #stx-content-lab-cleanup-drop-empty, #stx-content-lab-min-length, #stx-content-lab-max-length')
+            .forEach((element: HTMLInputElement | HTMLSelectElement): void => {
+                const eventName = element instanceof HTMLInputElement && element.type !== 'checkbox' ? 'input' : 'change';
+                element.addEventListener(eventName, scheduleContentLabRuleRefresh);
+            });
     };
 
     /**
@@ -1937,6 +2298,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.takeoverActionRunning = false;
                 stopTakeoverProgressPolling();
                 if (!disposed) {
+                    await refreshWorkbenchAfterTakeoverMutation();
                     await refreshTakeoverProgress();
                     await render();
                 }
@@ -2088,6 +2450,29 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 state.contentLabTabLoading = false;
                 await render();
             }
+        }
+    };
+
+    /**
+     * 功能：在旧聊天接管写入后同步刷新工作台缓存。
+     * @returns 异步完成。
+     */
+    const refreshWorkbenchAfterTakeoverMutation = async (): Promise<void> => {
+        takeoverProgressCache = null;
+        invalidateContentLabSnapshot();
+        invalidatePreviewSnapshot();
+        if (state.currentView === 'content-lab') {
+            await loadContentLabSnapshot();
+            const snapshot = await loadCoreSnapshot();
+            try {
+                await refreshContentLabPreviewFromCurrentForm(snapshot);
+            } catch (error) {
+                logger.warn('接管完成后刷新内容拆分预览失败', error);
+            }
+            return;
+        }
+        if (state.currentView === 'preview') {
+            await refreshPreviewSnapshot();
         }
     };
 

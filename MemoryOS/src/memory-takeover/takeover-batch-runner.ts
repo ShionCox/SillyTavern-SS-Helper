@@ -18,7 +18,7 @@ import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
 import { getContentLabSettings } from '../config/content-tag-registry';
-import { buildFloorRecords, buildFullContentFloorRecords, assembleContentChannels, type RawFloorRecord } from './content-block-pipeline';
+import { assembleContentChannels, prepareFloorContentForSending, type RawFloorRecord } from './content-block-pipeline';
 import { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
 import { runTakeoverRepairService } from './takeover-repair-service';
 import { logger } from '../runtime/runtime-services';
@@ -98,9 +98,8 @@ export async function assembleTakeoverBatchPromptAssembly(input: {
     messages: MemoryTakeoverMessageSlice[];
 }): Promise<MemoryTakeoverBatchPromptAssembly> {
     const contentLabSettings = getContentLabSettings();
-    let floorRecords: RawFloorRecord[] = contentLabSettings.enableContentSplit
-        ? buildFloorRecords(input.messages)
-        : buildFullContentFloorRecords(input.messages);
+    const prepared = prepareFloorContentForSending(input.messages, contentLabSettings);
+    let floorRecords: RawFloorRecord[] = prepared.floorRecords;
     if (contentLabSettings.enableContentSplit && contentLabSettings.enableAIClassifier) {
         floorRecords = await classifyFloorRecordsWithAI({
             llm: input.llm,
@@ -125,18 +124,20 @@ export async function assembleTakeoverBatchPromptAssembly(input: {
                 .join('\n\n'),
         }));
     const sourceSegments = floorRecords.flatMap((floor: RawFloorRecord) =>
-        floor.parsedBlocks.map((block) => ({
-            kind: block.resolvedKind === 'story_primary' ? 'story_narrative' as const
-                : block.resolvedKind === 'story_secondary' ? 'story_dialogue' as const
-                : block.resolvedKind === 'thought' ? 'thought_like' as const
-                : block.resolvedKind === 'tool_artifact' ? 'tool_artifact' as const
-                : block.resolvedKind === 'meta_commentary' ? 'meta_analysis' as const
-                : block.resolvedKind === 'instruction' ? 'instructional' as const
-                : 'meta_analysis' as const,
-            text: block.rawText,
-            sourceFloor: floor.floor,
-            confidence: block.includeInPrimaryExtraction ? 0.95 : 0.5,
-        })),
+        floor.parsedBlocks
+            .filter((block) => block.includeInPrimaryExtraction || block.includeAsHint)
+            .map((block) => ({
+                kind: block.resolvedKind === 'story_primary' ? 'story_narrative' as const
+                    : block.resolvedKind === 'story_secondary' ? 'story_dialogue' as const
+                    : block.resolvedKind === 'thought' ? 'thought_like' as const
+                    : block.resolvedKind === 'tool_artifact' ? 'tool_artifact' as const
+                    : block.resolvedKind === 'meta_commentary' ? 'meta_analysis' as const
+                    : block.resolvedKind === 'instruction' ? 'instructional' as const
+                    : 'meta_analysis' as const,
+                text: block.rawText,
+                sourceFloor: floor.floor,
+                confidence: block.includeInPrimaryExtraction ? 0.95 : 0.5,
+            })),
     );
     return {
         floorRecords,

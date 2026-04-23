@@ -135,6 +135,7 @@ export {
   findLastTavernPromptSystemIndexEvent,
   findLastTavernPromptUserIndexEvent,
   getTavernMessageTextEvent,
+  isTavernMessageHiddenEvent,
   getTavernPromptMessageTextEvent,
   insertTavernPromptMessageEvent,
   insertTavernPromptSystemMessageEvent,

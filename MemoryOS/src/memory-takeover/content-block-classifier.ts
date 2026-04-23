@@ -15,6 +15,16 @@ import type { ParsedContentBlock } from './content-block-parser';
  * 功能：定义分类后的内容块。
  */
 export interface ClassifiedContentBlock extends ParsedContentBlock {
+    /** 拆分模式 */
+    splitMode?: string;
+    /** 展示标题 */
+    title?: string;
+    /** 送模通道 */
+    channel?: string;
+    /** 元数据 */
+    metadata?: Record<string, string | number | boolean>;
+    /** 诊断信息 */
+    diagnostics?: string[];
     /** 最终分类 */
     resolvedKind: ContentBlockKind;
     /** 是否参与主正文抽取 */

@@ -16,6 +16,7 @@ const {
     listEntriesMock,
     getEntryMock,
     getTavernMessageTextEventMock,
+    isTavernMessageHiddenEventMock,
     getTavernRuntimeContextEventMock,
 } = vi.hoisted(() => {
     return {
@@ -101,6 +102,7 @@ const {
         listEntriesMock: vi.fn(async () => []),
         getEntryMock: vi.fn(async () => null),
         getTavernMessageTextEventMock: vi.fn(() => ''),
+        isTavernMessageHiddenEventMock: vi.fn(() => false),
         getTavernRuntimeContextEventMock: vi.fn(() => ({ chat: [] })),
     };
 });
@@ -280,6 +282,7 @@ vi.mock('../../SDK/tavern', () => {
         getCurrentTavernCharacterEvent: vi.fn(() => null),
         getCurrentTavernUserNameEvent: vi.fn(() => '你'),
         getTavernMessageTextEvent: getTavernMessageTextEventMock,
+        isTavernMessageHiddenEvent: isTavernMessageHiddenEventMock,
         getTavernRuntimeContextEvent: getTavernRuntimeContextEventMock,
         getCurrentTavernUserSnapshotEvent: vi.fn(() => null),
         getTavernSemanticSnapshotEvent: vi.fn(() => null),
@@ -366,6 +369,8 @@ describe('memory sdk takeover cold start sync', () => {
         getEntryMock.mockResolvedValue(null);
         getTavernMessageTextEventMock.mockReset();
         getTavernMessageTextEventMock.mockReturnValue('');
+        isTavernMessageHiddenEventMock.mockReset();
+        isTavernMessageHiddenEventMock.mockReturnValue(false);
         getTavernRuntimeContextEventMock.mockReset();
         getTavernRuntimeContextEventMock.mockReturnValue({ chat: [] });
         vi.mocked(readMemoryOSSettings).mockReturnValue({
@@ -637,6 +642,106 @@ describe('memory sdk takeover cold start sync', () => {
 
         expect(messages.map((item) => item.turnIndex)).toEqual([1, 2]);
         expect(messages.map((item) => item.content)).toEqual(['第一条正文', '第二条正文']);
+    });
+
+    it('宿主消息会跳过 hide 隐藏楼层并保持连续 turnIndex', () => {
+        getTavernRuntimeContextEventMock.mockReturnValue({
+            chat: [
+                { role: 'user', text: '第一条正文' },
+                { role: 'assistant', text: '隐藏正文', is_hidden: true },
+                { role: 'assistant', text: '第二条正文' },
+            ],
+        });
+        isTavernMessageHiddenEventMock.mockImplementation((record: unknown): boolean => {
+            return (record as Record<string, unknown>).is_hidden === true;
+        });
+        getTavernMessageTextEventMock.mockImplementation((record: unknown): string => {
+            return String((record as Record<string, unknown>).text ?? '');
+        });
+        const sdk = new MemorySDKImpl('chat-1');
+        const messages = (sdk as unknown as {
+            readActiveHostChatMessages: () => Array<{ turnIndex?: number; content?: string }>;
+        }).readActiveHostChatMessages();
+
+        expect(messages.map((item) => item.turnIndex)).toEqual([1, 2]);
+        expect(messages.map((item) => item.content)).toEqual(['第一条正文', '第二条正文']);
+    });
+
+    it('宿主消息会跳过被 hide 改写为 is_system 的可见角色楼层', () => {
+        getTavernRuntimeContextEventMock.mockReturnValue({
+            chat: [
+                { role: 'user', text: '第一条正文' },
+                { role: 'assistant', text: '隐藏助手正文', is_system: true },
+                { is_user: true, is_system: true, text: '隐藏用户正文' },
+                { role: 'assistant', text: '第二条正文' },
+            ],
+        });
+        isTavernMessageHiddenEventMock.mockImplementation((record: unknown): boolean => {
+            const message = record as Record<string, unknown>;
+            const explicitRole = String(message.role ?? '').trim().toLowerCase();
+            return message.is_system === true && (
+                message.is_user === true
+                || explicitRole === 'user'
+                || explicitRole === 'assistant'
+            );
+        });
+        getTavernMessageTextEventMock.mockImplementation((record: unknown): string => {
+            return String((record as Record<string, unknown>).text ?? '');
+        });
+        const sdk = new MemorySDKImpl('chat-1');
+        const messages = (sdk as unknown as {
+            readActiveHostChatMessages: () => Array<{ turnIndex?: number; content?: string }>;
+        }).readActiveHostChatMessages();
+
+        expect(messages.map((item) => item.turnIndex)).toEqual([1, 2]);
+        expect(messages.map((item) => item.content)).toEqual(['第一条正文', '第二条正文']);
+    });
+
+    it('总结触发进度会使用过滤 hide 后的可见楼层数', async () => {
+        vi.mocked(readMemoryOSSettings).mockReturnValue({
+            summaryAutoTriggerEnabled: true,
+            summaryIntervalFloors: 10,
+            summaryMinMessages: 10,
+            takeoverDefaultRecentFloors: 60,
+            takeoverDefaultBatchSize: 30,
+            takeoverDefaultPrioritizeRecent: true,
+            takeoverDefaultAutoContinue: true,
+            takeoverDefaultAutoConsolidate: true,
+            takeoverDefaultPauseOnError: true,
+        } as ReturnType<typeof readMemoryOSSettings>);
+        getTavernRuntimeContextEventMock.mockReturnValue({
+            chat: [
+                { role: 'user', text: '第一条正文' },
+                { role: 'assistant', text: '隐藏助手正文', is_system: true },
+                { is_user: true, is_system: true, text: '隐藏用户正文' },
+                { role: 'assistant', text: '第二条正文' },
+            ],
+        });
+        isTavernMessageHiddenEventMock.mockImplementation((record: unknown): boolean => {
+            const message = record as Record<string, unknown>;
+            const explicitRole = String(message.role ?? '').trim().toLowerCase();
+            return message.is_system === true && (
+                message.is_user === true
+                || explicitRole === 'user'
+                || explicitRole === 'assistant'
+            );
+        });
+        getTavernMessageTextEventMock.mockImplementation((record: unknown): string => {
+            return String((record as Record<string, unknown>).text ?? '');
+        });
+        stateStore.set('chat-1', {
+            summaryLastSummarizedIndex: 0,
+            summaryPendingStartIndex: 1,
+            summaryPendingEndIndex: 0,
+        });
+
+        const sdk = new MemorySDKImpl('chat-1');
+        const status = await sdk.chatState.getSummaryTriggerStatus();
+
+        expect(status.currentFloorCount).toBe(2);
+        expect(status.progressCurrent).toBe(2);
+        expect(status.remainingFloors).toBe(8);
+        expect(status.readyToSummarize).toBe(false);
     });
 
     it('creates different actor keys for multiple Chinese actor cards during takeover consolidation', async () => {

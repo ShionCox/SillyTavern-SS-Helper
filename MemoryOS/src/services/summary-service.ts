@@ -3,12 +3,14 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryOSSettings } from '../settings/store';
 import { EntryRepository } from '../repository/entry-repository';
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../types';
+import { getContentLabSettings } from '../config/content-tag-registry';
+import { prepareFloorContentForSending } from '../memory-takeover/content-block-pipeline';
 
 /**
  * 功能：定义从聊天消息捕获总结的输入。
  */
 export interface CaptureSummaryFromChatInput {
-    messages: Array<{ role?: string; content?: string; name?: string }>;
+    messages: Array<{ role?: string; content?: string; name?: string; turnIndex?: number }>;
     actorHints?: Array<{ actorKey: string; displayName?: string }>;
     title?: string;
 }
@@ -44,6 +46,7 @@ export class SummaryService {
             });
         }
         const settings = readMemoryOSSettings();
+        const contentLabPrepared = prepareFloorContentForSending(normalizedMessages, getContentLabSettings());
         const llm = readMemoryLLMApi();
         const summaryResult = await runSummaryOrchestrator({
             dependencies: {
@@ -61,7 +64,10 @@ export class SummaryService {
             llm,
             pluginId: MEMORY_OS_PLUGIN_ID,
             chatKey: this.chatKey,
-            messages: normalizedMessages,
+            messages: contentLabPrepared.messages,
+            windowOptions: {
+                auxiliaryContextText: contentLabPrepared.channels.hintText,
+            },
             retrievalRulePack: settings.retrievalRulePack,
         });
         return summaryResult.snapshot;

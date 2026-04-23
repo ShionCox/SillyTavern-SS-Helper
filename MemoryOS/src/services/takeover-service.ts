@@ -93,6 +93,7 @@ export interface TakeoverRetryExecutionInput extends Omit<TakeoverSchedulerExecu
 export interface ContentLabFloorPreviewInput {
     floor: number;
     previewSourceMode?: ContentPreviewSourceMode;
+    forceContentSplit?: boolean;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
@@ -104,6 +105,7 @@ export interface ContentLabRangePreviewInput {
     startFloor: number;
     endFloor: number;
     previewSourceMode?: ContentPreviewSourceMode;
+    forceContentSplit?: boolean;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
@@ -170,13 +172,17 @@ export class TakeoverService {
         if (!floor) {
             throw new Error('invalid_floor');
         }
-        const records = await this.previewFloorRangeContentBlocks({
+        const rangeInput: ContentLabRangePreviewInput = {
             startFloor: floor,
             endFloor: floor,
             previewSourceMode: input.previewSourceMode,
             llm: input.llm,
             pluginId: input.pluginId,
-        });
+        };
+        if (input.forceContentSplit !== undefined) {
+            rangeInput.forceContentSplit = input.forceContentSplit;
+        }
+        const records = await this.previewFloorRangeContentBlocks(rangeInput);
         const record = records[0];
         if (!record) {
             throw new Error(`floor_not_found:${floor}`);
@@ -200,10 +206,11 @@ export class TakeoverService {
             endFloor: Math.max(Math.trunc(Number(input.startFloor) || 1), Math.trunc(Number(input.endFloor) || Number(input.startFloor) || 1)),
         };
         const messages = sliceTakeoverMessages(sourceBundle, range);
-        let records = settings.enableContentSplit
+        const shouldSplit = input.forceContentSplit === true || settings.enableContentSplit;
+        let records = shouldSplit
             ? buildFloorRecords(messages, previewSourceMode)
             : buildFullContentFloorRecords(messages, previewSourceMode);
-        if (settings.enableContentSplit && settings.enableAIClassifier) {
+        if (shouldSplit && settings.enableAIClassifier) {
             records = await classifyFloorRecordsWithAI({
                 llm: input.llm ?? readMemoryLLMApi(),
                 pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,

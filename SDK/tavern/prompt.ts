@@ -220,6 +220,47 @@ export function getTavernMessageTextEvent(message: unknown): string {
 }
 
 /**
+ * 功能：判断酒馆消息是否被宿主标记为隐藏。
+ * `/hide` 会让消息留在 chat 数组里，但不应参与楼层与窗口计算。
+ * @param message 任意消息对象。
+ * @returns 是否隐藏。
+ */
+export function isTavernMessageHiddenEvent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  const explicitRole = String(record.role ?? "").trim().toLowerCase();
+  if (record.hidden === true) {
+    return true;
+  }
+  if (
+    record.is_system === true
+    && (
+      record.is_user === true
+      || explicitRole === "user"
+      || explicitRole === "assistant"
+    )
+  ) {
+    return true;
+  }
+  if (record.is_hidden === true || record.isHidden === true || record.hide === true) {
+    return true;
+  }
+  const extra = record.extra && typeof record.extra === "object"
+    ? record.extra as Record<string, unknown>
+    : null;
+  if (!extra) {
+    return false;
+  }
+  return extra.is_hidden === true
+    || extra.isHidden === true
+    || extra.hide === true
+    || extra.hidden === true
+    || extra.hid === true;
+}
+
+/**
  * 功能：读取消息的原始完整文本（含被 SillyTavern 剥离的 reasoning 块）。
  *
  * SillyTavern 的 reasoning 模块会在流式输出/保存时将 `<think>` 等推理块从

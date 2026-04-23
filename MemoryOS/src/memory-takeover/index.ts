@@ -25,5 +25,6 @@ export { buildTakeoverPreviewEstimate, estimateChatMessageTokens, TAKEOVER_TOKEN
 export { buildTakeoverStructuredTaskRequest } from './takeover-llm';
 export { buildFloorRecord, buildFullContentFloorRecord, assembleContentChannels, type ContentPreviewSourceMode, type RawFloorRecord } from './content-block-pipeline';
 export { buildFloorRecords, buildFullContentFloorRecords } from './content-block-pipeline';
+export { splitContentBlocks } from './content-splitter';
 export { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
 export { runTakeoverRepairService } from './takeover-repair-service';
