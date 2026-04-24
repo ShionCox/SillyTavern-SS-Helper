@@ -59,7 +59,7 @@ import {
 } from '../db/db';
 import { readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
 import { normalizeUserNarrativeText, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
-import type { ContentLabSettings } from '../config/content-tag-registry';
+import type { MemoryFilterFloorRecord, MemoryFilterSettings } from '../memory-filter';
 import { PromptAssemblyService } from '../services/prompt-assembly-service';
 import { SummaryService } from '../services/summary-service';
 import { TakeoverService } from '../services/takeover-service';
@@ -75,14 +75,18 @@ import type {
     DreamTriggerReason,
 } from '../services/dream-types';
 import { getSharedEmbeddingService, getSharedRetrievalService, getSharedVectorStore, isVectorRuntimeReady } from '../runtime/vector-runtime';
-import { rebuildAllEmbeddings, rebuildAllVectorDocuments, onActorSaved, onEntrySaved, onRelationshipSaved, onSummarySaved } from '../services/vector-index-service';
+import {
+    flushAutoIndexQueueForChat,
+    rebuildAllEmbeddings,
+    rebuildAllVectorDocuments,
+    onEntrySaved,
+} from '../services/vector-index-service';
 import {
     buildNarrativeReferenceLookupKey,
     renderNarrativeReferenceText,
     stripNarrativeReferencePrefix,
     type NarrativeReferenceRendererContext,
 } from '../utils/narrative-reference-renderer';
-import type { RawFloorRecord } from '../memory-takeover/content-block-pipeline';
 import type {
     LedgerMutation,
     ActorDisplayNameSource,
@@ -386,10 +390,10 @@ export class MemorySDKImpl {
         rebuildTakeoverRange: (startFloor: number, endFloor: number, batchSize?: number) => Promise<MemoryTakeoverExecutionResult>;
         abortTakeover: () => Promise<MemoryTakeoverProgressSnapshot>;
         markTakeoverHandled: () => Promise<MemoryTakeoverProgressSnapshot>;
-        getContentLabSettings: () => Promise<ContentLabSettings>;
-        saveContentLabSettings: (patch: Partial<ContentLabSettings>) => Promise<ContentLabSettings>;
-        previewFloorContentBlocks: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }) => Promise<RawFloorRecord>;
-        previewFloorRangeContentBlocks: (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }) => Promise<RawFloorRecord[]>;
+        getMemoryFilterSettings: () => Promise<MemoryFilterSettings>;
+        saveMemoryFilterSettings: (patch: Partial<MemoryFilterSettings>) => Promise<MemoryFilterSettings>;
+        previewFloorMemoryFilter: (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceEnabled?: boolean }) => Promise<MemoryFilterFloorRecord>;
+        previewFloorRangeMemoryFilter: (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceEnabled?: boolean }) => Promise<MemoryFilterFloorRecord[]>;
         setPromptReadyCaptureSnapshotForTest: (snapshot: PromptReadyCaptureSnapshot) => Promise<void>;
         getPromptReadyCaptureSnapshotForTest: () => Promise<PromptReadyCaptureSnapshot | null>;
         setPromptReadyRunResultForTest: (runResult: Record<string, unknown>) => Promise<void>;
@@ -783,29 +787,29 @@ export class MemorySDKImpl {
                 await this.alignSummaryProgressToCurrentFloor();
                 return progress;
             },
-            getContentLabSettings: async (): Promise<ContentLabSettings> => {
-                return this.takeoverService.readContentLabSettings();
+            getMemoryFilterSettings: async (): Promise<MemoryFilterSettings> => {
+                return this.takeoverService.readMemoryFilterSettings();
             },
-            saveContentLabSettings: async (patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> => {
-                return this.takeoverService.saveContentLabSettings(patch);
+            saveMemoryFilterSettings: async (patch: Partial<MemoryFilterSettings>): Promise<MemoryFilterSettings> => {
+                return this.takeoverService.saveMemoryFilterSettings(patch);
             },
-            previewFloorContentBlocks: async (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }): Promise<RawFloorRecord> => {
+            previewFloorMemoryFilter: async (input: { floor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceEnabled?: boolean }): Promise<MemoryFilterFloorRecord> => {
                 this.tryRegisterLLMTasks();
-                return this.takeoverService.previewFloorContentBlocks({
+                return this.takeoverService.previewFloorMemoryFilter({
                     floor: input.floor,
                     previewSourceMode: input.previewSourceMode,
-                    forceContentSplit: input.forceContentSplit,
+                    forceEnabled: input.forceEnabled,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
             },
-            previewFloorRangeContentBlocks: async (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceContentSplit?: boolean }): Promise<RawFloorRecord[]> => {
+            previewFloorRangeMemoryFilter: async (input: { startFloor: number; endFloor: number; previewSourceMode?: 'content' | 'raw_visible_text'; forceEnabled?: boolean }): Promise<MemoryFilterFloorRecord[]> => {
                 this.tryRegisterLLMTasks();
-                return this.takeoverService.previewFloorRangeContentBlocks({
+                return this.takeoverService.previewFloorRangeMemoryFilter({
                     startFloor: input.startFloor,
                     endFloor: input.endFloor,
                     previewSourceMode: input.previewSourceMode,
-                    forceContentSplit: input.forceContentSplit,
+                    forceEnabled: input.forceEnabled,
                     llm: readMemoryLLMApi(),
                     pluginId: MEMORY_OS_PLUGIN_ID,
                 });
@@ -1628,16 +1632,20 @@ export class MemorySDKImpl {
         if (!isVectorRuntimeReady()) {
             return;
         }
+        const settings = readMemoryOSSettings();
+        if (!settings.vectorAutoIndexOnWrite) {
+            return;
+        }
         const embeddingService = getSharedEmbeddingService();
         const vectorStore = getSharedVectorStore();
         if (!embeddingService?.isAvailable() || !vectorStore?.isAvailable()) {
             return;
         }
         try {
-            const refreshedCount = await this.rebuildAllEmbeddingsForCurrentChat();
-            logger.info(`[MemoryOS] ${stageLabel}完成后已刷新向量索引: ${refreshedCount}`);
+            await flushAutoIndexQueueForChat(this.chatKey_);
+            logger.info(`[MemoryOS] ${stageLabel}完成后已等待增量向量索引完成`);
         } catch (error) {
-            logger.warn(`[MemoryOS] ${stageLabel}完成后刷新向量索引失败`, error);
+            logger.warn(`[MemoryOS] ${stageLabel}完成后等待增量向量索引失败`, error);
         }
     }
 
@@ -1656,33 +1664,10 @@ export class MemorySDKImpl {
             if (!entry) {
                 throw new Error('来源条目不存在，无法重建索引。');
             }
-            await onEntrySaved(this.chatKey_, entry);
+            await onEntrySaved(this.chatKey_, entry, { force: true });
             return;
         }
-        if (doc.sourceKind === 'relationship') {
-            const relationships = await this.entryRepository.listRelationships();
-            const relationship = relationships.find((item: MemoryRelationshipRecord): boolean => item.relationshipId === doc.sourceId);
-            if (!relationship) {
-                throw new Error('来源关系不存在，无法重建索引。');
-            }
-            await onRelationshipSaved(this.chatKey_, relationship);
-            return;
-        }
-        if (doc.sourceKind === 'actor') {
-            const actors = await this.entryRepository.listActorProfiles();
-            const actor = actors.find((item: ActorMemoryProfile): boolean => item.actorKey === doc.sourceId);
-            if (!actor) {
-                throw new Error('来源角色不存在，无法重建索引。');
-            }
-            await onActorSaved(this.chatKey_, actor);
-            return;
-        }
-        const summaries = await this.entryRepository.listSummarySnapshots(500);
-        const summary = summaries.find((item: SummarySnapshot): boolean => item.summaryId === doc.sourceId);
-        if (!summary) {
-            throw new Error('来源总结不存在，无法重建索引。');
-        }
-        await onSummarySaved(this.chatKey_, summary);
+        await this.removeVectorDocument(vectorDocId);
     }
 
     /**
@@ -1695,6 +1680,7 @@ export class MemorySDKImpl {
         if (!doc) {
             throw new Error('未找到对应的向量文档。');
         }
+        await this.entryRepository.deleteVectorRecallStatsBySource(doc.sourceKind, doc.sourceId);
         await this.entryRepository.deleteVectorDocumentsBySource(doc.sourceKind, doc.sourceId);
         await this.entryRepository.deleteVectorIndexBySource(doc.sourceKind, doc.sourceId);
     }
@@ -1705,21 +1691,10 @@ export class MemorySDKImpl {
      */
     private async readAllVectorSourceData(): Promise<{
         entries: MemoryEntry[];
-        relationships: MemoryRelationshipRecord[];
-        actors: ActorMemoryProfile[];
-        summaries: SummarySnapshot[];
     }> {
-        const [entries, relationships, actors, summaries] = await Promise.all([
-            this.entryRepository.listEntries(),
-            this.entryRepository.listRelationships(),
-            this.entryRepository.listActorProfiles(),
-            this.entryRepository.listSummarySnapshots(500),
-        ]);
+        const entries = await this.entryRepository.listEntries();
         return {
             entries,
-            relationships,
-            actors,
-            summaries,
         };
     }
 

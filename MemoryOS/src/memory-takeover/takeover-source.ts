@@ -283,7 +283,7 @@ function extractTakeoverProcessingMessageText(record: Record<string, unknown>): 
  * @returns 原始可见文本与来源。
  */
 function extractTakeoverRawVisibleMessageText(record: Record<string, unknown>): { text: string; source: string } {
-    // 优先使用宿主已经生成的显示文本，确保内容实验室看到的是楼层真正展示的全文
+    // 优先使用宿主已经生成的显示文本，确保记忆过滤器看到的是楼层真正展示的全文
     const displayedResult = extractTakeoverDisplayedMessageText(record);
     if (displayedResult) {
         return displayedResult;

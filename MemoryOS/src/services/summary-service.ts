@@ -3,8 +3,7 @@ import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import { readMemoryOSSettings } from '../settings/store';
 import { EntryRepository } from '../repository/entry-repository';
 import type { MemoryEntry, RoleEntryMemory, SummarySnapshot, WorldProfileBinding } from '../types';
-import { getContentLabSettings } from '../config/content-tag-registry';
-import { prepareFloorContentForSending } from '../memory-takeover/content-block-pipeline';
+import { filterMemoryMessages, getMemoryFilterSettings } from '../memory-filter';
 
 /**
  * 功能：定义从聊天消息捕获总结的输入。
@@ -46,7 +45,7 @@ export class SummaryService {
             });
         }
         const settings = readMemoryOSSettings();
-        const contentLabPrepared = prepareFloorContentForSending(normalizedMessages, getContentLabSettings());
+        const filteredMessages = filterMemoryMessages(normalizedMessages, getMemoryFilterSettings(), { scope: 'summary' });
         const llm = readMemoryLLMApi();
         const summaryResult = await runSummaryOrchestrator({
             dependencies: {
@@ -64,9 +63,9 @@ export class SummaryService {
             llm,
             pluginId: MEMORY_OS_PLUGIN_ID,
             chatKey: this.chatKey,
-            messages: contentLabPrepared.messages,
+            messages: filteredMessages.messagesForMemory,
             windowOptions: {
-                auxiliaryContextText: contentLabPrepared.channels.hintText,
+                auxiliaryContextText: filteredMessages.contextText,
             },
             retrievalRulePack: settings.retrievalRulePack,
         });

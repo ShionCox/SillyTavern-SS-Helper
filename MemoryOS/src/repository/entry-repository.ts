@@ -34,6 +34,7 @@ import {
     deleteVectorIndexBySource,
     clearVectorIndexForChat,
     saveVectorRecallStat,
+    deleteVectorRecallStatsBySource,
     clearVectorRecallStatsForChat,
     clearAllVectorDataForChat,
 } from '../db/vector-db';
@@ -73,7 +74,7 @@ import type { MemoryTimeContext } from '../memory-time/time-types';
 import type { MemoryTimelineProfile } from '../memory-time/time-types';
 import type { VectorDocument, DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../types/vector-document';
 import type { IndexedVectorDocument } from '../types/vector-search';
-import { onEntryDeleted } from '../services/vector-index-service';
+import { onActorSaved, onEntryDeleted, onEntrySaved, onRelationshipSaved, onSummarySaved } from '../services/vector-index-service';
 
 interface EntryAuditWriteOptions {
     actionType?: 'ADD' | 'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE';
@@ -274,6 +275,7 @@ export class EntryRepository {
             afterEntry: savedEntry,
             ts: now,
         });
+        void onEntrySaved(this.chatKey, savedEntry).catch(() => {});
         return savedEntry;
     }
 
@@ -347,6 +349,7 @@ export class EntryRepository {
         };
         await db.actor_memory_profiles.put(row);
         const savedProfile = this.mapActorProfile(row);
+        void onActorSaved(this.chatKey, savedProfile).catch(() => {});
         return savedProfile;
     }
 
@@ -465,6 +468,7 @@ export class EntryRepository {
         };
         await db.memory_relationships.put(row);
         const savedRelationship = this.mapRelationship(row);
+        void onRelationshipSaved(this.chatKey, savedRelationship).catch(() => {});
         return savedRelationship;
     }
 
@@ -854,6 +858,7 @@ export class EntryRepository {
         };
         await db.summary_snapshots.put(row);
         const savedSnapshot = this.mapSummarySnapshot(row);
+        void onSummarySaved(this.chatKey, savedSnapshot).catch(() => {});
         return savedSnapshot;
     }
 
@@ -2113,6 +2118,15 @@ export class EntryRepository {
      */
     async deleteVectorIndexBySource(sourceKind: string, sourceId?: string): Promise<void> {
         await deleteVectorIndexBySource(this.chatKey, sourceKind, sourceId ? [sourceId] : []);
+    }
+
+    /**
+     * 功能：按来源删除向量召回统计。
+     * @param sourceKind 来源类型。
+     * @param sourceId 来源 ID。
+     */
+    async deleteVectorRecallStatsBySource(sourceKind: string, sourceId?: string): Promise<void> {
+        await deleteVectorRecallStatsBySource(this.chatKey, sourceKind, sourceId ? [sourceId] : []);
     }
 
     /**

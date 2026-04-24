@@ -50,7 +50,6 @@ export type {
 // ─── 向量系统 ───
 export { EmbeddingService } from './embedding-service';
 export type { EmbeddingEncodeOptions, EmbeddingEncodeResult, EmbeddingModelInfo } from './embedding-service';
-export { VectorDocumentBuilder } from './vector-document-builder';
 export { VectorStoreAdapterService } from './vector-store-adapter';
 export { VectorStrategyRouter } from './vector-strategy-router';
 export type { VectorStrategyRouterConfig } from './vector-strategy-router';
@@ -65,6 +64,7 @@ export {
     onRelationshipSaved,
     onActorSaved,
     onSummarySaved,
+    flushAutoIndexQueueForChat,
     rebuildAllVectorDocuments,
     rebuildAllEmbeddings,
     upgradeEmbeddingModel,

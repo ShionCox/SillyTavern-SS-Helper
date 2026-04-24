@@ -693,7 +693,7 @@ function buildTakeoverActualPreviewMarkup(input: {
                         </details>
                         <details style="margin-top:8px;">
                             <summary>辅助区文本</summary>
-                            <pre>${escapeHtml(batch.hintText || '（无）')}</pre>
+                            <pre>${escapeHtml(batch.contextText || '（无）')}</pre>
                         </details>
                         <details style="margin-top:8px;">
                             <summary>排除摘要</summary>

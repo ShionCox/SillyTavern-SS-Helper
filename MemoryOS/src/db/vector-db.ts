@@ -141,6 +141,21 @@ export async function deleteVectorDocumentsBySource(
         })
         .map((row: DBChatPluginRecord) => Number(row.id))
         .filter((id: number) => Number.isFinite(id));
+    const vectorDocIds = rows
+        .map((row: DBChatPluginRecord): DBMemoryVectorDocument | null => row.payload as unknown as DBMemoryVectorDocument)
+        .filter((payload: DBMemoryVectorDocument | null): payload is DBMemoryVectorDocument => {
+            if (!payload || payload.sourceKind !== sourceKind) {
+                return false;
+            }
+            if (sourceIds.length <= 0) {
+                return true;
+            }
+            return sourceIds.includes(payload.sourceId);
+        })
+        .map((payload: DBMemoryVectorDocument): string => payload.vectorDocId);
+    for (const vectorDocId of vectorDocIds) {
+        await deleteVectorRecallStatById(chatKey, vectorDocId);
+    }
     if (targetIds.length > 0) {
         await db.chat_plugin_records.bulkDelete(targetIds);
     }
@@ -243,6 +258,7 @@ export async function deleteVectorIndexBySource(
         })
         .map((row: DBMemoryVectorIndex) => row.vectorDocId);
     for (const docId of docIds) {
+        await deleteVectorRecallStatById(chatKey, docId);
         await deleteVectorIndexById(chatKey, docId);
     }
 }
@@ -300,6 +316,42 @@ export async function loadVectorRecallStats(chatKey: string): Promise<DBMemoryVe
             return payload && payload.vectorDocId ? payload : null;
         })
         .filter((item: DBMemoryVectorRecallStat | null): item is DBMemoryVectorRecallStat => Boolean(item));
+}
+
+/**
+ * 功能：按 vectorDocId 删除召回统计。
+ * @param chatKey 聊天键。
+ * @param vectorDocId 向量文档 ID。
+ */
+export async function deleteVectorRecallStatById(chatKey: string, vectorDocId: string): Promise<void> {
+    const rows = await querySdkPluginChatRecords(PLUGIN_ID, normalizeText(chatKey), COLLECTION_VECTOR_RECALL, {
+        order: 'asc',
+        limit: 10000,
+    });
+    const targetIds = rows
+        .filter((row: DBChatPluginRecord) => normalizeText(row.recordId) === vectorDocId)
+        .map((row: DBChatPluginRecord) => Number(row.id))
+        .filter((id: number) => Number.isFinite(id));
+    if (targetIds.length > 0) {
+        await db.chat_plugin_records.bulkDelete(targetIds);
+    }
+}
+
+/**
+ * 功能：按来源删除召回统计。
+ * @param chatKey 聊天键。
+ * @param sourceKind 来源种类。
+ * @param sourceIds 来源 ID 列表。
+ */
+export async function deleteVectorRecallStatsBySource(
+    chatKey: string,
+    sourceKind: string,
+    sourceIds: string[],
+): Promise<void> {
+    const docs = await loadVectorDocumentsBySource(chatKey, sourceKind, sourceIds);
+    for (const doc of docs) {
+        await deleteVectorRecallStatById(chatKey, doc.vectorDocId);
+    }
 }
 
 /**

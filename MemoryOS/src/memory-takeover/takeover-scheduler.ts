@@ -130,7 +130,7 @@ export async function runTakeoverScheduler(input: {
                 pluginId: input.pluginId,
                 range: plan.activeWindow,
                 messages: activeAssembly.extractionMessages,
-                hintContext: activeAssembly.channels.hintText || undefined,
+                hintContext: activeAssembly.channels.contextText || undefined,
             });
             await saveMemoryTakeoverPreview(input.chatKey, 'active_snapshot', activeSnapshot, 'runtime');
         }

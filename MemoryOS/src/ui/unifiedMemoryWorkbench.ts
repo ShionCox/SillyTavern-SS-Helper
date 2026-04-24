@@ -50,7 +50,7 @@ import { buildActorsViewMarkup } from './workbenchTabs/tabActors';
 import { buildWorldEntitiesViewMarkup } from './workbenchTabs/tabWorldEntities';
 import { buildTakeoverViewMarkup } from './workbenchTabs/tabTakeover';
 import { buildVectorsViewMarkup } from './workbenchTabs/tabVectors';
-import { buildContentLabViewMarkup } from './workbenchTabs/tabContentLab';
+import { buildMemoryFilterViewMarkup } from './workbenchTabs/tabMemoryFilter';
 import {
     formatDreamWorkbenchText,
     resolveDreamWorkbenchText,
@@ -60,16 +60,13 @@ import {
 import type { MemoryPromptTestBundle } from '../db/db';
 import { buildTakeoverFallbackEstimate, parseTakeoverFormDraft } from './takeoverFormShared';
 import {
-    DEFAULT_CONTENT_SPLIT_CLEANUP,
-    DEFAULT_CONTENT_SPLIT_RULES,
-    type ContentLabSettings,
-    type ContentBlockPolicy,
-    splitRuleToContentBlockPolicy,
-    type ContentSplitMode,
-    type ContentSplitRule,
-} from '../config/content-tag-registry';
-import type { RawFloorRecord } from '../memory-takeover/content-block-pipeline';
-import { assembleContentChannels } from '../memory-takeover';
+    type MemoryFilterSettings,
+    type MemoryFilterMode,
+    type MemoryFilterRule,
+    type MemoryFilterFloorRecord,
+    DEFAULT_MEMORY_FILTER_SETTINGS,
+    DEFAULT_MEMORY_FILTER_RULES,
+} from '../memory-filter';
 import { collectTakeoverSourceBundle, type MemoryTakeoverMessageSlice } from '../memory-takeover/takeover-source';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import {
@@ -119,6 +116,9 @@ function resolveInitialWorkbenchView(initialView?: UnifiedWorkbenchViewMode): Wo
     }
     if (initialView === 'vectors') {
         return 'vectors';
+    }
+    if (initialView === 'memory-filter') {
+        return 'memory-filter';
     }
     if (initialView === 'memory') {
         return 'actors';
@@ -230,8 +230,8 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     <button class="stx-memory-workbench__nav-btn${state.currentView === 'takeover' ? ' is-active' : ''}" data-workbench-view="takeover">
                         ${escapeHtml(resolveUnifiedWorkbenchText('nav_takeover'))}
                     </button>
-                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'content-lab' ? ' is-active' : ''}" data-workbench-view="content-lab">
-                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_content_lab'))}
+                    <button class="stx-memory-workbench__nav-btn${state.currentView === 'memory-filter' ? ' is-active' : ''}" data-workbench-view="memory-filter">
+                        ${escapeHtml(resolveUnifiedWorkbenchText('nav_memory_filter'))}
                     </button>
                 </nav>
                 <div class="stx-memory-workbench__stats">
@@ -260,7 +260,7 @@ function buildWorkbenchMarkup(snapshot: WorkbenchSnapshot, state: WorkbenchState
                     })}
                 </section>
                 ${buildTakeoverViewMarkup(snapshot, state)}
-                ${buildContentLabViewMarkup(snapshot, state)}
+                ${buildMemoryFilterViewMarkup(snapshot, state)}
             </main>
         </div>
     `;
@@ -393,32 +393,26 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         vectorTestRunning: false,
         vectorTestResult: null,
         vectorTestProgress: null,
-        contentLabStartFloor: '',
-        contentLabEndFloor: '',
-        contentLabSelectedFloor: '',
-        contentLabPreviewSourceMode: 'content',
-        contentLabPreviewLoading: false,
-        contentLabTabLoaded: false,
-        contentLabTabLoading: false,
-        contentLabBlocks: [],
-        contentLabPrimaryPreview: '',
-        contentLabHintPreview: '',
-        contentLabExcludedPreview: '',
-        contentLabEnableContentSplit: false,
-        contentLabUnknownTagDefaultKind: 'unknown',
-        contentLabUnknownTagAllowHint: true,
-        contentLabEnableRuleClassifier: true,
-        contentLabEnableMetaKeywordDetection: true,
-        contentLabEnableToolArtifactDetection: true,
-        contentLabEnableAIClassifier: false,
-        contentLabEditingRuleIndex: -1,
-        contentLabSplitMode: 'xml',
-        contentLabRules: DEFAULT_CONTENT_SPLIT_RULES,
-        contentLabCleanupTrimWhitespace: DEFAULT_CONTENT_SPLIT_CLEANUP.trimWhitespace,
-        contentLabCleanupStripWrapper: DEFAULT_CONTENT_SPLIT_CLEANUP.stripWrapper,
-        contentLabCleanupDropEmptyBlocks: DEFAULT_CONTENT_SPLIT_CLEANUP.dropEmptyBlocks,
-        contentLabCleanupMinBlockLength: String(DEFAULT_CONTENT_SPLIT_CLEANUP.minBlockLength),
-        contentLabCleanupMaxBlockLength: String(DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength),
+        memoryFilterStartFloor: '',
+        memoryFilterEndFloor: '',
+        memoryFilterSelectedFloor: '',
+        memoryFilterPreviewSourceMode: 'content',
+        memoryFilterPreviewLoading: false,
+        memoryFilterTabLoaded: false,
+        memoryFilterTabLoading: false,
+        memoryFilterBlocks: [],
+        memoryFilterMemoryPreview: '',
+        memoryFilterContextPreview: '',
+        memoryFilterExcludedPreview: '',
+        memoryFilterEnabled: DEFAULT_MEMORY_FILTER_SETTINGS.enabled,
+        memoryFilterUnknownPolicy: DEFAULT_MEMORY_FILTER_SETTINGS.unknownPolicy,
+        memoryFilterMode: 'xml',
+        memoryFilterRules: DEFAULT_MEMORY_FILTER_RULES,
+        memoryFilterCleanupTrimWhitespace: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.trimWhitespace,
+        memoryFilterCleanupStripWrapper: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.stripWrapper,
+        memoryFilterCleanupDropEmptyBlocks: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.dropEmptyBlocks,
+        memoryFilterCleanupMinBlockLength: String(DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.minBlockLength),
+        memoryFilterCleanupMaxBlockLength: String(DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.maxBlockLength),
         entryTimeFilter: 'all',
         entrySortOrder: 'updated-desc',
         dreamSubView: 'overview',
@@ -432,10 +426,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     let previewCache: WorkbenchSnapshot['preview'] = null;
     let previewRecallExplanationCache: WorkbenchSnapshot['recallExplanation'] = null;
     let vectorLoadSequence = 0;
-    let contentLabLoadSequence = 0;
-    let contentLabSettingsCache: ContentLabSettings | null = null;
-    let contentLabSourceMessages: MemoryTakeoverMessageSlice[] = [];
-    let contentLabPreviewFloor: RawFloorRecord | undefined = undefined;
+    let memoryFilterLoadSequence = 0;
+    let memoryFilterSettingsCache: MemoryFilterSettings | null = null;
+    let memoryFilterSourceMessages: MemoryTakeoverMessageSlice[] = [];
+    let memoryFilterPreviewFloor: MemoryFilterFloorRecord | undefined = undefined;
     let disposed = false;
 
     /**
@@ -488,58 +482,44 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
-     * 功能：使内容拆分台缓存失效，确保楼层源与预览按最新聊天重载。
+     * 功能：使记忆过滤器缓存失效，确保楼层源与预览按最新聊天重载。
      * @returns 无返回值。
      */
-    const invalidateContentLabSnapshot = (): void => {
-        contentLabLoadSequence += 1;
-        contentLabSourceMessages = [];
-        contentLabPreviewFloor = undefined;
-        state.contentLabTabLoaded = false;
-        state.contentLabTabLoading = false;
-        state.contentLabBlocks = [];
-        state.contentLabPrimaryPreview = '';
-        state.contentLabHintPreview = '';
-        state.contentLabExcludedPreview = '';
+    const invalidateMemoryFilterSnapshot = (): void => {
+        memoryFilterLoadSequence += 1;
+        memoryFilterSourceMessages = [];
+        memoryFilterPreviewFloor = undefined;
+        state.memoryFilterTabLoaded = false;
+        state.memoryFilterTabLoading = false;
+        state.memoryFilterBlocks = [];
+        state.memoryFilterMemoryPreview = '';
+        state.memoryFilterContextPreview = '';
+        state.memoryFilterExcludedPreview = '';
     };
 
-    /**
-     * 功能：将内容实验室配置同步到工作台状态。
-     * @param contentLabSettings 内容实验室配置。
-     * @returns 无返回值。
-     */
-    const applyContentLabSettingsToState = (contentLabSettings: ContentLabSettings): void => {
-        state.contentLabEnableContentSplit = contentLabSettings.enableContentSplit;
-        state.contentLabUnknownTagDefaultKind = contentLabSettings.unknownTagPolicy.defaultKind;
-        state.contentLabUnknownTagAllowHint = contentLabSettings.unknownTagPolicy.allowAsHint;
-        state.contentLabEnableRuleClassifier = contentLabSettings.classifierToggles.enableRuleClassifier;
-        state.contentLabEnableMetaKeywordDetection = contentLabSettings.classifierToggles.enableMetaKeywordDetection;
-        state.contentLabEnableToolArtifactDetection = contentLabSettings.classifierToggles.enableToolArtifactDetection;
-        state.contentLabEnableAIClassifier = contentLabSettings.enableAIClassifier;
-        state.contentLabSplitMode = contentLabSettings.splitMode;
-        state.contentLabRules = contentLabSettings.rules;
-        state.contentLabCleanupTrimWhitespace = contentLabSettings.cleanup.trimWhitespace;
-        state.contentLabCleanupStripWrapper = contentLabSettings.cleanup.stripWrapper;
-        state.contentLabCleanupDropEmptyBlocks = contentLabSettings.cleanup.dropEmptyBlocks;
-        state.contentLabCleanupMinBlockLength = String(contentLabSettings.cleanup.minBlockLength);
-        state.contentLabCleanupMaxBlockLength = String(contentLabSettings.cleanup.maxBlockLength);
+    const applyMemoryFilterSettingsToState = (memoryFilterSettings: MemoryFilterSettings): void => {
+        state.memoryFilterEnabled = memoryFilterSettings.enabled;
+        state.memoryFilterUnknownPolicy = memoryFilterSettings.unknownPolicy;
+        state.memoryFilterMode = memoryFilterSettings.mode;
+        state.memoryFilterRules = memoryFilterSettings.rules;
+        state.memoryFilterCleanupTrimWhitespace = memoryFilterSettings.cleanup.trimWhitespace;
+        state.memoryFilterCleanupStripWrapper = memoryFilterSettings.cleanup.stripWrapper;
+        state.memoryFilterCleanupDropEmptyBlocks = memoryFilterSettings.cleanup.dropEmptyBlocks;
+        state.memoryFilterCleanupMinBlockLength = String(memoryFilterSettings.cleanup.minBlockLength);
+        state.memoryFilterCleanupMaxBlockLength = String(memoryFilterSettings.cleanup.maxBlockLength);
     };
 
-    /**
-     * 功能：构建内容实验室快照。
-     */
-    const buildContentLabSnapshot = (): WorkbenchSnapshot['contentLabSnapshot'] => {
-        const availableFloors = contentLabSourceMessages.map((msg) => ({
+    const buildMemoryFilterSnapshot = (): WorkbenchSnapshot['memoryFilterSnapshot'] => {
+        const availableFloors = memoryFilterSourceMessages.map((msg) => ({
             floor: msg.floor,
             role: msg.role,
             charCount: msg.content.length,
         }));
         return {
-            loaded: state.contentLabTabLoaded,
-            tagRegistry: contentLabSettingsCache?.tagRegistry ?? [],
-            settings: contentLabSettingsCache ?? undefined,
+            loaded: state.memoryFilterTabLoaded,
+            settings: memoryFilterSettingsCache ?? undefined,
             availableFloors,
-            previewFloor: contentLabPreviewFloor,
+            previewFloor: memoryFilterPreviewFloor,
         };
     };
 
@@ -571,7 +551,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 }),
                 takeoverProgress: takeoverProgressCache,
                 vectorSnapshot: vectorCache,
-                contentLabSnapshot: buildContentLabSnapshot(),
+                memoryFilterSnapshot: buildMemoryFilterSnapshot(),
                 dreamSnapshot: {
                     sessions: [],
                     maintenanceProposals: [],
@@ -640,7 +620,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             }),
             takeoverProgress,
             vectorSnapshot: vectorCache,
-            contentLabSnapshot: buildContentLabSnapshot(),
+            memoryFilterSnapshot: buildMemoryFilterSnapshot(),
             dreamSnapshot: {
                 sessions: dreamSessions,
                 maintenanceProposals: dreamMaintenanceProposals,
@@ -689,101 +669,79 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         }
     };
 
-    /**
-     * 功能：读取并保存当前内容实验室配置。
-     * @param root 工作台根节点。
-     * @param registry 可选标签注册表。
-     * @returns 保存后的配置。
-     */
-    const persistContentLabSettings = async (
+    const persistMemoryFilterSettings = async (
         root: HTMLElement,
-        registry?: ContentBlockPolicy[],
-    ): Promise<ContentBlockPolicy[]> => {
-        if (!contentLabSettingsCache) {
-            contentLabSettingsCache = await memory.chatState.getContentLabSettings();
-            applyContentLabSettingsToState(contentLabSettingsCache);
+    ): Promise<MemoryFilterSettings> => {
+        if (!memoryFilterSettingsCache) {
+            memoryFilterSettingsCache = await memory.chatState.getMemoryFilterSettings();
+            applyMemoryFilterSettingsToState(memoryFilterSettingsCache);
         }
-        const nextRules = collectContentSplitRules(root, contentLabSettingsCache.rules);
-        const xmlRegistry = nextRules
-            .filter((rule: ContentSplitRule): boolean => rule.mode === 'xml' && Boolean(rule.tagName || rule.label))
-            .map(splitRuleToContentBlockPolicy);
-        const saved = await memory.chatState.saveContentLabSettings({
-            enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
-            splitMode: normalizeContentLabSplitMode(readInputValue(root, '#stx-content-lab-mode')),
+        const nextRules = collectMemoryFilterRules(root, memoryFilterSettingsCache.rules);
+        const saved = await memory.chatState.saveMemoryFilterSettings({
+            enabled: readCheckedValue(root, '#stx-memory-filter-enabled'),
+            mode: normalizeMemoryFilterMode(readInputValue(root, '#stx-memory-filter-mode')),
             rules: nextRules,
             cleanup: {
-                trimWhitespace: readCheckedValue(root, '#stx-content-lab-cleanup-trim'),
-                stripWrapper: readCheckedValue(root, '#stx-content-lab-cleanup-strip-wrapper'),
-                dropEmptyBlocks: readCheckedValue(root, '#stx-content-lab-cleanup-drop-empty'),
-                minBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-content-lab-min-length')) || 0)),
-                maxBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-content-lab-max-length')) || DEFAULT_CONTENT_SPLIT_CLEANUP.maxBlockLength)),
+                trimWhitespace: readCheckedValue(root, '#stx-memory-filter-cleanup-trim'),
+                stripWrapper: readCheckedValue(root, '#stx-memory-filter-cleanup-strip-wrapper'),
+                dropEmptyBlocks: readCheckedValue(root, '#stx-memory-filter-cleanup-drop-empty'),
+                minBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-memory-filter-min-length')) || 0)),
+                maxBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-memory-filter-max-length')) || DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.maxBlockLength)),
             },
-            tagRegistry: registry ?? (xmlRegistry.length > 0 ? xmlRegistry : undefined),
-            unknownTagPolicy: {
-                defaultKind: contentLabSettingsCache.unknownTagPolicy.defaultKind,
-                allowAsHint: contentLabSettingsCache.unknownTagPolicy.allowAsHint,
+            unknownPolicy: normalizeMemoryFilterChannel(readInputValue(root, '#stx-memory-filter-unknown-policy')),
+            scope: {
+                summary: readCheckedValue(root, '#stx-memory-filter-scope-summary'),
+                takeover: readCheckedValue(root, '#stx-memory-filter-scope-takeover'),
+                dreamRecall: readCheckedValue(root, '#stx-memory-filter-scope-dreamRecall'),
+                vectorIndex: readCheckedValue(root, '#stx-memory-filter-scope-vectorIndex'),
+                promptInjection: readCheckedValue(root, '#stx-memory-filter-scope-promptInjection'),
             },
-            classifierToggles: {
-                enableRuleClassifier: contentLabSettingsCache.classifierToggles.enableRuleClassifier,
-                enableMetaKeywordDetection: contentLabSettingsCache.classifierToggles.enableMetaKeywordDetection,
-                enableToolArtifactDetection: contentLabSettingsCache.classifierToggles.enableToolArtifactDetection,
-            },
-            enableAIClassifier: contentLabSettingsCache.enableAIClassifier,
         });
-        contentLabSettingsCache = saved;
-        applyContentLabSettingsToState(saved);
-        state.contentLabTabLoaded = true;
-        return saved.tagRegistry;
+        memoryFilterSettingsCache = saved;
+        applyMemoryFilterSettingsToState(saved);
+        state.memoryFilterTabLoaded = true;
+        return saved;
     };
 
-    /**
-     * 功能：从内容拆分台表单收集五模式规则。
-     */
-    const collectContentSplitRules = (root: HTMLElement, fallbackRules: ContentSplitRule[]): ContentSplitRule[] => {
-        const existingById = new Map(fallbackRules.map((rule: ContentSplitRule): [string, ContentSplitRule] => [rule.id, rule]));
-        const visibleRules: ContentSplitRule[] = [];
+    const collectMemoryFilterRules = (root: HTMLElement, fallbackRules: MemoryFilterRule[]): MemoryFilterRule[] => {
+        const existingById = new Map(fallbackRules.map((rule: MemoryFilterRule): [string, MemoryFilterRule] => [rule.id, rule]));
+        const visibleRules: MemoryFilterRule[] = [];
         root.querySelectorAll<HTMLElement>('[data-content-split-rule]').forEach((row: HTMLElement, index: number): void => {
             const id = String(row.dataset.ruleId ?? `rule-${index + 1}`).trim();
             const existing = existingById.get(id);
-            const mode = normalizeContentLabSplitMode(row.dataset.ruleMode ?? existing?.mode ?? state.contentLabSplitMode);
-            const label = readInputValue(row, '[data-rule-field="label"]') || existing?.label || `规则 ${index + 1}`;
+            const mode = normalizeMemoryFilterMode(row.dataset.ruleMode ?? existing?.mode ?? state.memoryFilterMode);
+            const name = readInputValue(row, '[data-rule-field="name"]') || readInputValue(row, '[data-rule-field="label"]') || existing?.name || `规则 ${index + 1}`;
             const channelValue = readInputValue(row, '[data-rule-field="channel"]');
-            const channel = channelValue === 'hint' || channelValue === 'excluded' ? channelValue : 'primary';
+            const channel = channelValue === 'context' || channelValue === 'hint'
+                ? 'context'
+                : channelValue === 'excluded' ? 'excluded' : 'memory';
             const priority = Math.trunc(Number(readInputValue(row, '[data-rule-field="priority"]')) || existing?.priority || 0);
-            const rule: ContentSplitRule = {
+            const rule: MemoryFilterRule = {
                 ...(existing ?? {
                     id,
                     mode,
                     enabled: true,
                     channel,
                     priority,
-                    label,
+                    name,
                 }),
                 id,
                 mode,
-                label,
+                name,
                 enabled: readCheckedValue(row, '[data-rule-field="enabled"]'),
                 channel,
                 priority,
             };
             if (mode === 'xml') {
-                rule.tagName = readInputValue(row, '[data-rule-field="tagName"]') || existing?.tagName || label;
+                rule.tagName = readInputValue(row, '[data-rule-field="tagName"]') || existing?.tagName || name;
                 rule.aliases = parseTagText(readInputValue(row, '[data-rule-field="aliases"]'));
                 rule.pattern = readInputValue(row, '[data-rule-field="pattern"]') || undefined;
                 rule.patternMode = readInputValue(row, '[data-rule-field="patternMode"]') === 'regex' || readInputValue(row, '[data-rule-field="patternMode"]') === 'prefix'
-                    ? readInputValue(row, '[data-rule-field="patternMode"]') as ContentBlockPolicy['patternMode']
+                    ? readInputValue(row, '[data-rule-field="patternMode"]') as MemoryFilterRule['patternMode']
                     : undefined;
             } else if (mode === 'delimiter') {
                 rule.delimiters = parseTagText(readInputValue(row, '[data-rule-field="delimiters"]'));
                 rule.keepDelimiter = readCheckedValue(row, '[data-rule-field="keepDelimiter"]');
-                const blockChannels: Record<string, 'primary' | 'hint' | 'excluded'> = {};
-                root.querySelectorAll<HTMLSelectElement>('[data-content-block-channel]').forEach((select: HTMLSelectElement): void => {
-                    const index = String(select.dataset.blockIndex ?? '').trim();
-                    const value = String(select.value ?? '').trim();
-                    if (!index) return;
-                    blockChannels[index] = value === 'hint' || value === 'excluded' ? value : 'primary';
-                });
-                rule.blockChannels = Object.keys(blockChannels).length > 0 ? blockChannels : rule.blockChannels;
             } else if (mode === 'regex') {
                 rule.regex = readInputValue(row, '[data-rule-field="regex"]') || undefined;
                 rule.flags = readInputValue(row, '[data-rule-field="flags"]') || 'g';
@@ -791,7 +749,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             } else if (mode === 'markdown') {
                 const strategy = readInputValue(row, '[data-rule-field="markdownStrategy"]');
                 rule.markdownStrategy = strategy === 'heading' || strategy === 'hr' ? strategy : 'heading_or_hr';
-            } else if (mode === 'jsonpath') {
+            } else if (mode === 'json') {
                 rule.jsonPath = readInputValue(row, '[data-rule-field="jsonPath"]') || '$';
             }
             visibleRules.push(rule);
@@ -799,78 +757,82 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         if (visibleRules.length === 0) {
             return fallbackRules;
         }
-        const visibleIds = new Set(visibleRules.map((rule: ContentSplitRule): string => rule.id));
-        const visibleModes = new Set(visibleRules.map((rule: ContentSplitRule): ContentSplitMode => rule.mode));
+        const visibleIds = new Set(visibleRules.map((rule: MemoryFilterRule): string => rule.id));
+        const visibleModes = new Set(visibleRules.map((rule: MemoryFilterRule): MemoryFilterMode => rule.mode));
         return [
-            ...fallbackRules.filter((rule: ContentSplitRule): boolean => !visibleIds.has(rule.id) && !visibleModes.has(rule.mode)),
+            ...fallbackRules.filter((rule: MemoryFilterRule): boolean => !visibleIds.has(rule.id) && !visibleModes.has(rule.mode)),
             ...visibleRules,
         ];
     };
 
-    /**
-     * 功能：归一化内容拆分台模式。
-     */
-    const normalizeContentLabSplitMode = (value: unknown): ContentSplitMode => {
+    const normalizeMemoryFilterMode = (value: unknown): MemoryFilterMode => {
         const normalized = String(value ?? '').trim().toLowerCase();
-        if (normalized === 'delimiter' || normalized === 'regex' || normalized === 'markdown' || normalized === 'jsonpath') {
+        if (normalized === 'delimiter' || normalized === 'regex' || normalized === 'markdown' || normalized === 'json') {
             return normalized;
         }
         return 'xml';
     };
 
-    /**
-     * 功能：保存规则后按当前楼层或范围实时刷新内容拆分预览。
-     */
-    const refreshContentLabPreviewFromCurrentForm = async (snapshot: WorkbenchSnapshot): Promise<boolean> => {
-        const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
-            ? 'raw_visible_text'
-            : 'content';
-        const selectedFloor = Number(readInputValue(root, '#stx-content-lab-selected-floor') || state.contentLabSelectedFloor);
-        const startFloor = Number(readInputValue(root, '#stx-content-lab-start-floor') || state.contentLabStartFloor);
-        const endFloor = Number(readInputValue(root, '#stx-content-lab-end-floor') || state.contentLabEndFloor);
-        await loadContentLabSnapshot();
-        await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
-        if (startFloor && endFloor && endFloor >= startFloor) {
-            state.contentLabStartFloor = String(startFloor);
-            state.contentLabEndFloor = String(endFloor);
-            const records = await memory.chatState.previewFloorRangeContentBlocks({
-                startFloor,
-                endFloor,
-                previewSourceMode,
-                forceContentSplit: true,
-            });
-            const channels = assembleContentChannels(records);
-            contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor)) ?? records[0];
-            state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
-            state.contentLabPrimaryPreview = channels.primaryText;
-            state.contentLabHintPreview = channels.hintText;
-            state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
-            return true;
+    const normalizeMemoryFilterChannel = (value: unknown): 'memory' | 'context' | 'excluded' => {
+        const normalized = String(value ?? '').trim();
+        if (normalized === 'context' || normalized === 'excluded') {
+            return normalized;
         }
-        if (selectedFloor) {
-            state.contentLabSelectedFloor = String(selectedFloor);
-            const record = await memory.chatState.previewFloorContentBlocks({
-                floor: selectedFloor,
-                previewSourceMode,
-                forceContentSplit: true,
-            });
-            contentLabPreviewFloor = record;
-            state.contentLabBlocks = record.parsedBlocks;
-            const channels = assembleContentChannels([record]);
-            state.contentLabPrimaryPreview = channels.primaryText;
-            state.contentLabHintPreview = channels.hintText;
-            state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
-            return true;
-        }
-        return false;
+        return 'memory';
+    };
+
+    const applyMemoryFilterPreviewRecords = (records: MemoryFilterFloorRecord[]): void => {
+        memoryFilterPreviewFloor = records.find((record) => record.floor === Number(state.memoryFilterSelectedFloor)) ?? records[0];
+        state.memoryFilterBlocks = records.flatMap((record) => record.blocks);
+        state.memoryFilterMemoryPreview = records
+            .flatMap((record) => record.blocks.filter((block) => block.channel === 'memory').map((block) => block.rawText))
+            .filter(Boolean)
+            .join('\n\n');
+        state.memoryFilterContextPreview = records
+            .flatMap((record) => record.blocks.filter((block) => block.channel === 'context').map((block) => block.rawText))
+            .filter(Boolean)
+            .join('\n\n');
+        state.memoryFilterExcludedPreview = records
+            .flatMap((record) => record.blocks.filter((block) => block.channel === 'excluded').map((block) => `[Floor ${record.floor}][${block.title}] ${block.rawText}`))
+            .filter(Boolean)
+            .join('\n');
     };
 
     /**
-     * 功能：转义 CSS 属性选择器标识。
+     * 功能：保存规则后按当前楼层或范围实时刷新记忆过滤预览。
      */
-    const escapeCssIdentifier = (value: string): string => {
-        const cssEscape = (globalThis as { CSS?: { escape?: (input: string) => string } }).CSS?.escape;
-        return cssEscape ? cssEscape(value) : value.replace(/["\\\]]/g, '\\$&');
+    const refreshMemoryFilterPreviewFromCurrentForm = async (snapshot: WorkbenchSnapshot): Promise<boolean> => {
+        const previewSourceMode = readInputValue(root, '#stx-memory-filter-preview-source-mode') === 'raw_visible_text'
+            ? 'raw_visible_text'
+            : 'content';
+        const selectedFloor = Number(readInputValue(root, '#stx-memory-filter-selected-floor') || state.memoryFilterSelectedFloor);
+        const startFloor = Number(readInputValue(root, '#stx-memory-filter-start-floor') || state.memoryFilterStartFloor);
+        const endFloor = Number(readInputValue(root, '#stx-memory-filter-end-floor') || state.memoryFilterEndFloor);
+        await loadMemoryFilterSnapshot();
+        await persistMemoryFilterSettings(root);
+        if (startFloor && endFloor && endFloor >= startFloor) {
+            state.memoryFilterStartFloor = String(startFloor);
+            state.memoryFilterEndFloor = String(endFloor);
+            const records = await memory.chatState.previewFloorRangeMemoryFilter({
+                startFloor,
+                endFloor,
+                previewSourceMode,
+                forceEnabled: true,
+            });
+            applyMemoryFilterPreviewRecords(records);
+            return true;
+        }
+        if (selectedFloor) {
+            state.memoryFilterSelectedFloor = String(selectedFloor);
+            const record = await memory.chatState.previewFloorMemoryFilter({
+                floor: selectedFloor,
+                previewSourceMode,
+                forceEnabled: true,
+            });
+            applyMemoryFilterPreviewRecords([record]);
+            return true;
+        }
+        return false;
     };
 
     /**
@@ -1550,373 +1512,130 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await render();
                 return;
             }
-            if (action === 'content-lab-preview-floor') {
-                const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+            if (action === 'memory-filter-preview-floor') {
+                const previewSourceMode = readInputValue(root, '#stx-memory-filter-preview-source-mode') === 'raw_visible_text'
                     ? 'raw_visible_text'
                     : 'content';
-                const selectedFloor = Number(readInputValue(root, '#stx-content-lab-selected-floor'));
+                const selectedFloor = Number(readInputValue(root, '#stx-memory-filter-selected-floor'));
                 if (!selectedFloor || selectedFloor < 1) {
                     toast.error('请输入有效的楼层号。');
                     return;
                 }
-                state.contentLabPreviewLoading = true;
-                state.contentLabSelectedFloor = String(selectedFloor);
-                state.contentLabPreviewSourceMode = previewSourceMode;
-                state.contentLabEnableContentSplit = readCheckedValue(root, '#stx-content-lab-enable-content-split');
+                state.memoryFilterPreviewLoading = true;
+                state.memoryFilterSelectedFloor = String(selectedFloor);
+                state.memoryFilterPreviewSourceMode = previewSourceMode;
+                state.memoryFilterEnabled = readCheckedValue(root, '#stx-memory-filter-enabled');
                 await render();
                 try {
-                    await loadContentLabSnapshot();
-                    if (!contentLabSourceMessages.some((m) => m.floor === selectedFloor)) {
-                        toast.error(`未找到楼层 ${selectedFloor}，可用范围：${contentLabSourceMessages[0]?.floor ?? '?'} - ${contentLabSourceMessages[contentLabSourceMessages.length - 1]?.floor ?? '?'}`);
-                        state.contentLabPreviewLoading = false;
+                    await loadMemoryFilterSnapshot();
+                    if (!memoryFilterSourceMessages.some((m) => m.floor === selectedFloor)) {
+                        toast.error(`未找到楼层 ${selectedFloor}，可用范围：${memoryFilterSourceMessages[0]?.floor ?? '?'} - ${memoryFilterSourceMessages[memoryFilterSourceMessages.length - 1]?.floor ?? '?'}`);
+                        state.memoryFilterPreviewLoading = false;
                         await render();
                         return;
                     }
-                    await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
-                    const record = await memory.chatState.previewFloorContentBlocks({
+                    await persistMemoryFilterSettings(root);
+                    const record = await memory.chatState.previewFloorMemoryFilter({
                         floor: selectedFloor,
                         previewSourceMode,
-                        forceContentSplit: true,
+                        forceEnabled: true,
                     });
-                    contentLabPreviewFloor = record;
-                    state.contentLabBlocks = record.parsedBlocks;
-                    const channels = assembleContentChannels([record]);
-                    state.contentLabPrimaryPreview = channels.primaryText;
-                    state.contentLabHintPreview = channels.hintText;
-                    state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                    applyMemoryFilterPreviewRecords([record]);
                 } finally {
-                    state.contentLabPreviewLoading = false;
+                    state.memoryFilterPreviewLoading = false;
                     await render();
                 }
                 return;
             }
-            if (action === 'content-lab-refresh-preview') {
-                state.contentLabPreviewLoading = true;
+            if (action === 'memory-filter-refresh-preview') {
+                state.memoryFilterPreviewLoading = true;
                 await render();
                 try {
-                    const refreshed = await refreshContentLabPreviewFromCurrentForm(snapshot);
+                    const refreshed = await refreshMemoryFilterPreviewFromCurrentForm(snapshot);
                     if (!refreshed) {
                         toast.warning('请先输入预览楼层或楼层范围。');
                     }
                 } finally {
-                    state.contentLabPreviewLoading = false;
+                    state.memoryFilterPreviewLoading = false;
                     await render();
                 }
                 return;
             }
-            if (action === 'content-lab-preview-range') {
-                const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+            if (action === 'memory-filter-preview-range') {
+                const previewSourceMode = readInputValue(root, '#stx-memory-filter-preview-source-mode') === 'raw_visible_text'
                     ? 'raw_visible_text'
                     : 'content';
-                const startFloor = Number(readInputValue(root, '#stx-content-lab-start-floor'));
-                const endFloor = Number(readInputValue(root, '#stx-content-lab-end-floor'));
+                const startFloor = Number(readInputValue(root, '#stx-memory-filter-start-floor'));
+                const endFloor = Number(readInputValue(root, '#stx-memory-filter-end-floor'));
                 if (!startFloor || !endFloor || startFloor < 1 || endFloor < startFloor) {
                     toast.error('请输入有效的楼层范围。');
                     return;
                 }
-                state.contentLabPreviewLoading = true;
-                state.contentLabStartFloor = String(startFloor);
-                state.contentLabEndFloor = String(endFloor);
-                state.contentLabPreviewSourceMode = previewSourceMode;
-                state.contentLabEnableContentSplit = readCheckedValue(root, '#stx-content-lab-enable-content-split');
+                state.memoryFilterPreviewLoading = true;
+                state.memoryFilterStartFloor = String(startFloor);
+                state.memoryFilterEndFloor = String(endFloor);
+                state.memoryFilterPreviewSourceMode = previewSourceMode;
+                state.memoryFilterEnabled = readCheckedValue(root, '#stx-memory-filter-enabled');
                 await render();
                 try {
-                    await loadContentLabSnapshot();
-                    await persistContentLabSettings(root, snapshot.contentLabSnapshot.tagRegistry);
-                    const records = await memory.chatState.previewFloorRangeContentBlocks({
+                    await loadMemoryFilterSnapshot();
+                    await persistMemoryFilterSettings(root);
+                    const records = await memory.chatState.previewFloorRangeMemoryFilter({
                         startFloor,
                         endFloor,
                         previewSourceMode,
-                        forceContentSplit: true,
+                        forceEnabled: true,
                     });
-                    const channels = assembleContentChannels(records);
-                    contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor))
-                        ?? records[0];
-                    state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
-                    state.contentLabPrimaryPreview = channels.primaryText;
-                    state.contentLabHintPreview = channels.hintText;
-                    state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                    applyMemoryFilterPreviewRecords(records);
                 } finally {
-                    state.contentLabPreviewLoading = false;
+                    state.memoryFilterPreviewLoading = false;
                     await render();
                 }
                 return;
             }
-            if (action === 'content-lab-set-mode') {
-                const nextMode = normalizeContentLabSplitMode(button.dataset.mode);
-                const nextRules = contentLabSettingsCache
-                    ? collectContentSplitRules(root, contentLabSettingsCache.rules)
-                    : state.contentLabRules;
-                state.contentLabSplitMode = nextMode;
-                state.contentLabPreviewLoading = Boolean(state.contentLabSelectedFloor || (state.contentLabStartFloor && state.contentLabEndFloor));
+            if (action === 'memory-filter-set-mode') {
+                const nextMode = normalizeMemoryFilterMode(button.dataset.mode);
+                const nextRules = memoryFilterSettingsCache
+                    ? collectMemoryFilterRules(root, memoryFilterSettingsCache.rules)
+                    : state.memoryFilterRules;
+                state.memoryFilterMode = nextMode;
+                state.memoryFilterPreviewLoading = Boolean(state.memoryFilterSelectedFloor || (state.memoryFilterStartFloor && state.memoryFilterEndFloor));
                 await render();
-                if (contentLabSettingsCache) {
-                    contentLabSettingsCache = await memory.chatState.saveContentLabSettings({
-                        ...contentLabSettingsCache,
-                        splitMode: nextMode,
+                if (memoryFilterSettingsCache) {
+                    memoryFilterSettingsCache = await memory.chatState.saveMemoryFilterSettings({
+                        ...memoryFilterSettingsCache,
+                        mode: nextMode,
                         rules: nextRules,
                     });
-                    applyContentLabSettingsToState(contentLabSettingsCache);
+                    applyMemoryFilterSettingsToState(memoryFilterSettingsCache);
                 }
                 try {
-                    const previewSourceMode = readInputValue(root, '#stx-content-lab-preview-source-mode') === 'raw_visible_text'
+                    const previewSourceMode = readInputValue(root, '#stx-memory-filter-preview-source-mode') === 'raw_visible_text'
                         ? 'raw_visible_text'
                         : 'content';
-                    if (state.contentLabStartFloor && state.contentLabEndFloor) {
-                        const startFloor = Math.max(1, Math.trunc(Number(state.contentLabStartFloor) || 1));
-                        const endFloor = Math.max(startFloor, Math.trunc(Number(state.contentLabEndFloor) || startFloor));
-                        const records = await memory.chatState.previewFloorRangeContentBlocks({
+                    if (state.memoryFilterStartFloor && state.memoryFilterEndFloor) {
+                        const startFloor = Math.max(1, Math.trunc(Number(state.memoryFilterStartFloor) || 1));
+                        const endFloor = Math.max(startFloor, Math.trunc(Number(state.memoryFilterEndFloor) || startFloor));
+                        const records = await memory.chatState.previewFloorRangeMemoryFilter({
                             startFloor,
                             endFloor,
                             previewSourceMode,
-                            forceContentSplit: true,
+                            forceEnabled: true,
                         });
-                        const channels = assembleContentChannels(records);
-                        contentLabPreviewFloor = records.find((record) => record.floor === Number(state.contentLabSelectedFloor)) ?? records[0];
-                        state.contentLabBlocks = records.flatMap((record) => record.parsedBlocks);
-                        state.contentLabPrimaryPreview = channels.primaryText;
-                        state.contentLabHintPreview = channels.hintText;
-                        state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
-                    } else if (state.contentLabSelectedFloor) {
-                        const selectedFloor = Math.max(1, Math.trunc(Number(state.contentLabSelectedFloor) || 1));
-                        const record = await memory.chatState.previewFloorContentBlocks({
+                        applyMemoryFilterPreviewRecords(records);
+                    } else if (state.memoryFilterSelectedFloor) {
+                        const selectedFloor = Math.max(1, Math.trunc(Number(state.memoryFilterSelectedFloor) || 1));
+                        const record = await memory.chatState.previewFloorMemoryFilter({
                             floor: selectedFloor,
                             previewSourceMode,
-                            forceContentSplit: true,
+                            forceEnabled: true,
                         });
-                        contentLabPreviewFloor = record;
-                        state.contentLabBlocks = record.parsedBlocks;
-                        const channels = assembleContentChannels([record]);
-                        state.contentLabPrimaryPreview = channels.primaryText;
-                        state.contentLabHintPreview = channels.hintText;
-                        state.contentLabExcludedPreview = channels.excludedSummary.join('\n');
+                        applyMemoryFilterPreviewRecords([record]);
                     }
                 } finally {
-                    state.contentLabPreviewLoading = false;
+                    state.memoryFilterPreviewLoading = false;
                     await render();
                 }
-                return;
-            }
-            if (action === 'content-lab-add-split-rule') {
-                if (!contentLabSettingsCache) {
-                    contentLabSettingsCache = await memory.chatState.getContentLabSettings();
-                    applyContentLabSettingsToState(contentLabSettingsCache);
-                }
-                const mode = normalizeContentLabSplitMode(readInputValue(root, '#stx-content-lab-mode') || state.contentLabSplitMode);
-                const nextRule: ContentSplitRule = {
-                    id: `${mode}-${Date.now().toString(36)}`,
-                    label: '新规则',
-                    mode,
-                    enabled: true,
-                    channel: 'primary',
-                    priority: 0,
-                    tagName: mode === 'xml' ? 'custom' : undefined,
-                    delimiters: mode === 'delimiter' ? ['---'] : undefined,
-                    keepDelimiter: false,
-                    regex: mode === 'regex' ? '([\\s\\S]+)' : undefined,
-                    flags: mode === 'regex' ? 'g' : undefined,
-                    captureGroup: mode === 'regex' ? 1 : undefined,
-                    markdownStrategy: mode === 'markdown' ? 'heading_or_hr' : undefined,
-                    jsonPath: mode === 'jsonpath' ? '$' : undefined,
-                };
-                await memory.chatState.saveContentLabSettings({
-                    ...contentLabSettingsCache,
-                    splitMode: mode,
-                    rules: [...contentLabSettingsCache.rules, nextRule],
-                });
-                contentLabSettingsCache = await memory.chatState.getContentLabSettings();
-                applyContentLabSettingsToState(contentLabSettingsCache);
-                toast.success('已新增拆分规则。');
-                await render();
-                return;
-            }
-            if (action === 'content-lab-delete-split-rule') {
-                if (!contentLabSettingsCache) {
-                    contentLabSettingsCache = await memory.chatState.getContentLabSettings();
-                }
-                const ruleId = String(button.dataset.ruleId ?? '').trim();
-                if (!ruleId) return;
-                const rules = collectContentSplitRules(root, contentLabSettingsCache.rules)
-                    .filter((rule: ContentSplitRule): boolean => rule.id !== ruleId);
-                contentLabSettingsCache = await memory.chatState.saveContentLabSettings({
-                    ...contentLabSettingsCache,
-                    rules,
-                });
-                applyContentLabSettingsToState(contentLabSettingsCache);
-                toast.success('拆分规则已删除。');
-                await render();
-                return;
-            }
-            if (action === 'content-lab-reset-rules') {
-                const saved = await memory.chatState.saveContentLabSettings({
-                    enableContentSplit: readCheckedValue(root, '#stx-content-lab-enable-content-split'),
-                    splitMode: 'xml',
-                    rules: DEFAULT_CONTENT_SPLIT_RULES,
-                    cleanup: DEFAULT_CONTENT_SPLIT_CLEANUP,
-                });
-                contentLabSettingsCache = saved;
-                applyContentLabSettingsToState(saved);
-                state.contentLabTabLoaded = true;
-                toast.success('标签规则已重置为默认值。');
-                await render();
-                return;
-            }
-            if (action === 'content-lab-add-rule') {
-                const tagName = prompt('请输入标签名（如 custom_tag）：');
-                if (!tagName || !tagName.trim()) return;
-                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
-                registry.push({
-                    tagName: tagName.trim(),
-                    aliases: [],
-                    pattern: '',
-                    patternMode: undefined,
-                    priority: 0,
-                    kind: 'unknown',
-                    includeInPrimaryExtraction: false,
-                    includeAsHint: true,
-                    allowActorPromotion: false,
-                    allowRelationPromotion: false,
-                    notes: '用户自定义',
-                });
-                await persistContentLabSettings(root, registry);
-                toast.success('已添加新规则。');
-                await render();
-                return;
-            }
-            if (action === 'content-lab-delete-rule') {
-                const idx = Number(button.dataset.ruleIndex ?? -1);
-                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
-                if (idx >= 0 && idx < registry.length) {
-                    registry.splice(idx, 1);
-                    if (state.contentLabEditingRuleIndex === idx) {
-                        state.contentLabEditingRuleIndex = -1;
-                    } else if (state.contentLabEditingRuleIndex > idx) {
-                        state.contentLabEditingRuleIndex -= 1;
-                    }
-                    await persistContentLabSettings(root, registry);
-                    toast.success('规则已删除。');
-                    await render();
-                }
-                return;
-            }
-            if (action === 'content-lab-edit-rule') {
-                const idx = Number(button.dataset.ruleIndex ?? -1);
-                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
-                if (!registry[idx]) return;
-                state.contentLabEditingRuleIndex = idx;
-                await render();
-                return;
-            }
-            if (action === 'content-lab-save-rule') {
-                const idx = Number(button.dataset.ruleIndex ?? -1);
-                const registry = [...snapshot.contentLabSnapshot.tagRegistry];
-                const rule = registry[idx];
-                if (!rule) return;
-                const kindValue = readInputValue(root, `[data-rule-kind="${idx}"]`);
-                const tagName = readInputValue(root, `[data-rule-tag-name="${idx}"]`);
-                const aliasesText = readInputValue(root, `[data-rule-aliases="${idx}"]`);
-                const pattern = readInputValue(root, `[data-rule-pattern="${idx}"]`);
-                const patternModeValue = readInputValue(root, `[data-rule-pattern-mode="${idx}"]`);
-                const priorityValue = readInputValue(root, `[data-rule-priority="${idx}"]`);
-                const notes = readInputValue(root, `[data-rule-notes="${idx}"]`);
-                const includeInPrimaryExtraction = readCheckedValue(root, `[data-rule-primary="${idx}"]`);
-                const includeAsHint = readCheckedValue(root, `[data-rule-hint="${idx}"]`);
-                if (!tagName) {
-                    toast.warning('标签名不能为空。');
-                    return;
-                }
-                const kindOptions: ContentBlockPolicy['kind'][] = ['story_primary', 'story_secondary', 'summary', 'tool_artifact', 'thought', 'meta_commentary', 'instruction', 'unknown'];
-                const nextKind = kindOptions.includes(kindValue as ContentBlockPolicy['kind'])
-                    ? kindValue as ContentBlockPolicy['kind']
-                    : 'unknown';
-                rule.tagName = tagName;
-                rule.aliases = parseTagText(aliasesText);
-                rule.pattern = pattern || undefined;
-                rule.patternMode = patternModeValue === 'prefix' || patternModeValue === 'regex'
-                    ? patternModeValue
-                    : undefined;
-                rule.priority = Math.trunc(Number(priorityValue) || 0);
-                rule.kind = nextKind;
-                rule.includeInPrimaryExtraction = includeInPrimaryExtraction;
-                rule.includeAsHint = includeAsHint;
-                rule.allowActorPromotion = includeInPrimaryExtraction;
-                rule.allowRelationPromotion = includeInPrimaryExtraction || includeAsHint;
-                rule.notes = notes;
-                state.contentLabEditingRuleIndex = -1;
-                await persistContentLabSettings(root, registry);
-                toast.success('规则已保存。');
-                await render();
-                return;
-            }
-            if (action === 'content-lab-export-rules') {
-                const settings = contentLabSettingsCache ?? await memory.chatState.getContentLabSettings();
-                const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'content-split-lab-settings.json';
-                a.click();
-                URL.revokeObjectURL(url);
-                toast.success('内容拆分配置已导出。');
-                return;
-            }
-            if (action === 'content-lab-import-rules') {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.json';
-                input.onchange = async () => {
-                    const file = input.files?.[0];
-                    if (!file) return;
-                    try {
-                        const text = await file.text();
-                        const parsed = JSON.parse(text);
-                        if (Array.isArray(parsed)) {
-                            await persistContentLabSettings(root, parsed as ContentBlockPolicy[]);
-                        } else if (parsed && typeof parsed === 'object') {
-                            contentLabSettingsCache = await memory.chatState.saveContentLabSettings(parsed as Partial<ContentLabSettings>);
-                            applyContentLabSettingsToState(contentLabSettingsCache);
-                        } else {
-                            toast.error('导入文件格式不正确。');
-                            return;
-                        }
-                        toast.success('内容拆分配置已导入。');
-                        await render();
-                    } catch {
-                        toast.error('导入失败，请检查文件格式。');
-                    }
-                };
-                input.click();
-                return;
-            }
-            if (action === 'content-lab-toggle-block-view') {
-                const blockIndex = String(button.dataset.blockIndex ?? '').trim();
-                const card = root.querySelector(`[data-content-block-index="${escapeCssIdentifier(blockIndex)}"]`) as HTMLElement | null;
-                card?.classList.toggle('is-expanded');
-                return;
-            }
-            if (action === 'content-lab-copy-block') {
-                const blockIndex = Math.trunc(Number(button.dataset.blockIndex) || 0);
-                const block = state.contentLabBlocks[blockIndex];
-                if (!block) {
-                    toast.warning('未找到可复制的拆分块。');
-                    return;
-                }
-                try {
-                    await navigator.clipboard.writeText(block.rawText);
-                    toast.success('拆分块已复制。');
-                } catch {
-                    toast.error('复制失败，请检查浏览器剪贴板权限。');
-                }
-                return;
-            }
-            if (action === 'content-lab-locate-block') {
-                const blockIndex = String(button.dataset.blockIndex ?? '').trim();
-                const card = root.querySelector(`[data-content-block-index="${escapeCssIdentifier(blockIndex)}"]`) as HTMLElement | null;
-                const source = root.querySelector('.stx-content-lab__source-code') as HTMLElement | null;
-                source?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                card?.classList.add('is-located');
-                window.setTimeout(() => card?.classList.remove('is-located'), 1400);
-                toast.info('已定位到源内容预览，可参考该块的起止位置。');
                 return;
             }
         } catch (error) {
@@ -2180,28 +1899,28 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             });
         });
 
-        let contentLabRuleRefreshTimer: number | undefined;
-        const scheduleContentLabRuleRefresh = (): void => {
-            window.clearTimeout(contentLabRuleRefreshTimer);
-            contentLabRuleRefreshTimer = window.setTimeout((): void => {
-                if (state.currentView !== 'content-lab') return;
-                state.contentLabPreviewLoading = true;
+        let memoryFilterRuleRefreshTimer: number | undefined;
+        const scheduleMemoryFilterRuleRefresh = (): void => {
+            window.clearTimeout(memoryFilterRuleRefreshTimer);
+            memoryFilterRuleRefreshTimer = window.setTimeout((): void => {
+                if (state.currentView !== 'memory-filter') return;
+                state.memoryFilterPreviewLoading = true;
                 void (async (): Promise<void> => {
                     try {
-                        await refreshContentLabPreviewFromCurrentForm(snapshot);
+                        await refreshMemoryFilterPreviewFromCurrentForm(snapshot);
                     } catch (error) {
-                        logger.warn('内容拆分规则实时刷新失败', error);
+                        logger.warn('记忆过滤规则实时刷新失败', error);
                     } finally {
-                        state.contentLabPreviewLoading = false;
+                        state.memoryFilterPreviewLoading = false;
                         await render();
                     }
                 })();
             }, 260);
         };
-        root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-rule-field], #stx-content-lab-cleanup-trim, #stx-content-lab-cleanup-strip-wrapper, #stx-content-lab-cleanup-drop-empty, #stx-content-lab-min-length, #stx-content-lab-max-length')
+        root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-rule-field], #stx-memory-filter-cleanup-trim, #stx-memory-filter-cleanup-strip-wrapper, #stx-memory-filter-cleanup-drop-empty, #stx-memory-filter-min-length, #stx-memory-filter-max-length')
             .forEach((element: HTMLInputElement | HTMLSelectElement): void => {
                 const eventName = element instanceof HTMLInputElement && element.type !== 'checkbox' ? 'input' : 'change';
-                element.addEventListener(eventName, scheduleContentLabRuleRefresh);
+                element.addEventListener(eventName, scheduleMemoryFilterRuleRefresh);
             });
     };
 
@@ -2264,7 +1983,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         takeoverPreviewSequence += 1;
         takeoverProgressSequence += 1;
         vectorLoadSequence += 1;
-        contentLabLoadSequence += 1;
+        memoryFilterLoadSequence += 1;
         stopTakeoverProgressPolling();
         destroyMemoryGraphPage();
     };
@@ -2409,45 +2128,45 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
     };
 
     /**
-     * 功能：加载内容实验室配置与楼层消息。
+     * 功能：加载记忆过滤器配置与楼层消息。
      * @returns 异步完成。
      */
-    const loadContentLabSnapshot = async (): Promise<void> => {
+    const loadMemoryFilterSnapshot = async (): Promise<void> => {
         if (disposed) {
             return;
         }
-        if (state.contentLabTabLoaded && contentLabSettingsCache && contentLabSourceMessages.length > 0) {
+        if (state.memoryFilterTabLoaded && memoryFilterSettingsCache && memoryFilterSourceMessages.length > 0) {
             return;
         }
-        const currentSequence = ++contentLabLoadSequence;
-        state.contentLabTabLoading = true;
+        const currentSequence = ++memoryFilterLoadSequence;
+        state.memoryFilterTabLoading = true;
         await render();
         await waitForUiPaint();
         try {
-            const [contentLabSettings, bundle] = await Promise.all([
-                contentLabSettingsCache ? Promise.resolve(contentLabSettingsCache) : memory.chatState.getContentLabSettings(),
+            const [memoryFilterSettings, bundle] = await Promise.all([
+                memoryFilterSettingsCache ? Promise.resolve(memoryFilterSettingsCache) : memory.chatState.getMemoryFilterSettings(),
                 Promise.resolve(collectTakeoverSourceBundle()),
             ]);
             if (disposed) {
                 return;
             }
-            if (currentSequence !== contentLabLoadSequence) {
+            if (currentSequence !== memoryFilterLoadSequence) {
                 return;
             }
-            contentLabSettingsCache = contentLabSettings;
-            applyContentLabSettingsToState(contentLabSettings);
-            contentLabSourceMessages = bundle.messages;
-            state.contentLabTabLoaded = true;
-            logger.info(`内容实验室加载了 ${bundle.messages.length} 层消息`);
+            memoryFilterSettingsCache = memoryFilterSettings;
+            applyMemoryFilterSettingsToState(memoryFilterSettings);
+            memoryFilterSourceMessages = bundle.messages;
+            state.memoryFilterTabLoaded = true;
+            logger.info(`记忆过滤器加载了 ${bundle.messages.length} 层消息`);
         } catch (error) {
-            if (currentSequence !== contentLabLoadSequence) {
+            if (currentSequence !== memoryFilterLoadSequence) {
                 return;
             }
-            logger.warn('内容实验室加载消息失败', error);
-            toast.error(`内容实验室加载失败：${String((error as Error)?.message ?? error)}`);
+            logger.warn('记忆过滤器加载消息失败', error);
+            toast.error(`记忆过滤器加载失败：${String((error as Error)?.message ?? error)}`);
         } finally {
-            if (!disposed && currentSequence === contentLabLoadSequence) {
-                state.contentLabTabLoading = false;
+            if (!disposed && currentSequence === memoryFilterLoadSequence) {
+                state.memoryFilterTabLoading = false;
                 await render();
             }
         }
@@ -2459,15 +2178,15 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
      */
     const refreshWorkbenchAfterTakeoverMutation = async (): Promise<void> => {
         takeoverProgressCache = null;
-        invalidateContentLabSnapshot();
+        invalidateMemoryFilterSnapshot();
         invalidatePreviewSnapshot();
-        if (state.currentView === 'content-lab') {
-            await loadContentLabSnapshot();
+        if (state.currentView === 'memory-filter') {
+            await loadMemoryFilterSnapshot();
             const snapshot = await loadCoreSnapshot();
             try {
-                await refreshContentLabPreviewFromCurrentForm(snapshot);
+                await refreshMemoryFilterPreviewFromCurrentForm(snapshot);
             } catch (error) {
-                logger.warn('接管完成后刷新内容拆分预览失败', error);
+                logger.warn('接管完成后刷新记忆过滤预览失败', error);
             }
             return;
         }
@@ -2541,8 +2260,8 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             await refreshVectorSnapshot();
             return;
         }
-        if (view === 'content-lab' && !state.contentLabTabLoaded && !state.contentLabTabLoading) {
-            await loadContentLabSnapshot();
+        if (view === 'memory-filter' && !state.memoryFilterTabLoaded && !state.memoryFilterTabLoading) {
+            await loadMemoryFilterSnapshot();
         }
     };
 

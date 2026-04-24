@@ -23,6 +23,7 @@ import { LLMHubRerankService } from './llmhub-rerank-service';
 import { computeTemporalIntentBoost, resolveQueryTimeIntent, type QueryTimeIntent } from '../memory-time/time-ranking';
 import { logger } from '../runtime/runtime-services';
 import { readMemoryOSSettings } from '../settings/store';
+import { loadVectorRecallStats, saveVectorRecallStat } from '../db/vector-db';
 
 export interface HybridRetrievalInput {
     /** 检索模式 */
@@ -271,6 +272,7 @@ export class HybridRetrievalService {
             query,
             input.queryContext?.mergedContextText || '',
         );
+        await this.recordVectorRecallStats(chatKey, vectorHits, input.candidates, retrievalMode);
 
         if (retrievalMode === 'vector_only') {
             this.emitProgress(input.onProgress, 'vector_finalize', '整理向量结果', '正在整理仅向量模式下的候选结果。', 0.9);
@@ -374,6 +376,53 @@ export class HybridRetrievalService {
             });
         }
         return vectorResults;
+    }
+
+    /**
+     * 功能：记录成功映射到 MemoryEntry 候选的向量召回统计。
+     * @param chatKey 聊天键。
+     * @param vectorHits 原始向量命中。
+     * @param candidates 当前可召回候选。
+     * @param retrievalMode 检索模式。
+     */
+    private async recordVectorRecallStats(
+        chatKey: string,
+        vectorHits: VectorSearchHit[],
+        candidates: RetrievalCandidate[],
+        retrievalMode: 'vector_only' | 'hybrid',
+    ): Promise<void> {
+        const candidateMap = new Map<string, RetrievalCandidate>();
+        for (const candidate of candidates) {
+            candidateMap.set(candidate.candidateId, candidate);
+            candidateMap.set(candidate.entryId, candidate);
+        }
+        const validHits = vectorHits.filter((hit: VectorSearchHit): boolean => {
+            return hit.sourceKind === 'entry' && Boolean(candidateMap.get(hit.sourceId));
+        });
+        if (validHits.length === 0) {
+            return;
+        }
+
+        try {
+            const now = Date.now();
+            const existingMap = new Map((await loadVectorRecallStats(chatKey)).map((stat) => [stat.vectorDocId, stat]));
+            const seenDocIds = new Set<string>();
+            for (const hit of validHits) {
+                if (seenDocIds.has(hit.vectorDocId)) {
+                    continue;
+                }
+                seenDocIds.add(hit.vectorDocId);
+                const existing = existingMap.get(hit.vectorDocId);
+                await saveVectorRecallStat(chatKey, {
+                    vectorDocId: hit.vectorDocId,
+                    recallCount: (existing?.recallCount ?? 0) + 1,
+                    lastRecalledAt: now,
+                    lastRecallMode: retrievalMode,
+                });
+            }
+        } catch (error) {
+            logger.warn('[HybridRetrieval] 写入向量召回统计失败', error);
+        }
     }
 
     /**

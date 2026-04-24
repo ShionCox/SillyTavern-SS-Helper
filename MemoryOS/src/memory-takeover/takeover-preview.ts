@@ -73,7 +73,7 @@ export async function buildTakeoverPreviewEstimate(input: {
                     ? {
                         range: batch.range,
                         messages: assembly.extractionMessages,
-                        hintContext: assembly.channels.hintText || undefined,
+                        hintContext: assembly.channels.contextText || undefined,
                     }
                     : {
                         batchId: batch.batchId,
@@ -97,7 +97,7 @@ export async function buildTakeoverPreviewEstimate(input: {
                             updateHint: '',
                         },
                         messages: assembly.extractionMessages,
-                        hintContext: assembly.channels.hintText || undefined,
+                        hintContext: assembly.channels.contextText || undefined,
                     },
             });
             const estimatedPromptTokens: number = estimateChatMessageTokens(request.messages);

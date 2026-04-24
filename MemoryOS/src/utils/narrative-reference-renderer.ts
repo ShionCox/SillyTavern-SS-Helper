@@ -56,8 +56,8 @@ export function renderNarrativeReferenceText(
         return source;
     }
     const userDisplayName = normalizeNarrativeReferenceUserName(context.userDisplayName);
-    const referencePattern = /\b(user|ck:v2:[^\s，。；、.!?！？()]+|entity:[^\s，。；、.!?！？()]+|(?:organization|city|nation|location|task|event|world_global_state|world|actor):[^\s，。；、.!?！？()]+)/gi;
-    return source
+    const referencePattern = /\b(user|ck:v2:[^\s，。；、.!?！？()]+|entity:[^\s，。；、.!?！？()]+|(?:organization|city|nation|location|task|event|world_global_state|world|actor):[^\s，。；、.!?！？()]+|(?:char|actor)_[a-z0-9_]+)/gi;
+    const rendered = source
         .replace(/当前用户/g, userDisplayName)
         .replace(/该用户/g, userDisplayName)
         .replace(/主角/g, userDisplayName)
@@ -72,6 +72,7 @@ export function renderNarrativeReferenceText(
         .replace(referencePattern, (matched: string): string => {
             return resolveNarrativeReferenceLabel(matched, context, stripNarrativeReferencePrefix(matched) || matched);
         });
+    return renderKnownBareReferenceKeys(rendered, context);
 }
 
 /**
@@ -125,4 +126,57 @@ function normalizeNarrativeReferenceUserName(value: string | undefined): string 
         return '你';
     }
     return normalized;
+}
+
+/**
+ * 功能：渲染上下文中已知的裸内部键，例如 char_xxx / actor_xxx。
+ * @param text 已完成占位符渲染的文本。
+ * @param context 渲染上下文。
+ * @returns 替换裸内部键后的文本。
+ */
+function renderKnownBareReferenceKeys(text: string, context: NarrativeReferenceRendererContext): string {
+    const labelMap = context.labelMap;
+    if (!labelMap || labelMap.size === 0) {
+        return text;
+    }
+    const refs = Array.from(labelMap.keys())
+        .map((ref: string): string => String(ref ?? '').trim())
+        .filter(isBareNarrativeReferenceKey)
+        .sort((left: string, right: string): number => right.length - left.length);
+    if (refs.length === 0) {
+        return text;
+    }
+
+    let output = text;
+    for (const ref of refs) {
+        const label = resolveNarrativeReferenceLabel(ref, context, ref);
+        if (!label || label === ref) {
+            continue;
+        }
+        const pattern = new RegExp(`(^|[^A-Za-z0-9_])(${escapeRegExp(ref)})(?=$|[^A-Za-z0-9_])`, 'g');
+        output = output.replace(pattern, (_matched: string, prefix: string): string => `${prefix}${label}`);
+    }
+    return output;
+}
+
+/**
+ * 功能：判断是否为可在自然语言中替换的裸内部键。
+ * @param ref 引用键。
+ * @returns 是否可替换。
+ */
+function isBareNarrativeReferenceKey(ref: string): boolean {
+    const normalized = String(ref ?? '').trim();
+    if (!normalized || normalized === 'user' || normalized.includes(':')) {
+        return false;
+    }
+    return /^[A-Za-z][A-Za-z0-9_]*_[A-Za-z0-9_]+$/.test(normalized);
+}
+
+/**
+ * 功能：转义正则特殊字符。
+ * @param value 原始文本。
+ * @returns 可安全用于正则的文本。
+ */
+function escapeRegExp(value: string): string {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

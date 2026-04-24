@@ -1,6 +1,7 @@
 import { createMemoryTraceContext } from '../core/memory-trace';
 import { getTavernPromptMessageTextEvent, type SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import type { PromptAssemblySnapshot } from '../types';
+import { filterMemoryMessages, getMemoryFilterSettings } from '../memory-filter';
 
 export interface BaseInjectionDiagnosticsSnapshot {
     enabled: boolean;
@@ -172,7 +173,10 @@ export async function runPromptReadyInjectionPipeline(input: {
     const injectionPreviewEnabled = settings.injectionPreviewEnabled !== false;
     const latestUserMessage = findLatestPromptUserMessage(promptMessages);
     const latestUserRecord = (latestUserMessage || {}) as Record<string, unknown>;
-    const query = resolvePromptReadyQuery(input, latestUserMessage);
+    const rawQuery = resolvePromptReadyQuery(input, latestUserMessage);
+    const filteredQuery = filterMemoryMessages([{ role: 'user', content: rawQuery, floor: 1 }], getMemoryFilterSettings(), { scope: 'promptInjection' });
+    const filteredQueryText = filteredQuery.messagesForMemory.map((message) => String(message.content ?? '').trim()).filter(Boolean).join('\n\n');
+    const query = filteredQuery.enabled ? filteredQueryText : rawQuery;
     const sourceMessageId = String(
         input.sourceMessageId
         ?? latestUserRecord.mes_id

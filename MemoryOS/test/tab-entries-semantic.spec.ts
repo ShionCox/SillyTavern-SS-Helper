@@ -56,7 +56,7 @@ describe('tabEntries semantic inspector', () => {
             memoryGraph: { nodes: [], edges: [], sections: [] },
             takeoverProgress: null,
             vectorSnapshot: { loaded: false, runtimeStatus: null, documents: [], indexRecords: [], recallStats: [], stats: null, testResult: null },
-            contentLabSnapshot: { loaded: false, tagRegistry: [], availableFloors: [] },
+            memoryFilterSnapshot: { loaded: false, availableFloors: [] },
         } as unknown as WorkbenchSnapshot;
         const state = {
             currentView: 'entries',

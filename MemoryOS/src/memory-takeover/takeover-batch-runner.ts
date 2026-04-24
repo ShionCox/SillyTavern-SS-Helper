@@ -7,6 +7,7 @@ import type {
     MemoryTakeoverEntityTransition,
     MemoryTakeoverRelationshipCard,
     MemoryTakeoverRange,
+    MemoryTakeoverFloorManifestRecord,
     MemoryTakeoverRelationTransition,
     MemoryTakeoverStableFact,
     MemoryTakeoverTaskTransition,
@@ -17,9 +18,7 @@ import type { MemoryLLMApi } from '../memory-summary';
 import { normalizeRelationTag } from '../constants/relationTags';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import type { MemoryTakeoverMessageSlice } from './takeover-source';
-import { getContentLabSettings } from '../config/content-tag-registry';
-import { assembleContentChannels, prepareFloorContentForSending, type RawFloorRecord } from './content-block-pipeline';
-import { classifyFloorRecordsWithAI } from './content-block-ai-classifier';
+import { filterMemoryMessages, getMemoryFilterSettings, type MemoryFilterFloorRecord } from '../memory-filter';
 import { runTakeoverRepairService } from './takeover-repair-service';
 import { logger } from '../runtime/runtime-services';
 import { resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
@@ -68,8 +67,13 @@ export interface MemoryTakeoverKnownContext {
  * 功能：定义批次送模组装结果。
  */
 export interface MemoryTakeoverBatchPromptAssembly {
-    floorRecords: RawFloorRecord[];
-    channels: ReturnType<typeof assembleContentChannels>;
+    floorRecords: MemoryFilterFloorRecord[];
+    channels: {
+        memoryText: string;
+        contextText: string;
+        excludedText: string;
+        floorManifest: MemoryTakeoverFloorManifestRecord[];
+    };
     extractionMessages: MemoryTakeoverMessageSlice[];
     sourceSegments: TakeoverSourceSegment[];
 }
@@ -87,6 +91,28 @@ function computeBatchRoleStats(messages: MemoryTakeoverMessageSlice[]): Record<s
     return stats;
 }
 
+function toTakeoverFloorManifest(records: MemoryFilterFloorRecord[]): MemoryTakeoverFloorManifestRecord[] {
+    return records.map((record): MemoryTakeoverFloorManifestRecord => ({
+        floor: record.floor,
+        sourceFloor: record.floor,
+        originalText: record.originalText,
+        originalRole: record.role,
+        includedInBatch: true,
+        blocks: record.blocks.map((block) => ({
+            blockId: block.id,
+            title: block.title,
+            rawText: block.rawText,
+            startOffset: block.startOffset,
+            endOffset: block.endOffset,
+            channel: block.channel,
+            reasonCodes: [...block.reasonCodes],
+        })),
+        hasMemoryContent: record.hasMemoryContent,
+        hasContextOnly: record.hasContextOnly,
+        hasExcludedOnly: record.hasExcludedOnly,
+    }));
+}
+
 /**
  * 功能：按正式批处理规则组装送模输入。
  * @param input 组装输入。
@@ -97,46 +123,58 @@ export async function assembleTakeoverBatchPromptAssembly(input: {
     pluginId: string;
     messages: MemoryTakeoverMessageSlice[];
 }): Promise<MemoryTakeoverBatchPromptAssembly> {
-    const contentLabSettings = getContentLabSettings();
-    const prepared = prepareFloorContentForSending(input.messages, contentLabSettings);
-    let floorRecords: RawFloorRecord[] = prepared.floorRecords;
-    if (contentLabSettings.enableContentSplit && contentLabSettings.enableAIClassifier) {
-        floorRecords = await classifyFloorRecordsWithAI({
-            llm: input.llm,
-            pluginId: input.pluginId,
-            floorRecords,
-        });
-    }
-    const channels = assembleContentChannels(floorRecords);
+    void input.llm;
+    void input.pluginId;
+    const prepared = filterMemoryMessages(input.messages, getMemoryFilterSettings(), { scope: 'takeover' });
+    const floorRecords = prepared.enabled
+        ? prepared.records
+        : input.messages.map((message): MemoryFilterFloorRecord => ({
+            floor: message.floor,
+            role: message.role === 'user' || message.role === 'assistant' || message.role === 'system' ? message.role : 'unknown',
+            originalText: String(message.content ?? ''),
+            blocks: String(message.content ?? '').trim() ? [{
+                id: `raw_${message.floor}`,
+                floor: message.floor,
+                title: '原始楼层',
+                rawText: String(message.content ?? ''),
+                channel: 'memory',
+                startOffset: 0,
+                endOffset: String(message.content ?? '').length,
+                reasonCodes: ['memory_filter_disabled'],
+            }] : [],
+            hasMemoryContent: Boolean(String(message.content ?? '').trim()),
+            hasContextOnly: false,
+            hasExcludedOnly: false,
+        }));
+    const channels = {
+        memoryText: prepared.messagesForMemory.map((message) => String(message.content ?? '').trim()).filter(Boolean).join('\n\n'),
+        contextText: prepared.contextText,
+        excludedText: prepared.excludedText,
+        floorManifest: toTakeoverFloorManifest(floorRecords),
+    };
     const messageNameMap = new Map(
         input.messages.map((message: MemoryTakeoverMessageSlice): [number, string] => [message.floor, message.name ?? '']),
     );
     const extractionMessages: MemoryTakeoverMessageSlice[] = floorRecords
-        .filter((floor: RawFloorRecord): boolean => floor.hasPrimaryStory)
-        .map((floor: RawFloorRecord) => ({
+        .filter((floor): boolean => floor.hasMemoryContent)
+        .map((floor) => ({
             floor: floor.floor,
-            sourceFloor: floor.sourceFloor ?? floor.floor,
-            role: floor.originalRole as 'user' | 'assistant' | 'system',
+            sourceFloor: floor.floor,
+            role: floor.role === 'tool' || floor.role === 'unknown' ? 'assistant' : floor.role,
             name: messageNameMap.get(floor.floor) ?? '',
-            content: floor.parsedBlocks
-                .filter((block) => block.includeInPrimaryExtraction)
+            content: floor.blocks
+                .filter((block) => block.channel === 'memory')
                 .map((block) => block.rawText)
                 .join('\n\n'),
         }));
-    const sourceSegments = floorRecords.flatMap((floor: RawFloorRecord) =>
-        floor.parsedBlocks
-            .filter((block) => block.includeInPrimaryExtraction || block.includeAsHint)
+    const sourceSegments = floorRecords.flatMap((floor) =>
+        floor.blocks
+            .filter((block) => block.channel === 'memory' || block.channel === 'context')
             .map((block) => ({
-                kind: block.resolvedKind === 'story_primary' ? 'story_narrative' as const
-                    : block.resolvedKind === 'story_secondary' ? 'story_dialogue' as const
-                    : block.resolvedKind === 'thought' ? 'thought_like' as const
-                    : block.resolvedKind === 'tool_artifact' ? 'tool_artifact' as const
-                    : block.resolvedKind === 'meta_commentary' ? 'meta_analysis' as const
-                    : block.resolvedKind === 'instruction' ? 'instructional' as const
-                    : 'meta_analysis' as const,
+                kind: block.channel === 'memory' ? 'story_narrative' as const : 'meta_analysis' as const,
                 text: block.rawText,
                 sourceFloor: floor.floor,
-                confidence: block.includeInPrimaryExtraction ? 0.95 : 0.5,
+                confidence: block.channel === 'memory' ? 0.95 : 0.5,
             })),
     );
     return {
@@ -874,32 +912,32 @@ export async function runTakeoverBatch(input: {
     const userCount: number = roleStats.user || 0;
     const assistantCount: number = roleStats.assistant || 0;
 
-    logger.info(`[takeover][batch][${input.batch.batchId}] block分块结果：`, {
+    logger.info(`[takeover][batch][${input.batch.batchId}] 记忆过滤结果：`, {
         range: input.batch.range,
         total: input.messages.length,
         floorCount: floorRecords.length,
         sentFloors: extractionMessages.length,
-        primaryFloors: floorRecords.filter((f) => f.hasPrimaryStory).length,
-        hintOnlyFloors: floorRecords.filter((f) => f.hasHintOnly && !f.hasPrimaryStory).length,
+        memoryFloors: floorRecords.filter((f) => f.hasMemoryContent).length,
+        contextOnlyFloors: floorRecords.filter((f) => f.hasContextOnly && !f.hasMemoryContent).length,
         excludedOnlyFloors: floorRecords.filter((f) => f.hasExcludedOnly).length,
-        primaryText: channels.primaryText.length,
-        hintText: channels.hintText.length,
+        memoryText: channels.memoryText.length,
+        contextText: channels.contextText.length,
         roleStats,
     });
     logger.info(`[takeover][batch][${input.batch.batchId}] F12送模诊断：`, {
         requestedRange: `${input.batch.range.startFloor}-${input.batch.range.endFloor}`,
         sourceFloors: input.messages.map((message: MemoryTakeoverMessageSlice) => message.floor),
-        manifestFloors: floorRecords.map((floor: RawFloorRecord) => floor.floor),
+        manifestFloors: floorRecords.map((floor) => floor.floor),
         sentMessageFloors: extractionMessages.map((message: MemoryTakeoverMessageSlice) => message.floor),
-        floorDecisions: floorRecords.map((floor: RawFloorRecord) => ({
+        floorDecisions: floorRecords.map((floor) => ({
             floor: floor.floor,
-            sourceFloor: floor.sourceFloor ?? floor.floor,
-            hasPrimaryStory: floor.hasPrimaryStory,
-            hasHintOnly: floor.hasHintOnly,
+            sourceFloor: floor.floor,
+            hasMemoryContent: floor.hasMemoryContent,
+            hasContextOnly: floor.hasContextOnly,
             hasExcludedOnly: floor.hasExcludedOnly,
-            primaryBlockCount: floor.parsedBlocks.filter((block) => block.includeInPrimaryExtraction).length,
-            hintBlockCount: floor.parsedBlocks.filter((block) => !block.includeInPrimaryExtraction && block.includeAsHint).length,
-            excludedBlockCount: floor.parsedBlocks.filter((block) => !block.includeInPrimaryExtraction && !block.includeAsHint).length,
+            memoryBlockCount: floor.blocks.filter((block) => block.channel === 'memory').length,
+            contextBlockCount: floor.blocks.filter((block) => block.channel === 'context').length,
+            excludedBlockCount: floor.blocks.filter((block) => block.channel === 'excluded').length,
         })),
     });
 
@@ -947,7 +985,7 @@ export async function runTakeoverBatch(input: {
         chapterTags: [input.batch.category === 'active' ? '最近活跃' : '历史补建'],
         sourceRange: input.batch.range,
         sourceSegments: sourceSegments,
-        floorManifest: floorRecords,
+        floorManifest: toTakeoverFloorManifest(floorRecords),
         generatedAt: Date.now(),
     };
     const displayProgress = input.batch.category === 'history'
@@ -974,7 +1012,7 @@ export async function runTakeoverBatch(input: {
             range: input.batch.range,
             knownContext,
             messages: extractionMessages,
-            hintContext: channels.hintText || undefined,
+            hintContext: channels.contextText || undefined,
         },
         extraSystemInstruction: [
             String(input.worldStrategyHintText ?? '').trim(),

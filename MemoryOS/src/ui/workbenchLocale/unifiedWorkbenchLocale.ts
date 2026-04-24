@@ -9,7 +9,7 @@ const UNIFIED_WORKBENCH_TEXT_MAP: Record<string, string> = {
     nav_vectors: '向量实验室',
     nav_memory_graph: '可视化记忆',
     nav_takeover: '旧聊天接管',
-    nav_content_lab: '内容拆分台',
+    nav_memory_filter: '过滤器',
     stat_entries: '条目',
     stat_entries_title: '当前聊天中的记忆条目数量',
     stat_types: '类型',

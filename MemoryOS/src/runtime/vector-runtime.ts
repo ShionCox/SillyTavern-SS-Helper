@@ -8,7 +8,6 @@ import { MemoryRetrievalService } from '../services/memory-retrieval-service';
 import { HybridRetrievalService } from '../services/hybrid-retrieval-service';
 import { EmbeddingService } from '../services/embedding-service';
 import { VectorStoreAdapterService } from '../services/vector-store-adapter';
-import { VectorDocumentBuilder } from '../services/vector-document-builder';
 import { logger } from './runtime-services';
 import { readMemoryOSSettings, subscribeMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 
@@ -18,7 +17,6 @@ let sharedRetrievalService: MemoryRetrievalService | null = null;
 let sharedHybridService: HybridRetrievalService | null = null;
 let sharedEmbeddingService: EmbeddingService | null = null;
 let sharedVectorStore: VectorStoreAdapterService | null = null;
-let sharedDocumentBuilder: VectorDocumentBuilder | null = null;
 let vectorRuntimeInitialized = false;
 let unsubscribeVectorSettings: (() => void) | null = null;
 
@@ -55,13 +53,6 @@ export function getSharedVectorStore(): VectorStoreAdapterService | null {
 }
 
 /**
- * 功能：获取全局共享的 VectorDocumentBuilder。
- */
-export function getSharedDocumentBuilder(): VectorDocumentBuilder | null {
-    return sharedDocumentBuilder;
-}
-
-/**
  * 功能：向量运行时是否已完成初始化。
  */
 export function isVectorRuntimeReady(): boolean {
@@ -70,8 +61,8 @@ export function isVectorRuntimeReady(): boolean {
 
 /**
  * 功能：初始化向量系统运行时。
- * 说明：创建 EmbeddingService、VectorStoreAdapterService、VectorDocumentBuilder、
- *       HybridRetrievalService，并注入到共享的 MemoryRetrievalService 单例。
+ * 说明：创建 EmbeddingService、VectorStoreAdapterService、HybridRetrievalService，
+ *       并注入到共享的 MemoryRetrievalService 单例。
  *       应在 MemoryOS 构造函数中调用一次。
  */
 export function initVectorRuntime(): void {
@@ -84,7 +75,6 @@ export function initVectorRuntime(): void {
         sharedEmbeddingService = new EmbeddingService();
         sharedEmbeddingService.setVersion(settings.vectorEmbeddingVersion || '1');
         sharedVectorStore = new VectorStoreAdapterService();
-        sharedDocumentBuilder = new VectorDocumentBuilder();
 
         sharedHybridService = new HybridRetrievalService({
             embeddingService: sharedEmbeddingService,

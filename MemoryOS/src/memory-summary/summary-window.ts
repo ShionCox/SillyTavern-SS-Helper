@@ -30,7 +30,7 @@ export interface SummaryWindowOptions {
     pendingEndIndex?: number;
     /** 近景窗口消息数量，默认 5。 */
     recentContextSize?: number;
-    /** 内容拆分产生的辅助上下文。 */
+    /** 记忆过滤产生的参考上下文。 */
     auxiliaryContextText?: string;
 }
 
@@ -80,7 +80,7 @@ export function buildSummaryWindow(messages: SummaryWindowMessage[], options?: S
 }
 
 /**
- * 功能：追加内容拆分辅助上下文。
+ * 功能：追加记忆过滤参考上下文。
  * @param recentContextText 近景上下文。
  * @param auxiliaryContextText 辅助通道文本。
  * @returns 合并后的近景上下文。

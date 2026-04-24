@@ -59,10 +59,3 @@ export {
     localizeDreamDisplayText,
 } from './dreamWorkbenchLocale';
 export { resolveUnifiedWorkbenchText } from './unifiedWorkbenchLocale';
-export {
-    resolveContentLabKindLabel,
-    resolveContentLabReasonCodeLabel,
-    resolveContentLabRoleLabel,
-    resolveContentLabSourceLabel,
-    resolveContentLabText,
-} from './contentLabLocale';

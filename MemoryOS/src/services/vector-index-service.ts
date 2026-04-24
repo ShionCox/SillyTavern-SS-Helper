@@ -1,22 +1,19 @@
 /**
  * 功能：向量索引服务。
  * 说明：负责写链路自动索引、全量重建、增量刷新、失效清理、模型升级等。
- *       当 vectorAutoIndexOnWrite 开启时，entry/relationship/actor/summary 变更后
- *       自动触发向量文档构造 + embedding 编码 + 索引更新。
+ *       当前召回候选只映射 MemoryEntry，因此仅 entry 会进入向量索引；
+ *       relationship/actor/summary 变更时只清理早期版本遗留的非条目向量。
  */
 
 import type { VectorDocument, DBMemoryVectorDocument, EmbeddingStatus } from '../types/vector-document';
 import type { MemoryEntry, ActorMemoryProfile, MemoryRelationshipRecord, SummarySnapshot } from '../types';
-import {
-    buildEntryDocument,
-    buildRelationshipDocument,
-    buildActorDocument,
-    buildSummaryDocument,
-} from './vector-document-builder';
+import { buildEntryDocument } from './vector-document-builder';
 import {
     saveVectorDocuments,
     loadVectorDocuments,
     deleteVectorDocumentsBySource,
+    deleteVectorIndexBySource,
+    deleteVectorRecallStatsBySource,
     clearAllVectorDataForChat,
 } from '../db/vector-db';
 import { readMemoryOSSettings } from '../settings/store';
@@ -39,6 +36,7 @@ interface AutoIndexQueueState {
     docs: Map<string, VectorDocument>;
     activeDocIds: Set<string>;
     waiters: AutoIndexWaiter[];
+    idleWaiters: Array<() => void>;
     timer: ReturnType<typeof setTimeout> | null;
     flushing: boolean;
 }
@@ -86,6 +84,23 @@ function toDBDocument(doc: VectorDocument, embeddingStatus: EmbeddingStatus, emb
         lastError: undefined,
         updatedAt: doc.updatedAt,
     };
+}
+
+/**
+ * 功能：清理指定来源的向量文档与索引。
+ * @param chatKey 聊天键。
+ * @param sourceKind 来源类型。
+ * @param sourceIds 来源 ID 列表。
+ */
+async function deleteVectorSourceData(chatKey: string, sourceKind: string, sourceIds: string[]): Promise<void> {
+    const vectorStore = getSharedVectorStore();
+    await deleteVectorRecallStatsBySource(chatKey, sourceKind, sourceIds);
+    await deleteVectorDocumentsBySource(chatKey, sourceKind, sourceIds);
+    if (vectorStore) {
+        await vectorStore.deleteBySource(chatKey, sourceKind, sourceIds);
+        return;
+    }
+    await deleteVectorIndexBySource(chatKey, sourceKind, sourceIds);
 }
 
 /**
@@ -176,6 +191,7 @@ function ensureAutoIndexQueue(chatKey: string): AutoIndexQueueState {
         docs: new Map<string, VectorDocument>(),
         activeDocIds: new Set<string>(),
         waiters: [],
+        idleWaiters: [],
         timer: null,
         flushing: false,
     };
@@ -210,6 +226,10 @@ function settleAutoIndexWaiters(state: AutoIndexQueueState): void {
 function cleanupAutoIndexQueue(chatKey: string, state: AutoIndexQueueState): void {
     if (state.docs.size > 0 || state.activeDocIds.size > 0 || state.timer || state.flushing || state.waiters.length > 0) {
         return;
+    }
+    const idleWaiters = state.idleWaiters.splice(0);
+    for (const resolve of idleWaiters) {
+        resolve();
     }
     autoIndexQueues.delete(chatKey);
 }
@@ -304,15 +324,39 @@ function enqueueAutoIndexDocument(chatKey: string, doc: VectorDocument): Promise
     return donePromise;
 }
 
+/**
+ * 功能：立即刷新并等待指定聊天的自动索引队列空闲。
+ * @param chatKey 聊天键。
+ * @returns 队列空闲时结束。
+ */
+export async function flushAutoIndexQueueForChat(chatKey: string): Promise<void> {
+    const state = autoIndexQueues.get(chatKey);
+    if (!state) {
+        return;
+    }
+    if (state.flushing) {
+        await new Promise<void>((resolve) => {
+            state.idleWaiters.push(resolve);
+        });
+        return;
+    }
+    if (state.docs.size === 0 && state.activeDocIds.size === 0 && !state.timer) {
+        cleanupAutoIndexQueue(chatKey, state);
+        return;
+    }
+    await flushAutoIndexQueue(chatKey);
+}
+
 // ─── 增量刷新（写链路钩子） ──────────────────────────────
 
 /**
  * 功能：entry 保存后自动索引。
  * @param chatKey 聊天键。
  * @param entry 保存后的条目。
+ * @param options 索引选项。
  */
-export async function onEntrySaved(chatKey: string, entry: MemoryEntry): Promise<void> {
-    if (!shouldAutoIndex()) {
+export async function onEntrySaved(chatKey: string, entry: MemoryEntry, options?: { force?: boolean }): Promise<void> {
+    if (!options?.force && !shouldAutoIndex()) {
         return;
     }
     try {
@@ -329,66 +373,49 @@ export async function onEntrySaved(chatKey: string, entry: MemoryEntry): Promise
  * @param entryId 条目 ID。
  */
 export async function onEntryDeleted(chatKey: string, entryId: string): Promise<void> {
-    if (!isVectorRuntimeReady()) {
-        return;
-    }
     try {
-        const vectorStore = getSharedVectorStore();
-        await deleteVectorDocumentsBySource(chatKey, 'entry', [entryId]);
-        await vectorStore?.deleteBySource(chatKey, 'entry', [entryId]);
+        await deleteVectorSourceData(chatKey, 'entry', [entryId]);
     } catch (error) {
         logger.warn(`[VectorIndex] entry 向量清理失败 (${entryId})`, error);
     }
 }
 
 /**
- * 功能：relationship 保存后自动索引。
+ * 功能：relationship 保存后清理早期版本遗留的向量数据。
  * @param chatKey 聊天键。
  * @param rel 保存后的关系记录。
  */
 export async function onRelationshipSaved(chatKey: string, rel: MemoryRelationshipRecord): Promise<void> {
-    if (!shouldAutoIndex()) {
-        return;
-    }
     try {
-        const doc = buildRelationshipDocument(rel);
-        await enqueueAutoIndexDocument(chatKey, doc);
+        await deleteVectorSourceData(chatKey, 'relationship', [rel.relationshipId]);
     } catch (error) {
-        logger.warn(`[VectorIndex] relationship 自动索引失败 (${rel.relationshipId})`, error);
+        logger.warn(`[VectorIndex] relationship 遗留向量清理失败 (${rel.relationshipId})`, error);
     }
 }
 
 /**
- * 功能：actor 保存后自动索引。
+ * 功能：actor 保存后清理早期版本遗留的向量数据。
  * @param chatKey 聊天键。
  * @param actor 保存后的角色画像。
  */
 export async function onActorSaved(chatKey: string, actor: ActorMemoryProfile): Promise<void> {
-    if (!shouldAutoIndex()) {
-        return;
-    }
     try {
-        const doc = buildActorDocument(actor);
-        await enqueueAutoIndexDocument(chatKey, doc);
+        await deleteVectorSourceData(chatKey, 'actor', [actor.actorKey]);
     } catch (error) {
-        logger.warn(`[VectorIndex] actor 自动索引失败 (${actor.actorKey})`, error);
+        logger.warn(`[VectorIndex] actor 遗留向量清理失败 (${actor.actorKey})`, error);
     }
 }
 
 /**
- * 功能：summary 保存后自动索引。
+ * 功能：summary 保存后清理早期版本遗留的向量数据。
  * @param chatKey 聊天键。
  * @param snapshot 保存后的总结快照。
  */
 export async function onSummarySaved(chatKey: string, snapshot: SummarySnapshot): Promise<void> {
-    if (!shouldAutoIndex()) {
-        return;
-    }
     try {
-        const doc = buildSummaryDocument(snapshot);
-        await enqueueAutoIndexDocument(chatKey, doc);
+        await deleteVectorSourceData(chatKey, 'summary', [snapshot.summaryId]);
     } catch (error) {
-        logger.warn(`[VectorIndex] summary 自动索引失败 (${snapshot.summaryId})`, error);
+        logger.warn(`[VectorIndex] summary 遗留向量清理失败 (${snapshot.summaryId})`, error);
     }
 }
 
@@ -404,20 +431,12 @@ export async function rebuildAllVectorDocuments(
     chatKey: string,
     data: {
         entries: MemoryEntry[];
-        relationships: MemoryRelationshipRecord[];
-        actors: ActorMemoryProfile[];
-        summaries: SummarySnapshot[];
     },
 ): Promise<number> {
     const settings = readMemoryOSSettings();
     const embeddingVersion = settings.vectorEmbeddingVersion || '1';
 
-    const allDocs: VectorDocument[] = [
-        ...data.entries.map(buildEntryDocument),
-        ...data.relationships.map(buildRelationshipDocument),
-        ...data.actors.map(buildActorDocument),
-        ...data.summaries.map(buildSummaryDocument),
-    ];
+    const allDocs: VectorDocument[] = data.entries.map(buildEntryDocument);
 
     // 清空旧的向量文档
     await clearAllVectorDataForChat(chatKey);
@@ -447,9 +466,6 @@ export async function rebuildAllEmbeddings(
     chatKey: string,
     data: {
         entries: MemoryEntry[];
-        relationships: MemoryRelationshipRecord[];
-        actors: ActorMemoryProfile[];
-        summaries: SummarySnapshot[];
     },
 ): Promise<number> {
     if (!isVectorRuntimeReady()) {
@@ -522,9 +538,6 @@ export async function upgradeEmbeddingModel(
     chatKey: string,
     data: {
         entries: MemoryEntry[];
-        relationships: MemoryRelationshipRecord[];
-        actors: ActorMemoryProfile[];
-        summaries: SummarySnapshot[];
     },
 ): Promise<number> {
     return rebuildAllEmbeddings(chatKey, data);

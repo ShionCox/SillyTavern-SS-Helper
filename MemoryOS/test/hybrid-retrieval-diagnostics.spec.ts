@@ -8,6 +8,11 @@ const { mockedReadMemoryOSSettings } = vi.hoisted(() => ({
     mockedReadMemoryOSSettings: vi.fn(),
 }));
 
+const { mockedLoadVectorRecallStats, mockedSaveVectorRecallStat } = vi.hoisted(() => ({
+    mockedLoadVectorRecallStats: vi.fn(),
+    mockedSaveVectorRecallStat: vi.fn(),
+}));
+
 vi.mock('../src/settings/store', async () => {
     const actual = await vi.importActual('../src/settings/store');
     return {
@@ -15,6 +20,11 @@ vi.mock('../src/settings/store', async () => {
         readMemoryOSSettings: mockedReadMemoryOSSettings,
     };
 });
+
+vi.mock('../src/db/vector-db', () => ({
+    loadVectorRecallStats: mockedLoadVectorRecallStats,
+    saveVectorRecallStat: mockedSaveVectorRecallStat,
+}));
 
 function buildSettings(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
@@ -71,6 +81,10 @@ function buildCandidates(): RetrievalCandidate[] {
 describe('HybridRetrievalService diagnostics hardening', () => {
     beforeEach(() => {
         mockedReadMemoryOSSettings.mockReset();
+        mockedLoadVectorRecallStats.mockReset();
+        mockedSaveVectorRecallStat.mockReset();
+        mockedLoadVectorRecallStats.mockResolvedValue([]);
+        mockedSaveVectorRecallStat.mockResolvedValue(undefined);
     });
 
     it('在关闭 vectorEnableStrategyRouting 时强制走 fast path', async () => {
@@ -121,6 +135,55 @@ describe('HybridRetrievalService diagnostics hardening', () => {
         expect(output.strategyDecision?.rerankEnabled).toBe(false);
         expect(output.strategyDecision?.reasonCodes).toContain('strategy_routing_disabled_runtime');
         expect(output.finalProviderId).toBe('vector_only_direct');
+    });
+
+    it('只为成功映射到 entry 候选的向量命中写入召回统计', async () => {
+        mockedReadMemoryOSSettings.mockReturnValue(buildSettings({
+            retrievalMode: 'hybrid',
+            vectorEnableStrategyRouting: false,
+            vectorEnableRerank: false,
+        }));
+        mockedLoadVectorRecallStats.mockResolvedValue([{
+            vectorDocId: 'v-entry',
+            recallCount: 2,
+            lastRecalledAt: 1,
+            lastRecallMode: 'hybrid',
+        }]);
+
+        const service = new HybridRetrievalService({
+            embeddingService: {
+                isAvailable(): boolean { return true; },
+                getUnavailableReason(): string | null { return null; },
+                async encodeOne(): Promise<{ ok: boolean; vector: number[]; dim: number; model: string }> {
+                    return { ok: true, vector: [1, 0], dim: 2, model: 'mock-embed' };
+                },
+            } as unknown as ConstructorParameters<typeof HybridRetrievalService>[0]['embeddingService'],
+            vectorStore: {
+                isAvailable(): boolean { return true; },
+                async ensureLoaded(): Promise<void> {},
+                async search(): Promise<Array<{ vectorDocId: string; sourceKind: string; sourceId: string; score: number }>> {
+                    return [
+                        { vectorDocId: 'v-entry', sourceKind: 'entry', sourceId: 'e1', score: 0.91 },
+                        { vectorDocId: 'v-summary', sourceKind: 'summary', sourceId: 'summary-1', score: 0.89 },
+                    ];
+                },
+            } as unknown as ConstructorParameters<typeof HybridRetrievalService>[0]['vectorStore'],
+        });
+
+        await service.search({
+            retrievalMode: 'hybrid',
+            query: '王城宵禁',
+            chatKey: 'chat-1',
+            candidates: buildCandidates(),
+            lexicalResults: [],
+        });
+
+        expect(mockedSaveVectorRecallStat).toHaveBeenCalledTimes(1);
+        expect(mockedSaveVectorRecallStat).toHaveBeenCalledWith('chat-1', expect.objectContaining({
+            vectorDocId: 'v-entry',
+            recallCount: 3,
+            lastRecallMode: 'hybrid',
+        }));
     });
 });
 

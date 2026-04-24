@@ -28,18 +28,15 @@ import { readMemoryOSSettings } from '../settings/store';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
 import type { MemoryLLMApi } from '../memory-summary';
 import {
-    applyContentLabSettings,
-    DEFAULT_CONTENT_LAB_SETTINGS,
-    normalizeContentLabSettings,
-    type ContentLabSettings,
-} from '../config/content-tag-registry';
+    applyMemoryFilterSettings,
+    DEFAULT_MEMORY_FILTER_SETTINGS,
+    filterMemoryMessages,
+    normalizeMemoryFilterSettings,
+    type MemoryFilterFloorRecord,
+    type MemoryFilterSettings,
+} from '../memory-filter';
 import {
-    buildFloorRecords,
-    buildFullContentFloorRecords,
-    classifyFloorRecordsWithAI,
     sliceTakeoverMessages,
-    type ContentPreviewSourceMode,
-    type RawFloorRecord,
 } from '../memory-takeover';
 import type {
     MemoryTakeoverActiveSnapshot,
@@ -87,25 +84,27 @@ export interface TakeoverRetryExecutionInput extends Omit<TakeoverSchedulerExecu
     batchId?: string;
 }
 
+export type MemoryFilterPreviewSourceMode = 'content' | 'raw_visible_text';
+
 /**
- * 功能：定义内容实验室楼层预览输入。
+ * 功能：定义记忆过滤器楼层预览输入。
  */
-export interface ContentLabFloorPreviewInput {
+export interface MemoryFilterFloorPreviewInput {
     floor: number;
-    previewSourceMode?: ContentPreviewSourceMode;
-    forceContentSplit?: boolean;
+    previewSourceMode?: MemoryFilterPreviewSourceMode;
+    forceEnabled?: boolean;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
 
 /**
- * 功能：定义内容实验室范围预览输入。
+ * 功能：定义记忆过滤器范围预览输入。
  */
-export interface ContentLabRangePreviewInput {
+export interface MemoryFilterRangePreviewInput {
     startFloor: number;
     endFloor: number;
-    previewSourceMode?: ContentPreviewSourceMode;
-    forceContentSplit?: boolean;
+    previewSourceMode?: MemoryFilterPreviewSourceMode;
+    forceEnabled?: boolean;
     llm?: MemoryLLMApi | null;
     pluginId?: string;
 }
@@ -122,34 +121,26 @@ export class TakeoverService {
         this.repository = repository;
     }
 
-    /**
-     * 功能：读取内容实验室配置并同步到运行时。
-     * @returns 当前配置。
-     */
-    async readContentLabSettings(): Promise<ContentLabSettings> {
+    async readMemoryFilterSettings(): Promise<MemoryFilterSettings> {
         const stateRow = await readMemoryOSChatState(this.chatKey);
         const state = stateRow?.state && typeof stateRow.state === 'object'
             ? stateRow.state as Record<string, unknown>
             : {};
-        const settings = normalizeContentLabSettings((state.contentLab ?? DEFAULT_CONTENT_LAB_SETTINGS) as Partial<ContentLabSettings>);
-        return applyContentLabSettings(settings);
+        const settings = normalizeMemoryFilterSettings((state.memoryFilter ?? DEFAULT_MEMORY_FILTER_SETTINGS) as Partial<MemoryFilterSettings>);
+        return applyMemoryFilterSettings(settings);
     }
 
-    /**
-     * 功能：保存内容实验室配置并同步到运行时。
-     * @param patch 配置补丁。
-     * @returns 保存后的配置。
-     */
-    async saveContentLabSettings(patch: Partial<ContentLabSettings>): Promise<ContentLabSettings> {
-        const current = await this.readContentLabSettings();
-        const merged = normalizeContentLabSettings({
+    async saveMemoryFilterSettings(patch: Partial<MemoryFilterSettings>): Promise<MemoryFilterSettings> {
+        const current = await this.readMemoryFilterSettings();
+        const merged = normalizeMemoryFilterSettings({
             ...current,
             ...patch,
-            enableContentSplit: patch.enableContentSplit ?? current.enableContentSplit,
-            tagRegistry: patch.tagRegistry ?? current.tagRegistry,
-            unknownTagPolicy: patch.unknownTagPolicy ?? current.unknownTagPolicy,
-            classifierToggles: patch.classifierToggles ?? current.classifierToggles,
-            enableAIClassifier: patch.enableAIClassifier ?? current.enableAIClassifier,
+            enabled: patch.enabled ?? current.enabled,
+            mode: patch.mode ?? current.mode,
+            scope: patch.scope ?? current.scope,
+            cleanup: patch.cleanup ?? current.cleanup,
+            rules: patch.rules ?? current.rules,
+            unknownPolicy: patch.unknownPolicy ?? current.unknownPolicy,
         });
         const stateRow = await readMemoryOSChatState(this.chatKey);
         const state = stateRow?.state && typeof stateRow.state === 'object'
@@ -157,32 +148,27 @@ export class TakeoverService {
             : {};
         await writeMemoryOSChatState(this.chatKey, {
             ...state,
-            contentLab: merged,
+            memoryFilter: merged,
         });
-        return applyContentLabSettings(merged);
+        return applyMemoryFilterSettings(merged);
     }
 
-    /**
-     * 功能：预览单层内容块拆分结果。
-     * @param input 预览输入。
-     * @returns 指定楼层的拆分结果。
-     */
-    async previewFloorContentBlocks(input: ContentLabFloorPreviewInput): Promise<RawFloorRecord> {
+    async previewFloorMemoryFilter(input: MemoryFilterFloorPreviewInput): Promise<MemoryFilterFloorRecord> {
         const floor = Math.max(1, Math.trunc(Number(input.floor) || 0));
         if (!floor) {
             throw new Error('invalid_floor');
         }
-        const rangeInput: ContentLabRangePreviewInput = {
+        const rangeInput: MemoryFilterRangePreviewInput = {
             startFloor: floor,
             endFloor: floor,
             previewSourceMode: input.previewSourceMode,
             llm: input.llm,
             pluginId: input.pluginId,
         };
-        if (input.forceContentSplit !== undefined) {
-            rangeInput.forceContentSplit = input.forceContentSplit;
+        if (input.forceEnabled !== undefined) {
+            rangeInput.forceEnabled = input.forceEnabled;
         }
-        const records = await this.previewFloorRangeContentBlocks(rangeInput);
+        const records = await this.previewFloorRangeMemoryFilter(rangeInput);
         const record = records[0];
         if (!record) {
             throw new Error(`floor_not_found:${floor}`);
@@ -190,34 +176,49 @@ export class TakeoverService {
         return record;
     }
 
-    /**
-     * 功能：预览指定范围的内容块拆分结果。
-     * @param input 范围输入。
-     * @returns 楼层记录列表。
-     */
-    async previewFloorRangeContentBlocks(input: ContentLabRangePreviewInput): Promise<RawFloorRecord[]> {
-        const settings = await this.readContentLabSettings();
+    async previewFloorRangeMemoryFilter(input: MemoryFilterRangePreviewInput): Promise<MemoryFilterFloorRecord[]> {
+        const settings = await this.readMemoryFilterSettings();
         const sourceBundle = collectTakeoverSourceBundle();
-        const previewSourceMode: ContentPreviewSourceMode = input.previewSourceMode === 'raw_visible_text'
+        const previewSourceMode: MemoryFilterPreviewSourceMode = input.previewSourceMode === 'raw_visible_text'
             ? 'raw_visible_text'
             : 'content';
         const range = {
             startFloor: Math.max(1, Math.trunc(Number(input.startFloor) || 1)),
             endFloor: Math.max(Math.trunc(Number(input.startFloor) || 1), Math.trunc(Number(input.endFloor) || Number(input.startFloor) || 1)),
         };
-        const messages = sliceTakeoverMessages(sourceBundle, range);
-        const shouldSplit = input.forceContentSplit === true || settings.enableContentSplit;
-        let records = shouldSplit
-            ? buildFloorRecords(messages, previewSourceMode)
-            : buildFullContentFloorRecords(messages, previewSourceMode);
-        if (shouldSplit && settings.enableAIClassifier) {
-            records = await classifyFloorRecordsWithAI({
-                llm: input.llm ?? readMemoryLLMApi(),
-                pluginId: input.pluginId ?? MEMORY_OS_PLUGIN_ID,
-                floorRecords: records,
-            });
+        const messages = sliceTakeoverMessages(sourceBundle, range).map((message) => ({
+            ...message,
+            content: previewSourceMode === 'raw_visible_text'
+                ? String(message.rawVisibleText ?? message.content ?? '')
+                : String(message.content ?? ''),
+        }));
+        const previewSettings = input.forceEnabled === true
+            ? { ...settings, enabled: true }
+            : settings;
+        const result = filterMemoryMessages(messages, previewSettings);
+        if (result.records.length > 0) {
+            return result.records;
         }
-        return records;
+        return messages.map((message): MemoryFilterFloorRecord => ({
+            floor: message.floor,
+            role: message.role === 'user' || message.role === 'assistant' || message.role === 'system' || message.role === 'tool'
+                ? message.role
+                : 'unknown',
+            originalText: String(message.content ?? ''),
+            blocks: String(message.content ?? '').trim() ? [{
+                id: `raw_${message.floor}`,
+                floor: message.floor,
+                title: '原始楼层',
+                rawText: String(message.content ?? ''),
+                channel: 'memory',
+                startOffset: 0,
+                endOffset: String(message.content ?? '').length,
+                reasonCodes: ['memory_filter_disabled'],
+            }] : [],
+            hasMemoryContent: Boolean(String(message.content ?? '').trim()),
+            hasContextOnly: false,
+            hasExcludedOnly: false,
+        }));
     }
 
     /**
@@ -239,7 +240,7 @@ export class TakeoverService {
      * @returns 预估结果。
      */
     async previewEstimate(config?: MemoryTakeoverCreateInput): Promise<MemoryTakeoverPreviewEstimate> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         const settings = readMemoryOSSettings();
         const sourceBundle = collectTakeoverSourceBundle();
         return buildTakeoverPreviewEstimate({
@@ -270,7 +271,7 @@ export class TakeoverService {
         config?: MemoryTakeoverCreateInput,
         existingKnownEntities: TakeoverKnownEntities = createEmptyTakeoverKnownEntities(),
     ): Promise<MemoryTakeoverPayloadPreview> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         const settings = readMemoryOSSettings();
         const sourceBundle = collectTakeoverSourceBundle();
         const storedBatchResults = await loadMemoryTakeoverBatchResults(this.chatKey);
@@ -309,7 +310,7 @@ export class TakeoverService {
                 ? {
                     range: batch.range,
                     messages: assembly.extractionMessages,
-                    hintContext: assembly.channels.hintText || undefined,
+                    hintContext: assembly.channels.contextText || undefined,
                 }
                 : {
                     batchId: batch.batchId,
@@ -320,7 +321,7 @@ export class TakeoverService {
                         existingKnownEntities,
                     ),
                     messages: assembly.extractionMessages,
-                    hintContext: assembly.channels.hintText || undefined,
+                    hintContext: assembly.channels.contextText || undefined,
                 };
             const request = await buildTakeoverStructuredTaskRequest({
                 systemSection: batch.category === 'active' ? 'TAKEOVER_ACTIVE_SYSTEM' : 'TAKEOVER_BATCH_SYSTEM',
@@ -339,9 +340,9 @@ export class TakeoverService {
                 range: batch.range,
                 sourceFloors: sourceMessages.map((message) => message.floor),
                 sentFloors: assembly.extractionMessages.map((message) => message.floor),
-                hintText: assembly.channels.hintText,
-                excludedSummary: assembly.channels.excludedSummary,
-                floorManifest: assembly.floorRecords,
+                contextText: assembly.channels.contextText,
+                excludedSummary: assembly.channels.excludedText ? assembly.channels.excludedText.split('\n').filter(Boolean) : [],
+                floorManifest: assembly.channels.floorManifest,
                 requestMessages: request.messages,
             });
         }
@@ -457,7 +458,7 @@ export class TakeoverService {
      * @returns 最新进度快照。
      */
     async startTakeover(input: TakeoverSchedulerExecutionInput): Promise<MemoryTakeoverProgressSnapshot> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         await this.ensureTakeoverWorldBinding();
         await clearMemoryTakeoverPreview(this.chatKey);
         const existingPlan = await this.readPlan();
@@ -496,7 +497,7 @@ export class TakeoverService {
      * @returns 最新进度快照；没有计划时返回空。
      */
     async resumeTakeover(input: Omit<TakeoverSchedulerExecutionInput, 'takeoverId' | 'currentFloorCount'>): Promise<MemoryTakeoverProgressSnapshot | null> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         await this.ensureTakeoverWorldBinding();
         const plan = await this.readPlan();
         if (!plan) {
@@ -518,7 +519,7 @@ export class TakeoverService {
      * @returns 最新进度快照；没有计划时返回空。
      */
     async retryFailedBatch(input: TakeoverRetryExecutionInput): Promise<MemoryTakeoverProgressSnapshot | null> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         await this.ensureTakeoverWorldBinding();
         const plan = await this.readPlan();
         if (!plan) {
@@ -660,7 +661,7 @@ export class TakeoverService {
         plan: MemoryTakeoverPlan,
         input: Omit<TakeoverSchedulerExecutionInput, 'currentFloorCount' | 'takeoverId'>,
     ): Promise<MemoryTakeoverProgressSnapshot> {
-        await this.readContentLabSettings();
+        await this.readMemoryFilterSettings();
         return this.runScheduler({
             chatKey: this.chatKey,
             plan,

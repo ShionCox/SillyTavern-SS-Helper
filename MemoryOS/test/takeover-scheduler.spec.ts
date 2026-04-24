@@ -82,7 +82,7 @@ vi.mock('../src/memory-takeover/takeover-batch-runner', () => {
     return {
         assembleTakeoverBatchPromptAssembly: vi.fn(async () => ({
             extractionMessages: [],
-            channels: { hintText: '' },
+            channels: { contextText: '' },
         })),
         runTakeoverBatch: runBatchMock,
     };

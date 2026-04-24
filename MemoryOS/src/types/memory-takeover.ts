@@ -72,15 +72,11 @@ export interface TakeoverSourceSegment {
  */
 export interface MemoryTakeoverFloorBlockRecord {
     blockId: string;
-    rawTagName?: string;
+    title?: string;
     rawText: string;
     startOffset: number;
     endOffset: number;
-    resolvedKind: string;
-    includeInPrimaryExtraction: boolean;
-    includeAsHint: boolean;
-    allowActorPromotion: boolean;
-    allowRelationPromotion: boolean;
+    channel?: 'memory' | 'context' | 'excluded';
     reasonCodes: string[];
 }
 
@@ -94,9 +90,10 @@ export interface MemoryTakeoverFloorManifestRecord {
     originalTextSource?: string;
     originalRole: 'user' | 'assistant' | 'system' | 'tool' | 'unknown';
     includedInBatch: true;
-    parsedBlocks: MemoryTakeoverFloorBlockRecord[];
-    hasPrimaryStory: boolean;
-    hasHintOnly: boolean;
+    blocks?: MemoryTakeoverFloorBlockRecord[];
+    parsedBlocks?: MemoryTakeoverFloorBlockRecord[];
+    hasMemoryContent?: boolean;
+    hasContextOnly?: boolean;
     hasExcludedOnly: boolean;
 }
 
@@ -616,7 +613,7 @@ export interface MemoryTakeoverPayloadPreviewBatch {
     range: MemoryTakeoverRange;
     sourceFloors: number[];
     sentFloors: number[];
-    hintText: string;
+    contextText: string;
     excludedSummary: string[];
     floorManifest: MemoryTakeoverFloorManifestRecord[];
     requestMessages: Array<{

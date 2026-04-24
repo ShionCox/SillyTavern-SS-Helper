@@ -1,8 +1,7 @@
 import { activateDreamNeuronGraph, buildDreamNeuronGraph, selectCandidateNodeKeys } from '../core/dream-neuron-graph';
 import type { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
-import { getContentLabSettings } from '../config/content-tag-registry';
-import { prepareFloorContentForSending } from '../memory-takeover/content-block-pipeline';
+import { filterMemoryMessages, getMemoryFilterSettings } from '../memory-filter';
 import type { MemoryEntry, MemoryRelationshipRecord, SummarySnapshot } from '../types';
 import { resolveChatWorldStrategy } from './world-strategy-service';
 import type {
@@ -57,16 +56,16 @@ export class DreamWaveRecallService {
             this.readRecentMessages(),
         ]);
         const currentTs = Date.now();
-        const contentLabPrepared = prepareFloorContentForSending(recentMessages, getContentLabSettings());
-        const primaryQuery = contentLabPrepared.messages
+        const filteredMessages = filterMemoryMessages(recentMessages, getMemoryFilterSettings(), { scope: 'dreamRecall' });
+        const primaryQuery = filteredMessages.messagesForMemory
             .slice(-8)
             .map((item): string => String(item.content ?? '').trim())
             .filter(Boolean)
             .join('\n');
         const sourceQuery = [
             primaryQuery,
-            contentLabPrepared.channels.hintText.trim()
-                ? `辅助上下文：\n${contentLabPrepared.channels.hintText.trim()}`
+            filteredMessages.contextText.trim()
+                ? `辅助上下文：\n${filteredMessages.contextText.trim()}`
                 : '',
         ].filter(Boolean).join('\n\n').slice(0, 1600);
         const worldStrategy = await resolveChatWorldStrategy({

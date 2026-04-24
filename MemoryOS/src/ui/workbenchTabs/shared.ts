@@ -21,13 +21,12 @@ import { sanitizeWorkbenchDisplayText } from './shared/workbench-text';
 import type { DBMemoryVectorDocument, DBMemoryVectorIndex, DBMemoryVectorRecallStat } from '../../types/vector-document';
 import type { RetrievalResultItem } from '../../memory-retrieval/types';
 import type { RetrievalOutputDiagnostics } from '../../memory-retrieval/retrieval-output';
-import type { ContentPreviewSourceMode, RawFloorRecord } from '../../memory-takeover/content-block-pipeline';
-import type { ContentLabSettings, ContentSplitMode, ContentSplitRule } from '../../config/content-tag-registry';
+import type { MemoryFilterFloorRecord, MemoryFilterMode, MemoryFilterRule, MemoryFilterSettings } from '../../memory-filter';
 import type { DreamMaintenanceProposalRecord, DreamQualityReport, DreamSchedulerStateRecord, DreamSessionRecord } from '../../services/dream-types';
 import type { DreamUiStateSnapshot } from '../dream-ui-state-service';
 import type { MemoryDatabaseSnapshotInspectionReport } from '../../db/database-snapshot-inspector';
 
-export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'content-lab' | 'dream';
+export type WorkbenchView = 'entries' | 'types' | 'actors' | 'world-entities' | 'preview' | 'memory-graph' | 'takeover' | 'vectors' | 'memory-filter' | 'dream';
 export type ActorSubView = 'attributes' | 'memory' | 'items' | 'relationships';
 export type WorkbenchGraphLinkType = 'ally' | 'enemy' | 'neutral' | 'family' | 'romance';
 
@@ -223,32 +222,26 @@ export interface WorkbenchState {
     vectorTestRunning: boolean;
     vectorTestResult: WorkbenchVectorTestResult | null;
     vectorTestProgress: WorkbenchVectorTestProgress | null;
-    contentLabStartFloor: string;
-    contentLabEndFloor: string;
-    contentLabSelectedFloor: string;
-    contentLabPreviewSourceMode: ContentPreviewSourceMode;
-    contentLabPreviewLoading: boolean;
-    contentLabTabLoaded: boolean;
-    contentLabTabLoading: boolean;
-    contentLabBlocks: import('../../memory-takeover/content-block-classifier').ClassifiedContentBlock[];
-    contentLabPrimaryPreview: string;
-    contentLabHintPreview: string;
-    contentLabExcludedPreview: string;
-    contentLabEnableContentSplit: boolean;
-    contentLabUnknownTagDefaultKind: string;
-    contentLabUnknownTagAllowHint: boolean;
-    contentLabEnableRuleClassifier: boolean;
-    contentLabEnableMetaKeywordDetection: boolean;
-    contentLabEnableToolArtifactDetection: boolean;
-    contentLabEnableAIClassifier: boolean;
-    contentLabEditingRuleIndex: number;
-    contentLabSplitMode: ContentSplitMode;
-    contentLabRules: ContentSplitRule[];
-    contentLabCleanupTrimWhitespace: boolean;
-    contentLabCleanupStripWrapper: boolean;
-    contentLabCleanupDropEmptyBlocks: boolean;
-    contentLabCleanupMinBlockLength: string;
-    contentLabCleanupMaxBlockLength: string;
+    memoryFilterStartFloor: string;
+    memoryFilterEndFloor: string;
+    memoryFilterSelectedFloor: string;
+    memoryFilterPreviewSourceMode: 'content' | 'raw_visible_text';
+    memoryFilterPreviewLoading: boolean;
+    memoryFilterTabLoaded: boolean;
+    memoryFilterTabLoading: boolean;
+    memoryFilterBlocks: MemoryFilterFloorRecord['blocks'];
+    memoryFilterMemoryPreview: string;
+    memoryFilterContextPreview: string;
+    memoryFilterExcludedPreview: string;
+    memoryFilterEnabled: boolean;
+    memoryFilterUnknownPolicy: string;
+    memoryFilterMode: MemoryFilterMode;
+    memoryFilterRules: MemoryFilterRule[];
+    memoryFilterCleanupTrimWhitespace: boolean;
+    memoryFilterCleanupStripWrapper: boolean;
+    memoryFilterCleanupDropEmptyBlocks: boolean;
+    memoryFilterCleanupMinBlockLength: string;
+    memoryFilterCleanupMaxBlockLength: string;
     dreamSubView: 'overview' | 'workbench';
     dreamWorkbenchTab: 'session' | 'diagnostics' | 'maintenance' | 'applied' | 'rollback';
     /** 时间模式过滤 */
@@ -273,12 +266,11 @@ export interface WorkbenchSnapshot {
     memoryGraph: import('./shared/memoryGraphTypes').WorkbenchMemoryGraph;
     takeoverProgress: MemoryTakeoverProgressSnapshot | null;
     vectorSnapshot: WorkbenchVectorSnapshot;
-    contentLabSnapshot: {
+    memoryFilterSnapshot: {
         loaded: boolean;
-        tagRegistry: import('../../config/content-tag-registry').ContentBlockPolicy[];
-        settings?: ContentLabSettings;
+        settings?: MemoryFilterSettings;
         availableFloors: Array<{ floor: number; role: string; charCount: number }>;
-        previewFloor?: RawFloorRecord;
+        previewFloor?: MemoryFilterFloorRecord;
     };
     dreamSnapshot: {
         sessions: DreamSessionRecord[];
