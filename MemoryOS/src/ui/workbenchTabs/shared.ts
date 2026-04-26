@@ -237,6 +237,7 @@ export interface WorkbenchState {
     memoryFilterUnknownPolicy: string;
     memoryFilterMode: MemoryFilterMode;
     memoryFilterRules: MemoryFilterRule[];
+    memoryFilterSelectedRuleId: string;
     memoryFilterCleanupTrimWhitespace: boolean;
     memoryFilterCleanupStripWrapper: boolean;
     memoryFilterCleanupDropEmptyBlocks: boolean;

@@ -119,15 +119,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
         id: ids.resourceApiKeyId,
         type: 'password',
         className: 'stx-ui-input stx-ui-input-full',
-        attributes: { placeholder: 'sk-...', 'data-tip': '密钥加密存储在本地浏览器中' },
-    });
-
-    const resourceApiKeySaveBtn = buildSharedButton({
-        id: ids.resourceApiKeySaveBtnId,
-        label: '存入',
-        variant: 'secondary',
-        iconClassName: 'fa-solid fa-lock',
-        attributes: { 'data-tip': '加密保存该资源的 API Key' },
+        attributes: { placeholder: 'sk-...', 'data-tip': '随保存资源一起加密保存到本地浏览器中' },
     });
 
     const resourceDefaultModelInput = buildSharedInputField({
@@ -432,10 +424,7 @@ export function buildSettingsCardHtmlTemplate(ids: LLMHubSettingsIds): string {
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.resourceApiKeyId}">API Key</label>
-                <div class="stx-ui-row" style="gap:0.5rem;">
-                  ${resourceApiKeyInput}
-                  ${resourceApiKeySaveBtn}
-                </div>
+                ${resourceApiKeyInput}
               </div>
               <div class="stx-ui-field">
                 <label class="stx-ui-field-label" for="${ids.resourceDefaultModelId}">默认模型</label>

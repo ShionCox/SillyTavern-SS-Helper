@@ -408,6 +408,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         memoryFilterUnknownPolicy: DEFAULT_MEMORY_FILTER_SETTINGS.unknownPolicy,
         memoryFilterMode: 'xml',
         memoryFilterRules: DEFAULT_MEMORY_FILTER_RULES,
+        memoryFilterSelectedRuleId: '',
         memoryFilterCleanupTrimWhitespace: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.trimWhitespace,
         memoryFilterCleanupStripWrapper: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.stripWrapper,
         memoryFilterCleanupDropEmptyBlocks: DEFAULT_MEMORY_FILTER_SETTINGS.cleanup.dropEmptyBlocks,
@@ -495,6 +496,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         state.memoryFilterMemoryPreview = '';
         state.memoryFilterContextPreview = '';
         state.memoryFilterExcludedPreview = '';
+        state.memoryFilterSelectedRuleId = '';
     };
 
     const applyMemoryFilterSettingsToState = (memoryFilterSettings: MemoryFilterSettings): void => {
@@ -682,7 +684,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             mode: normalizeMemoryFilterMode(readInputValue(root, '#stx-memory-filter-mode')),
             rules: nextRules,
             cleanup: {
-                trimWhitespace: readCheckedValue(root, '#stx-memory-filter-cleanup-trim'),
+                trimWhitespace: true,
                 stripWrapper: readCheckedValue(root, '#stx-memory-filter-cleanup-strip-wrapper'),
                 dropEmptyBlocks: readCheckedValue(root, '#stx-memory-filter-cleanup-drop-empty'),
                 minBlockLength: Math.max(0, Math.trunc(Number(readInputValue(root, '#stx-memory-filter-min-length')) || 0)),
@@ -763,6 +765,71 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             ...fallbackRules.filter((rule: MemoryFilterRule): boolean => !visibleIds.has(rule.id) && !visibleModes.has(rule.mode)),
             ...visibleRules,
         ];
+    };
+
+    /**
+     * 功能：按当前模式创建一条记忆过滤规则。
+     * @param mode 当前过滤模式。
+     * @param channel 规则归类通道。
+     * @param name 规则名称。
+     * @returns 新规则。
+     */
+    const createMemoryFilterRuleDraft = (
+        mode: MemoryFilterMode,
+        channel: 'memory' | 'context' | 'excluded',
+        name: string,
+    ): MemoryFilterRule => {
+        const safeName = String(name ?? '').trim() || '新规则';
+        const now = Date.now().toString(36);
+        const safeToken = safeName.replace(/[^\w\u4e00-\u9fa5-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'rule';
+        const baseRule: MemoryFilterRule = {
+            id: `custom-${mode}-${channel}-${safeToken}-${now}`,
+            name: safeName,
+            mode,
+            enabled: true,
+            channel,
+            priority: channel === 'excluded' ? 100 : channel === 'memory' ? 80 : 60,
+        };
+        if (mode === 'xml') {
+            return { ...baseRule, tagName: safeName, aliases: [] };
+        }
+        if (mode === 'delimiter') {
+            return { ...baseRule, delimiters: [safeName], keepDelimiter: false };
+        }
+        if (mode === 'regex') {
+            return { ...baseRule, regex: safeName, flags: 'g', captureGroup: 0 };
+        }
+        if (mode === 'markdown') {
+            return { ...baseRule, markdownStrategy: 'heading_or_hr' };
+        }
+        return { ...baseRule, jsonPath: '$' };
+    };
+
+    /**
+     * 功能：保存过滤规则列表并刷新当前预览。
+     * @param nextRules 下一组规则。
+     * @returns 无返回值。
+     */
+    const saveMemoryFilterRulesAndRefresh = async (nextRules: MemoryFilterRule[]): Promise<void> => {
+        if (!memoryFilterSettingsCache) {
+            memoryFilterSettingsCache = await memory.chatState.getMemoryFilterSettings();
+        }
+        memoryFilterSettingsCache = await memory.chatState.saveMemoryFilterSettings({
+            ...memoryFilterSettingsCache,
+            mode: normalizeMemoryFilterMode(state.memoryFilterMode),
+            rules: nextRules,
+        });
+        applyMemoryFilterSettingsToState(memoryFilterSettingsCache);
+        await render();
+    };
+
+    /**
+     * 功能：收集当前界面规则，并与缓存规则合并。
+     * @returns 合并后的规则列表。
+     */
+    const collectCurrentMemoryFilterRules = (): MemoryFilterRule[] => {
+        const fallbackRules = memoryFilterSettingsCache?.rules ?? state.memoryFilterRules;
+        return collectMemoryFilterRules(root, fallbackRules);
     };
 
     const normalizeMemoryFilterMode = (value: unknown): MemoryFilterMode => {
@@ -1512,6 +1579,116 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 await render();
                 return;
             }
+            if (action === 'memory-filter-add-rule') {
+                await loadMemoryFilterSnapshot();
+                const channelValue = String(button.dataset.channel ?? 'memory');
+                const channel = channelValue === 'context' || channelValue === 'excluded' ? channelValue : 'memory';
+                const mode = normalizeMemoryFilterMode(state.memoryFilterMode);
+                const currentRules = collectCurrentMemoryFilterRules();
+                const sameGroupCount = currentRules.filter((rule: MemoryFilterRule): boolean => rule.mode === mode && rule.channel === channel).length;
+                const nextName = mode === 'json' ? '$' : `新规则 ${sameGroupCount + 1}`;
+                const nextRule = createMemoryFilterRuleDraft(mode, channel, nextName);
+                const nextRules = [...currentRules, nextRule];
+                state.memoryFilterSelectedRuleId = nextRule.id;
+                await saveMemoryFilterRulesAndRefresh(nextRules);
+                toast.success('过滤规则已添加。');
+                return;
+            }
+            if (action === 'memory-filter-select-rule') {
+                state.memoryFilterSelectedRuleId = String(button.dataset.ruleId ?? '').trim();
+                await render();
+                return;
+            }
+            if (action === 'memory-filter-clear-rule-selection') {
+                if (state.memoryFilterSelectedRuleId) {
+                    state.memoryFilterSelectedRuleId = '';
+                    await render();
+                }
+                return;
+            }
+            if (action === 'memory-filter-save-rule') {
+                await loadMemoryFilterSnapshot();
+                const ruleId = String(button.dataset.ruleId ?? '').trim();
+                const editor = root.querySelector(`[data-edit-rule-id="${CSS.escape(ruleId)}"]`) as HTMLElement | null;
+                if (!editor) {
+                    toast.error('没有找到规则编辑区。');
+                    return;
+                }
+                const currentRules = collectCurrentMemoryFilterRules();
+                const targetRule = currentRules.find((rule: MemoryFilterRule): boolean => rule.id === ruleId);
+                if (!targetRule) {
+                    toast.error('没有找到这条规则。');
+                    return;
+                }
+                const readEditValue = (field: string): string => readInputValue(editor, `[data-edit-rule-field="${field}"]`);
+                const readEditChecked = (field: string): boolean => readCheckedValue(editor, `[data-edit-rule-field="${field}"]`);
+                const nextName = readEditValue('name') || targetRule.name;
+                const channelValue = readEditValue('channel');
+                const nextChannel = channelValue === 'context' || channelValue === 'excluded' ? channelValue : 'memory';
+                const nextRule: MemoryFilterRule = {
+                    ...targetRule,
+                    name: nextName,
+                    enabled: readEditChecked('enabled'),
+                    channel: nextChannel,
+                    priority: Math.trunc(Number(readEditValue('priority')) || targetRule.priority || 0),
+                };
+                if (nextRule.mode === 'xml') {
+                    nextRule.tagName = readEditValue('tagName') || nextName;
+                    nextRule.aliases = parseTagText(readEditValue('aliases'));
+                    nextRule.pattern = readEditValue('pattern') || undefined;
+                    const patternMode = readEditValue('patternMode');
+                    nextRule.patternMode = patternMode === 'prefix' || patternMode === 'regex' ? patternMode : undefined;
+                } else if (nextRule.mode === 'delimiter') {
+                    nextRule.delimiters = parseTagText(readEditValue('delimiters'));
+                    nextRule.keepDelimiter = readEditChecked('keepDelimiter');
+                } else if (nextRule.mode === 'regex') {
+                    nextRule.regex = readEditValue('regex') || undefined;
+                    nextRule.flags = readEditValue('flags') || 'g';
+                    nextRule.captureGroup = Math.max(0, Math.trunc(Number(readEditValue('captureGroup')) || 0));
+                } else if (nextRule.mode === 'markdown') {
+                    const strategy = readEditValue('markdownStrategy');
+                    nextRule.markdownStrategy = strategy === 'heading' || strategy === 'hr' ? strategy : 'heading_or_hr';
+                } else if (nextRule.mode === 'json') {
+                    nextRule.jsonPath = readEditValue('jsonPath') || '$';
+                }
+                const nextRules = currentRules.map((rule: MemoryFilterRule): MemoryFilterRule => (rule.id === ruleId ? nextRule : rule));
+                state.memoryFilterSelectedRuleId = ruleId;
+                await saveMemoryFilterRulesAndRefresh(nextRules);
+                toast.success('过滤规则已保存。');
+                return;
+            }
+            if (action === 'memory-filter-toggle-rule') {
+                await loadMemoryFilterSnapshot();
+                const ruleId = String(button.dataset.ruleId ?? '').trim();
+                const currentRules = collectCurrentMemoryFilterRules();
+                const targetRule = currentRules.find((rule: MemoryFilterRule): boolean => rule.id === ruleId);
+                if (!targetRule) {
+                    toast.error('没有找到这条规则。');
+                    return;
+                }
+                const toggledRules = currentRules.map((rule: MemoryFilterRule): MemoryFilterRule => (
+                    rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule
+                ));
+                await saveMemoryFilterRulesAndRefresh(toggledRules);
+                toast.success(targetRule.enabled ? '过滤规则已停用。' : '过滤规则已启用。');
+                return;
+            }
+            if (action === 'memory-filter-delete-rule') {
+                await loadMemoryFilterSnapshot();
+                const ruleId = String(button.dataset.ruleId ?? '').trim();
+                const currentRules = collectCurrentMemoryFilterRules();
+                const nextRules = currentRules.filter((rule: MemoryFilterRule): boolean => rule.id !== ruleId);
+                if (nextRules.length === currentRules.length) {
+                    toast.error('没有找到这条规则。');
+                    return;
+                }
+                if (state.memoryFilterSelectedRuleId === ruleId) {
+                    state.memoryFilterSelectedRuleId = '';
+                }
+                await saveMemoryFilterRulesAndRefresh(nextRules);
+                toast.success('过滤规则已删除。');
+                return;
+            }
             if (action === 'memory-filter-preview-floor') {
                 const previewSourceMode = readInputValue(root, '#stx-memory-filter-preview-source-mode') === 'raw_visible_text'
                     ? 'raw_visible_text'
@@ -1599,6 +1776,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     ? collectMemoryFilterRules(root, memoryFilterSettingsCache.rules)
                     : state.memoryFilterRules;
                 state.memoryFilterMode = nextMode;
+                state.memoryFilterSelectedRuleId = '';
                 state.memoryFilterPreviewLoading = Boolean(state.memoryFilterSelectedFloor || (state.memoryFilterStartFloor && state.memoryFilterEndFloor));
                 await render();
                 if (memoryFilterSettingsCache) {
@@ -1897,6 +2075,19 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
             button.addEventListener('click', (): void => {
                 void handleAction(String(button.dataset.action ?? '').trim(), snapshot, button);
             });
+        });
+
+        const memoryFilterRulesPanel = root.querySelector('.stx-memory-filter__rules') as HTMLElement | null;
+        memoryFilterRulesPanel?.addEventListener('click', (event: MouseEvent): void => {
+            const target = event.target as HTMLElement | null;
+            if (!target || target.closest('[data-content-split-rule], .stx-memory-filter__rule-editor, [data-action]')) {
+                return;
+            }
+            if (!state.memoryFilterSelectedRuleId) {
+                return;
+            }
+            state.memoryFilterSelectedRuleId = '';
+            void render();
         });
 
         let memoryFilterRuleRefreshTimer: number | undefined;

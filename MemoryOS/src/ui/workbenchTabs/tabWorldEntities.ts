@@ -194,7 +194,7 @@ function buildEntityOverviewMarkup(entry: MemoryEntry): string {
                 <div class="stx-memory-workbench__panel-title">${escapeHtml(displayTitle)}</div>
                 <span class="stx-memory-workbench__badge">${escapeHtml(typeLabel)}</span>
             </div>
-            <div class="stx-memory-workbench__info-list">
+            <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--double">
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_id'))}</span><strong>${escapeHtml(entry.entryId)}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_category'))}</span><strong>${escapeHtml(resolveWorldEntityCategoryLabel(entry.category))}</strong></div>
                 <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolveWorldEntityText('overview_title_created_at'))}</span><strong>${escapeHtml(formatTimestamp(entry.createdAt))}</strong></div>
@@ -246,7 +246,7 @@ function buildEntityFieldsMarkup(entry: MemoryEntry): string {
         <div class="stx-memory-workbench__card">
             <div class="stx-memory-workbench__panel-title">${escapeHtml(resolveWorldEntityText('structured_title'))}</div>
             ${rows
-                ? `<div class="stx-memory-workbench__info-list">${rows}</div>`
+                ? `<div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--double">${rows}</div>`
                 : `<div class="stx-memory-workbench__empty">${escapeHtml(resolveWorldEntityText('structured_empty'))}</div>`}
         </div>
     `;
@@ -498,7 +498,7 @@ export function buildWorldEntitiesViewMarkup(
                 <div class="stx-memory-workbench__section-title">${escapeHtml(resolveWorldEntityText('section_title'))}</div>
                 <div class="stx-memory-workbench__meta">${escapeHtml(resolveWorldEntityText('section_desc'))}</div>
             </div>
-            <div style="display:grid; grid-template-columns: 320px minmax(0, 1fr) 320px; gap: 12px; min-height: 0; flex: 1;">
+            <div class="stx-memory-world-entities__layout" style="display:grid; grid-template-columns: 320px minmax(0, 1fr) 320px; gap: 12px; min-height: 0; flex: 1;">
                 <div class="stx-memory-workbench__stack" style="min-height: 0; gap: 8px;">
                     ${buildEntityStatsMarkup(entities)}
                     <div class="stx-memory-workbench__card" style="padding: 12px; min-height: 0;">
@@ -512,7 +512,7 @@ export function buildWorldEntitiesViewMarkup(
                 <div class="stx-memory-workbench__editor" style="min-height: 0;">
                     ${buildEntityDetailMarkup(selectedEntry)}
                 </div>
-                <div class="stx-memory-workbench__stack" style="min-height: 0;">
+                <div class="stx-memory-workbench__stack stx-memory-world-entities__sidebar" style="min-height: 0;">
                     ${buildEntitySidebarMarkup(selectedEntry)}
                 </div>
             </div>

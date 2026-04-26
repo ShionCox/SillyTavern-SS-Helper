@@ -13,6 +13,7 @@ import {
     computeMemoryGraphNodeSize,
     getMemoryGraphNodeColor,
 } from '../workbenchTabs/shared/memoryGraphTypes';
+import { stripComparePrefix } from '../workbenchTabs/shared/display-label-resolver';
 
 /**
  * 功能：记忆图筛选选项。
@@ -361,7 +362,7 @@ export async function createMemoryGraphPixiRenderer(
         const glow = new Graphics();
         const body = new Graphics();
         const label = new Text({
-            text: node.label,
+            text: resolveRenderedGraphLabel(node.label, node.compareKey),
             anchor: { x: 0.5, y: 0 },
             style: {
                 fill: '#dbe7ff',
@@ -1133,6 +1134,35 @@ export async function createMemoryGraphPixiRenderer(
             syncSelectionAnimation();
         },
     };
+}
+
+/**
+ * 功能：兜底清洗画布节点标题，避免旧快照直接显示内部键。
+ * @param label 原始标题。
+ * @param compareKey 节点比较键。
+ * @returns 可读标题。
+ */
+function resolveRenderedGraphLabel(label: string, compareKey?: string): string {
+    const normalizedLabel = normalizeStableGraphLabel(label);
+    if (normalizedLabel) {
+        return normalizedLabel;
+    }
+    return normalizeStableGraphLabel(compareKey ?? '') || '未命名节点';
+}
+
+/**
+ * 功能：把稳定键格式标题转换为自然标题。
+ * @param value 原始文本。
+ * @returns 自然标题。
+ */
+function normalizeStableGraphLabel(value: string): string {
+    const source = String(value ?? '').trim();
+    if (!source) {
+        return '';
+    }
+    return source.replace(/\b(ck:v2:[^\s，。；、]+|ek:[^\s，。；、]+|entity:[^\s，。；、]+|(?:organization|city|nation|location|task|event|world_global_state|world):[^\s，。；、]+)/gi, (matched: string): string => {
+        return stripComparePrefix(matched) || matched;
+    }).trim();
 }
 
 /**

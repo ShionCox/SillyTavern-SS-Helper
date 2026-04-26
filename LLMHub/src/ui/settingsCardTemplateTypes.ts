@@ -46,7 +46,6 @@ export interface LLMHubSettingsIds {
     resourceEnabledId: string;
     resourceBaseUrlId: string;
     resourceApiKeyId: string;
-    resourceApiKeySaveBtnId: string;
     resourceDefaultModelId: string;
     resourceRerankPathId: string;
     resourceCustomParamsId: string;

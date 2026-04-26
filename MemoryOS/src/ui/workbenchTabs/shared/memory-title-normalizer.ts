@@ -71,7 +71,7 @@ function tryResolveDirectRef(
  * @returns 重写后的标题。
  */
 function rewriteEmbeddedKeys(value: string, mode: MemoryGraphMode, context: DisplayLabelResolverContext): string {
-    return String(value ?? '').replace(/\b(user|(?:organization|city|nation|location|task|event|world_global_state):[^\s，。；、]+)/gi, (matched: string): string => {
+    return String(value ?? '').replace(/\b(user|ck:v2:[^\s，。；、]+|ek:[^\s，。；、]+|entity:[^\s，。；、]+|(?:organization|city|nation|location|task|event|world_global_state):[^\s，。；、]+)/gi, (matched: string): string => {
         return resolveDisplayLabel(matched, { mode, context, fallbackLabel: stripComparePrefix(matched) || matched });
     });
 }

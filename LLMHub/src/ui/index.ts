@@ -770,7 +770,6 @@ const IDS: LLMHubSettingsIds = {
   resourceEnabledId: `${NAMESPACE}-resource-enabled`,
   resourceBaseUrlId: `${NAMESPACE}-resource-base-url`,
   resourceApiKeyId: `${NAMESPACE}-resource-api-key`,
-  resourceApiKeySaveBtnId: `${NAMESPACE}-resource-api-key-save`,
   resourceDefaultModelId: `${NAMESPACE}-resource-default-model`,
   resourceRerankPathId: `${NAMESPACE}-resource-rerank-path`,
   resourceCustomParamsId: `${NAMESPACE}-resource-custom-params`,
@@ -1134,9 +1133,6 @@ function bindUiEvents(): void {
   const resourceApiKeyEl = document.getElementById(
     IDS.resourceApiKeyId,
   ) as HTMLInputElement | null;
-  const resourceApiKeySaveBtn = document.getElementById(
-    IDS.resourceApiKeySaveBtnId,
-  ) as HTMLButtonElement | null;
   const resourceDefaultModelEl = document.getElementById(
     IDS.resourceDefaultModelId,
   ) as HTMLInputElement | null;
@@ -1784,9 +1780,46 @@ function bindUiEvents(): void {
     });
   };
 
+  /**
+   * 功能：读取并校验当前资源的 API Key 输入。
+   * @param resource 当前编辑的资源配置
+   * @returns 自定义资源返回输入的 API Key，酒馆资源返回空字符串，校验失败返回 null
+   */
+  const readApiKeyForResourceSave = (resource: ResourceConfig): string | null => {
+    if (resource.source !== "custom") return "";
+    const apiKey = String(resourceApiKeyEl?.value || "").trim();
+    if (!apiKey) {
+      alert("请输入 API Key。");
+      resourceApiKeyEl?.focus();
+      return null;
+    }
+    return apiKey;
+  };
+
+  /**
+   * 功能：把当前输入框中的 API Key 同步到凭据库和运行时 Provider。
+   * @param resource 当前编辑的资源配置
+   * @param apiKey 当前输入框中的 API Key
+   * @returns 无返回值
+   */
+  const syncResourceCredential = async (
+    resource: ResourceConfig,
+    apiKey: string,
+  ): Promise<void> => {
+    if (resource.source !== "custom") return;
+    if (!runtime?.saveCredential) throw new Error("LLMHub Runtime 未就绪");
+    await runtime.saveCredential(resource.id, apiKey);
+  };
+
+  /**
+   * 功能：保存当前资源配置，并同步输入框中的 API Key。
+   * @returns 保存后的资源配置，校验失败时返回 null
+   */
   const saveEditingResource = async (): Promise<ResourceConfig | null> => {
     const resource = readEditingResource();
     if (!resource) return null;
+    const apiKey = readApiKeyForResourceSave(resource);
+    if (apiKey === null) return null;
     const settings = ensureSettings();
     const resources = getSavedResources().filter(
       (item: ResourceConfig) => item.id !== resource.id,
@@ -1795,6 +1828,7 @@ function bindUiEvents(): void {
     settings.resources = resources;
     saveSettings();
     await runtime?.applySettingsFromContext?.();
+    await syncResourceCredential(resource, apiKey);
     editingResourceId = resource.id;
     if (resourceIdInputEl) resourceIdInputEl.disabled = true;
     renderResourceList();
@@ -2072,29 +2106,6 @@ function bindUiEvents(): void {
     });
   });
 
-  resourceApiKeySaveBtn?.addEventListener("click", async () => {
-    const resourceId =
-      editingResourceId || String(resourceIdInputEl?.value || "").trim();
-    if (!resourceId) {
-      alert("请先选择或填写资源 ID。");
-      return;
-    }
-    const apiKey = String(resourceApiKeyEl?.value || "").trim();
-    if (!apiKey) {
-      alert("API Key 不能为空");
-      return;
-    }
-    try {
-      if (!runtime?.saveCredential) throw new Error("LLMHub Runtime 未就绪");
-      await runtime.saveCredential(resourceId, apiKey);
-      if (resourceApiKeyEl) resourceApiKeyEl.value = "";
-      showTestResult({ ok: true, message: `已保存 ${resourceId} 的凭据` });
-    } catch (error) {
-      logger.error("保存凭据失败:", error);
-      alert("保存凭据失败，请查看控制台");
-    }
-  });
-
   testConnectionBtn?.addEventListener("click", async () => {
     testConnectionBtn.disabled = true;
     testConnectionBtn.textContent = "测试中…";
@@ -2294,17 +2305,25 @@ function bindUiEvents(): void {
   });
 
   resourceSaveBtn?.addEventListener("click", async () => {
-    const resource = await saveEditingResource();
-    if (!resource) return;
-    renderResourceList();
-    refreshAllResourceSelects();
-    restoreGlobalAssignmentsToUI();
-    renderPluginAssignments();
-    renderTaskAssignments();
-    showTestResult({
-      ok: true,
-      message: `已保存资源 ${resource.label || resource.id}`,
-    });
+    try {
+      const resource = await saveEditingResource();
+      if (!resource) return;
+      renderResourceList();
+      refreshAllResourceSelects();
+      restoreGlobalAssignmentsToUI();
+      renderPluginAssignments();
+      renderTaskAssignments();
+      showTestResult({
+        ok: true,
+        message: `已保存资源 ${resource.label || resource.id}`,
+      });
+    } catch (error: unknown) {
+      logger.error("保存资源失败:", error);
+      showTestResult({
+        ok: false,
+        message: `保存资源失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   });
 
   resourceDeleteBtn?.addEventListener("click", async () => {

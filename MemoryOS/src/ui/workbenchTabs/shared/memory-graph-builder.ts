@@ -591,6 +591,10 @@ function upsertTaskNodes(
             continue;
         }
         compareNodeKeyMap.set(compareKey, compareKey);
+        const entityKey = String(task.entityKey ?? '').trim();
+        if (entityKey) {
+            compareNodeKeyMap.set(entityKey, compareKey);
+        }
         upsertNode(nodeMap, {
             id: compareKey,
             key: compareKey,
@@ -1451,7 +1455,7 @@ function appendFieldEdge(
         sourceRefs: [targetRef],
         sourceBatchIds: sourceNode?.sourceBatchIds ?? [],
         reasonCodes: ['fallback_field_inference_resolved'],
-        visibleInModes: ['semantic', 'debug'],
+        visibleInModes: ['debug'],
         sections: [{
             title: '字段推导',
             fields: [

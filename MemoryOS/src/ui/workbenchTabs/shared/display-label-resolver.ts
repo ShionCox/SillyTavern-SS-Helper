@@ -65,12 +65,17 @@ export function resolveDisplayLabel(
         return compareRecord.title;
     }
 
+    const stripped = stripComparePrefix(rawRef);
+    const strippedRecord = stripped && stripped !== rawRef ? options.context.compareKeyMap.get(stripped) : undefined;
+    if (strippedRecord?.title) {
+        return strippedRecord.title;
+    }
+
     const aliasLabel = options.context.aliasToLabelMap.get(normalizeLookupKey(rawRef));
     if (aliasLabel) {
         return aliasLabel;
     }
 
-    const stripped = stripComparePrefix(rawRef);
     if (options.mode === 'semantic') {
         const safeFallback = fallbackLabel && fallbackLabel !== rawRef ? fallbackLabel : '';
         return stripped || safeFallback || '未命名对象';
@@ -91,6 +96,11 @@ export function stripComparePrefix(value: string): string {
     if (rawValue.startsWith('ck:v2:')) {
         const parsed = parseCompareKey(rawValue);
         return parsed.canonicalName || rawValue;
+    }
+    if (rawValue.startsWith('ek:')) {
+        const strippedEntityKey = rawValue.slice('ek:'.length);
+        const segments = strippedEntityKey.split(':').map((item: string): string => item.trim()).filter(Boolean);
+        return segments.length > 0 ? segments[segments.length - 1] : rawValue;
     }
     if (rawValue.startsWith('entity:')) {
         const strippedEntity = rawValue.slice('entity:'.length);

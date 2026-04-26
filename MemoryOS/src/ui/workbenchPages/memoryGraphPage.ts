@@ -19,6 +19,7 @@ import {
     getMemoryGraphNodeColor,
     MEMORY_GRAPH_TYPE_LABELS,
 } from '../workbenchTabs/shared/memoryGraphTypes';
+import { stripComparePrefix } from '../workbenchTabs/shared/display-label-resolver';
 import {
     createMemoryGraphPixiRenderer,
     filterMemoryGraphData,
@@ -105,6 +106,7 @@ export function buildMemoryGraphPageMarkup(
         return `<button type="button" data-graph-mode="${mode}" style="font-size:11px;padding:2px 8px;border-radius:4px;background:${active ? 'rgba(96,165,250,0.22)' : 'rgba(255,255,255,0.06)'};border:${active ? '1px solid rgba(96,165,250,0.42)' : '1px solid rgba(255,255,255,0.1)'};color:${active ? '#93c5fd' : 'rgba(255,255,255,0.66)'};cursor:pointer;font-family:inherit;">${escapeHtml(label)}</button>`;
     }).join('');
     const legendHtml = buildMemoryGraphLegendItems()
+        .filter((item): boolean => currentMode === 'debug' || typeCounts.has(item.type))
         .map((item) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;"><span style="width:10px;height:10px;border-radius:50%;background:${item.color};display:inline-block;"></span><span style="font-size:11px;opacity:0.72;">${escapeHtml(item.label)}</span></span>`)
         .join('');
 
@@ -311,7 +313,7 @@ function buildNodeDetailPanel(node: WorkbenchMemoryGraphNode, graph: WorkbenchMe
                 </div>
                 <div class="stx-memory-graph-detail__hero-copy">
                     <div class="stx-memory-graph-detail__eyebrow">${escapeHtml(resolveMemoryGraphText('node_detail'))}</div>
-                    <strong class="stx-memory-graph-detail__title">${escapeHtml(sanitizeWorkbenchDisplayText(node.label, '未命名节点'))}</strong>
+                    <strong class="stx-memory-graph-detail__title">${escapeHtml(resolveRenderedGraphText(node.label, node.compareKey, '未命名节点'))}</strong>
                 </div>
             </div>
             <div class="stx-memory-graph-detail__chip-row">
@@ -367,12 +369,12 @@ function buildEdgeDetailPanel(edge: WorkbenchMemoryGraphEdge, graph: WorkbenchMe
             <div class="stx-memory-graph-detail__route">
                 <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(sourceNode?.id ?? edge.source)}">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${escapeHtml(sanitizeWorkbenchDisplayText(sourceNode?.label ?? edge.source, '未命名节点'))}</span>
+                    <span>${escapeHtml(resolveRenderedGraphText(sourceNode?.label ?? edge.source, sourceNode?.compareKey, '未命名节点'))}</span>
                 </button>
                 <i class="fa-solid fa-arrow-right-long stx-memory-graph-detail__route-arrow"></i>
                 <button type="button" class="stx-memory-graph-detail__route-node" data-memory-graph-select-node="true" data-node-id="${escapeAttr(targetNode?.id ?? edge.target)}">
                     <i class="fa-solid fa-circle-dot"></i>
-                    <span>${escapeHtml(sanitizeWorkbenchDisplayText(targetNode?.label ?? edge.target, '未命名节点'))}</span>
+                    <span>${escapeHtml(resolveRenderedGraphText(targetNode?.label ?? edge.target, targetNode?.compareKey, '未命名节点'))}</span>
                 </button>
             </div>
         </div>
@@ -529,7 +531,7 @@ function renderSections(
                                         </button>
                                     ` : ''}
                                 </div>
-                                <div class="stx-memory-graph-detail__field-value">${escapeHtml(sanitizeWorkbenchDisplayText(resolveMemoryGraphFieldValue(field.value)))}</div>
+                                <div class="stx-memory-graph-detail__field-value">${escapeHtml(resolveRenderedGraphText(resolveMemoryGraphFieldValue(field.value), undefined, '暂无'))}</div>
                             </div>
                         `;
                         }).join('')}
@@ -605,6 +607,36 @@ function resolveGraphMode(value: unknown): MemoryGraphMode {
  */
 function resolveTypeLabel(type: string): string {
     return MEMORY_GRAPH_TYPE_LABELS[type] ?? type;
+}
+
+/**
+ * 功能：兜底清洗图谱详情文本，避免旧快照显示内部键。
+ * @param value 原始文本。
+ * @param compareKey 比较键。
+ * @param fallback 兜底文本。
+ * @returns 可读文本。
+ */
+function resolveRenderedGraphText(value: string, compareKey?: string, fallback = ''): string {
+    const normalized = normalizeStableGraphText(value);
+    if (normalized) {
+        return sanitizeWorkbenchDisplayText(normalized, fallback);
+    }
+    return sanitizeWorkbenchDisplayText(normalizeStableGraphText(compareKey ?? '') || fallback, fallback);
+}
+
+/**
+ * 功能：把稳定键文本转换为自然文本。
+ * @param value 原始文本。
+ * @returns 自然文本。
+ */
+function normalizeStableGraphText(value: string): string {
+    const source = String(value ?? '').trim();
+    if (!source) {
+        return '';
+    }
+    return source.replace(/\b(ck:v2:[^\s，。；、]+|ek:[^\s，。；、]+|entity:[^\s，。；、]+|(?:organization|city|nation|location|task|event|world_global_state|world):[^\s，。；、]+)/gi, (matched: string): string => {
+        return stripComparePrefix(matched) || matched;
+    }).trim();
 }
 
 /**

@@ -1,5 +1,6 @@
 import { applyUnifiedMemoryGraphLayout, buildTakeoverMemoryGraph } from '../ui/workbenchTabs/shared/memory-graph-builder';
 import { parseCompareKey } from '../core/compare-key';
+import { stripComparePrefix } from '../ui/workbenchTabs/shared/display-label-resolver';
 import type {
     ActorMemoryProfile,
     MemoryEntry,
@@ -68,6 +69,10 @@ export class GraphService {
             if (compareKey) {
                 compareNodeIdMap.set(compareKey, node.id);
             }
+            const entityKey = this.readEntityKey(entry.detailPayload);
+            if (entityKey) {
+                compareNodeIdMap.set(entityKey, node.id);
+            }
         }
         for (const relationship of input.relationships) {
             this.appendRelationshipEdge(edgeMap, relationship, actorNodeIdMap);
@@ -125,12 +130,13 @@ export class GraphService {
         const payload = toRecord(entry.detailPayload);
         const compareKey = this.readCompareKey(payload);
         const bindings = toRecord(payload.bindings);
+        const rawTitle = normalizeText(entry.title) || stripStableGraphKey(compareKey) || '未命名记忆';
         return this.buildBaseNode({
             id: `entry:${entry.entryId}`,
             key: compareKey || entry.entryId,
-            label: normalizeText(entry.title) || '未命名记忆',
+            label: normalizeGraphDisplayText(rawTitle, '未命名记忆'),
             type: resolveMemoryGraphNodeType(entry),
-            summary: normalizeText(entry.summary || entry.detail),
+            summary: normalizeGraphDisplayText(entry.summary || entry.detail),
             compareKey,
             importance: resolveEntryImportance(entry),
             memoryPercent,
@@ -155,9 +161,9 @@ export class GraphService {
         return this.buildBaseNode({
             id: `summary:${summary.summaryId}`,
             key: summary.summaryId,
-            label: summary.title || '结构化总结',
+            label: normalizeGraphDisplayText(summary.title || '结构化总结', '结构化总结'),
             type: 'event',
-            summary: summary.content,
+            summary: normalizeGraphDisplayText(summary.content),
             importance: 0.45,
             memoryPercent: 60,
             sourceKinds: ['summary_snapshot'],
@@ -497,14 +503,15 @@ export class GraphService {
             nodeMap.set(id, this.buildBaseNode({
                 id,
                 key: ref,
-                label: ref,
+                label: normalizeGraphDisplayText(ref, '未解析引用'),
                 type: 'placeholder',
-                summary: '等待对应主记忆条目补全',
+                summary: `未解析引用：${normalizeGraphDisplayText(ref, '未解析引用')}`,
                 importance: 0.35,
                 memoryPercent: 30,
                 sourceKinds: ['unresolved_placeholder'],
                 sourceRefs: [ref],
                 reasonCodes: ['unresolved_reference'],
+                visibleInModes: ['debug'],
                 sections: [{
                     title: '占位节点',
                     fields: [
@@ -571,6 +578,17 @@ export class GraphService {
     }
 
     /**
+     * 功能：读取条目实体键。
+     * @param payload 结构化载荷。
+     * @returns 实体键。
+     */
+    private readEntityKey(payload: unknown): string {
+        const record = toRecord(payload);
+        const fields = toRecord(record.fields);
+        return normalizeText(record.entityKey ?? fields.entityKey);
+    }
+
+    /**
      * 功能：归一化绑定字段。
      * @param value 原始绑定载荷。
      * @returns 绑定映射。
@@ -596,6 +614,32 @@ export class GraphService {
  */
 function normalizeText(value: unknown): string {
     return String(value ?? '').trim();
+}
+
+/**
+ * 功能：把图谱显示文本中的内部键转换为可读文本。
+ * @param value 原始文本。
+ * @param fallback 兜底文本。
+ * @returns 可读文本。
+ */
+function normalizeGraphDisplayText(value: unknown, fallback = ''): string {
+    const source = normalizeText(value);
+    if (!source) {
+        return fallback;
+    }
+    const rewritten = source.replace(/\b(ck:v2:[^\s，。；、]+|ek:[^\s，。；、]+|entity:[^\s，。；、]+|(?:organization|city|nation|location|task|event|world_global_state|world):[^\s，。；、]+)/gi, (matched: string): string => {
+        return stripStableGraphKey(matched) || matched;
+    });
+    return rewritten.trim() || fallback;
+}
+
+/**
+ * 功能：裁剪稳定键前缀，得到可读名称。
+ * @param value 原始稳定键。
+ * @returns 可读名称。
+ */
+function stripStableGraphKey(value: unknown): string {
+    return stripComparePrefix(normalizeText(value));
 }
 
 /**
