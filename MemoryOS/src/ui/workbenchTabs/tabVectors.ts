@@ -93,6 +93,7 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
         : false;
     const testResult = state.vectorTestResult;
     const testProgress = state.vectorTestProgress;
+    const effectiveMode = resolveEffectiveRuntimeMode(vectorSnapshot);
 
     return `
         <section class="stx-memory-workbench__view"${state.currentView !== 'vectors' ? ' hidden' : ''}>
@@ -115,9 +116,9 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 ${buildOverviewCard(resolveVectorWorkbenchText('runtime'), vectorSnapshot.runtimeReady ? resolveVectorWorkbenchText('runtime_ready') : resolveVectorWorkbenchText('runtime_not_ready'), vectorSnapshot.runtimeReady ? resolveVectorWorkbenchText('runtime_ready_detail') : resolveVectorWorkbenchText('runtime_not_ready_detail'), vectorSnapshot.runtimeReady ? 'ok' : 'warn')}
                 ${buildOverviewCard(resolveVectorWorkbenchText('embedding'), vectorSnapshot.embeddingAvailable ? resolveVectorWorkbenchText('available') : resolveVectorWorkbenchText('unavailable'), vectorSnapshot.embeddingAvailable ? (vectorSnapshot.embeddingModel || resolveVectorWorkbenchText('embedding_connected')) : (vectorSnapshot.embeddingUnavailableReason || resolveVectorWorkbenchText('embedding_unavailable')), vectorSnapshot.embeddingAvailable ? 'ok' : 'warn')}
                 ${buildOverviewCard(resolveVectorWorkbenchText('store'), vectorSnapshot.vectorStoreAvailable ? resolveVectorWorkbenchText('available') : resolveVectorWorkbenchText('unavailable'), vectorSnapshot.vectorStoreAvailable ? resolveVectorWorkbenchText('store_ready_detail') : (vectorSnapshot.vectorStoreUnavailableReason || resolveVectorWorkbenchText('store_unavailable')), vectorSnapshot.vectorStoreAvailable ? 'ok' : 'warn')}
-                ${buildOverviewCard(resolveVectorWorkbenchText('current_mode'), resolveModeLabel(vectorSnapshot.retrievalMode), `${resolveVectorWorkbenchText('strategy_route')} ${vectorSnapshot.vectorEnableStrategyRouting ? resolveVectorWorkbenchText('strategy_route_on') : resolveVectorWorkbenchText('strategy_route_off')} / ${resolveVectorWorkbenchText('rerank_used')} ${vectorSnapshot.vectorEnableRerank ? resolveVectorWorkbenchText('rerank_on') : resolveVectorWorkbenchText('rerank_off')}`, 'accent')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('current_mode'), resolveModeLabel(vectorSnapshot.retrievalMode), `${resolveVectorWorkbenchText('effective_mode')} ${resolveModeLabel(effectiveMode)} / ${resolveAutoRuntimeDetail(vectorSnapshot, effectiveMode)}`, effectiveMode === 'hybrid' || effectiveMode === 'vector_only' ? 'ok' : 'accent')}
                 ${buildOverviewCard(resolveVectorWorkbenchText('document_count'), String(vectorSnapshot.documentCount), `${resolveVectorWorkbenchText('ready_count')} ${vectorSnapshot.readyCount} / ${resolveVectorWorkbenchText('pending_count')} ${vectorSnapshot.pendingCount} / ${resolveVectorWorkbenchText('failed_count')} ${vectorSnapshot.failedCount}`, 'accent')}
-                ${buildOverviewCard(resolveVectorWorkbenchText('index_count'), String(vectorSnapshot.indexCount), `${resolveVectorWorkbenchText('recall_stat_count')} ${vectorSnapshot.recallStatCount} ${resolveVectorWorkbenchText('item_count_unit')}`, 'accent')}
+                ${buildOverviewCard(resolveVectorWorkbenchText('index_count'), String(vectorSnapshot.indexCount), `${resolveVectorWorkbenchText('recall_stat_count')} ${vectorSnapshot.recallStatCount} ${resolveVectorWorkbenchText('item_count_unit')} / ${resolveVectorWorkbenchText('rerank_runtime')} ${resolveRuntimeRerankLabel(vectorSnapshot)}`, vectorSnapshot.indexCount > 0 ? 'ok' : 'warn')}
             </div>
 
             <div class="stx-vector-lab__layout">
@@ -247,6 +248,7 @@ export function buildVectorsViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                                             <label class="stx-vector-lab__field">
                                                 <span class="stx-vector-lab__field-label">${escapeHtml(resolveVectorWorkbenchText('mode_label'))}</span>
                                                 <select id="stx-vector-mode" class="stx-memory-workbench__select">
+                                                    <option value="auto"${state.vectorMode === 'auto' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('auto_mode'))}</option>
                                                     <option value="lexical_only"${state.vectorMode === 'lexical_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('lexical_only'))}</option>
                                                     <option value="vector_only"${state.vectorMode === 'vector_only' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('vector_only'))}</option>
                                                     <option value="hybrid"${state.vectorMode === 'hybrid' ? ' selected' : ''}>${escapeHtml(resolveVectorWorkbenchText('hybrid_mode'))}</option>
@@ -614,11 +616,77 @@ function resolveStatusLabel(value: string): string {
  */
 function resolveModeLabel(value: string): string {
     const mapping: Record<string, string> = {
+        auto: resolveVectorWorkbenchText('auto_mode'),
         lexical_only: resolveVectorWorkbenchText('lexical_only'),
         vector_only: resolveVectorWorkbenchText('vector_only'),
         hybrid: resolveVectorWorkbenchText('hybrid_mode'),
     };
     return mapping[String(value ?? '').trim()] || resolveVectorWorkbenchText('mode_unknown');
+}
+
+/**
+ * 功能：解析自动策略当前会落到的实际检索模式。
+ * @param snapshot 向量快照。
+ * @returns 实际检索模式。
+ */
+function resolveEffectiveRuntimeMode(snapshot: WorkbenchSnapshot['vectorSnapshot']): 'lexical_only' | 'vector_only' | 'hybrid' {
+    const mode = String(snapshot.retrievalMode ?? '').trim();
+    if (mode === 'vector_only' || mode === 'hybrid') {
+        return mode;
+    }
+    if (mode !== 'auto') {
+        return 'lexical_only';
+    }
+    if (!snapshot.embeddingAvailable || !snapshot.vectorStoreAvailable || snapshot.indexCount <= 0) {
+        return 'lexical_only';
+    }
+    return 'hybrid';
+}
+
+/**
+ * 功能：解析自动策略说明。
+ * @param snapshot 向量快照。
+ * @param effectiveMode 实际检索模式。
+ * @returns 中文说明。
+ */
+function resolveAutoRuntimeDetail(
+    snapshot: WorkbenchSnapshot['vectorSnapshot'],
+    effectiveMode: 'lexical_only' | 'vector_only' | 'hybrid',
+): string {
+    if (String(snapshot.retrievalMode ?? '').trim() !== 'auto') {
+        return resolveVectorWorkbenchText('fixed_mode_detail');
+    }
+    if (effectiveMode === 'hybrid') {
+        return resolveVectorWorkbenchText('auto_hybrid_detail');
+    }
+    if (!snapshot.embeddingAvailable) {
+        return resolveVectorWorkbenchText('auto_lexical_no_embedding');
+    }
+    if (!snapshot.vectorStoreAvailable) {
+        return resolveVectorWorkbenchText('auto_lexical_no_store');
+    }
+    if (snapshot.indexCount <= 0) {
+        return resolveVectorWorkbenchText('auto_lexical_no_index');
+    }
+    return resolveVectorWorkbenchText('fixed_mode_detail');
+}
+
+/**
+ * 功能：解析运行时重排来源标签。
+ * @param snapshot 向量快照。
+ * @returns 中文标签。
+ */
+function resolveRuntimeRerankLabel(snapshot: WorkbenchSnapshot['vectorSnapshot']): string {
+    if (!snapshot.vectorEnableRerank) {
+        return resolveVectorWorkbenchText('rerank_disabled_runtime');
+    }
+    if (snapshot.vectorEnableLLMHubRerank) {
+        if (!snapshot.llmhubRerankAvailable) {
+            return resolveVectorWorkbenchText('rerank_llmhub_unavailable_runtime');
+        }
+        return resolveVectorWorkbenchText('rerank_llmhub_runtime');
+    }
+    return resolveVectorWorkbenchText('rerank_rule_runtime');
 }
 
 /**

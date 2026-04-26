@@ -363,7 +363,7 @@ function buildColdStartStateSchema(): Record<string, unknown> {
 function buildSummaryPlannerSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: ['should_update', 'focus_types', 'entities', 'topics', 'reasons'],
+        required: ['should_update', 'focus_types', 'entities', 'topics', 'reasons', 'memory_value', 'suggested_operation_bias', 'skip_reason'],
         additionalProperties: false,
         properties: {
             should_update: { type: 'boolean' },
@@ -371,6 +371,12 @@ function buildSummaryPlannerSchema(): Record<string, unknown> {
             entities: buildStringArraySchema(),
             topics: buildStringArraySchema(),
             reasons: buildStringArraySchema(),
+            memory_value: { type: 'string', enum: ['none', 'low', 'medium', 'high'] },
+            suggested_operation_bias: {
+                type: 'array',
+                items: { type: 'string', enum: ['ADD', 'UPDATE', 'MERGE', 'INVALIDATE', 'DELETE', 'NOOP'] },
+            },
+            skip_reason: { type: 'string' },
         },
     };
 }
@@ -427,7 +433,7 @@ function buildSummaryActionPayloadSchema(): Record<string, unknown> {
 function buildSummaryMutationSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: ['schemaVersion', 'window', 'actions'],
+        required: ['schemaVersion', 'window', 'actions', 'diagnostics'],
         additionalProperties: false,
         properties: {
             schemaVersion: { type: 'string' },
@@ -444,7 +450,7 @@ function buildSummaryMutationSchema(): Record<string, unknown> {
                 type: 'array',
                 items: {
                     type: 'object',
-                    required: ['action', 'targetKind'],
+                    required: ['action', 'targetKind', 'reasonCodes'],
                     additionalProperties: false,
                     properties: {
                         action: { type: 'string', enum: ['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE', 'NOOP'] },
@@ -453,10 +459,31 @@ function buildSummaryMutationSchema(): Record<string, unknown> {
                         title: { type: 'string' },
                         reason: { type: 'string' },
                         confidence: buildNumberSchema(),
+                        memoryValue: { type: 'string', enum: ['low', 'medium', 'high'] },
+                        sourceEvidence: {
+                            type: 'object',
+                            required: [],
+                            additionalProperties: false,
+                            properties: {
+                                type: { type: 'string' },
+                                brief: { type: 'string' },
+                                turnRefs: { type: 'array', items: { type: 'number' } },
+                            },
+                        },
                         targetId: { type: 'string' },
                         sourceIds: buildStringArraySchema(),
                         candidateId: { type: 'string' },
                         reasonCodes: buildStringArraySchema(),
+                        timeContext: {
+                            type: 'object',
+                            required: [],
+                            additionalProperties: false,
+                            properties: {
+                                mode: { type: 'string', enum: ['story_explicit', 'story_inferred', 'sequence_fallback'] },
+                                storyTime: { type: 'string' },
+                                confidence: buildNumberSchema(),
+                            },
+                        },
                         sourceContext: {
                             type: 'object',
                             required: [],
@@ -468,6 +495,17 @@ function buildSummaryMutationSchema(): Record<string, unknown> {
                         newRecord: buildSummaryActionPayloadSchema(),
                         ...buildProtocolKeySchema().properties as Record<string, unknown>,
                     },
+                },
+            },
+            diagnostics: {
+                type: 'object',
+                required: [],
+                additionalProperties: false,
+                properties: {
+                    skippedCount: { type: 'number' },
+                    noopReasons: buildStringArraySchema(),
+                    possibleDuplicates: buildStringArraySchema(),
+                    sourceWarnings: buildStringArraySchema(),
                 },
             },
         },

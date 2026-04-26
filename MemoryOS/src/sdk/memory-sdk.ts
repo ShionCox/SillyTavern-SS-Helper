@@ -272,6 +272,7 @@ export interface MemoryVectorRuntimeStatus {
     vectorEnableStrategyRouting: boolean;
     vectorEnableRerank: boolean;
     vectorEnableLLMHubRerank: boolean;
+    llmhubRerankAvailable: boolean;
 }
 
 /**
@@ -1449,7 +1450,20 @@ export class MemorySDKImpl {
             vectorEnableStrategyRouting: settings.vectorEnableStrategyRouting,
             vectorEnableRerank: settings.vectorEnableRerank,
             vectorEnableLLMHubRerank: settings.vectorEnableLLMHubRerank,
+            llmhubRerankAvailable: this.hasLLMHubRerankRuntime(),
         };
+    }
+
+    /**
+     * 功能：判断 LLMHub 重排接口是否已在运行时挂载。
+     * @returns 是否可用。
+     */
+    private hasLLMHubRerankRuntime(): boolean {
+        const llm = (window as unknown as { STX?: { llm?: unknown } })?.STX?.llm;
+        if (!llm || typeof llm !== 'object') {
+            return false;
+        }
+        return typeof (llm as Record<string, unknown>).rerank === 'function';
     }
 
     /**

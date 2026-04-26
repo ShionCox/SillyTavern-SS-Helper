@@ -11,7 +11,7 @@ import type {
 import type { RetrievalCandidate, RetrievalFacet } from '../memory-retrieval/types';
 import type { QueryTimeIntent } from '../memory-time/time-ranking';
 import type { RecallConfig } from '../memory-retrieval/recall-config';
-import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
+import type { EffectiveRetrievalMode, RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { buildDefaultRecallConfig, mergeRecallConfig } from '../memory-retrieval/recall-config';
 import { applyPayloadFilter } from '../memory-retrieval/payload-filter';
 import { RetrievalOrchestrator } from '../memory-retrieval/retrieval-orchestrator';
@@ -68,6 +68,8 @@ export class MemoryRetrievalService {
         baseConfig.enableGraphPenalty = settings.retrievalEnableGraphPenalty;
 
         const config = mergeRecallConfig(baseConfig, input.recallConfig);
+        const effectiveRetrievalMode = await this.resolveEffectiveRetrievalMode(config.retrievalMode, input.chatKey ?? '');
+        config.retrievalMode = effectiveRetrievalMode;
 
         if (config.payloadFilter || settings.retrievalEnablePayloadFilter) {
             config.payloadFilter = config.payloadFilter ?? {};
@@ -285,6 +287,29 @@ export class MemoryRetrievalService {
             contextRoute: result.contextRoute,
             diagnostics,
         };
+    }
+
+    /**
+     * 功能：根据自动策略解析实际检索模式。
+     * @param requestedMode 用户请求模式。
+     * @param chatKey 当前聊天键。
+     * @returns 实际检索模式。
+     */
+    private async resolveEffectiveRetrievalMode(requestedMode: RetrievalMode, chatKey: string): Promise<EffectiveRetrievalMode> {
+        if (requestedMode !== 'auto') {
+            return requestedMode;
+        }
+        if (!this.hybridService?.isVectorAvailable()) {
+            return 'lexical_only';
+        }
+        const vectorStore = this.hybridService.getVectorStore();
+        if (chatKey) {
+            await vectorStore.ensureLoaded(chatKey);
+        }
+        if (vectorStore.getDocumentCount() <= 0) {
+            return 'lexical_only';
+        }
+        return 'hybrid';
     }
 
     /**

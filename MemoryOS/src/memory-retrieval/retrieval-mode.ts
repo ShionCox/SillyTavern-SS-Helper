@@ -1,11 +1,17 @@
 /**
- * 功能：定义检索模式三态枚举。
+ * 功能：定义检索模式枚举。
  * 说明：
+ *   - auto — 自动按向量能力选择 hybrid 或 lexical_only
  *   - lexical_only — 仅使用词法检索链（BM25 / n-gram / 编辑距离等）
  *   - vector_only — 仅使用向量检索链（当 provider 不可用时返回空 + 诊断）
  *   - hybrid — 同时使用词法 + 向量，融合排序后输出
  */
-export type RetrievalMode = 'lexical_only' | 'vector_only' | 'hybrid';
+export type RetrievalMode = 'auto' | 'lexical_only' | 'vector_only' | 'hybrid';
+
+/**
+ * 功能：定义已经解析完成、可直接执行的检索模式。
+ */
+export type EffectiveRetrievalMode = Exclude<RetrievalMode, 'auto'>;
 
 /**
  * 功能：把原始字符串归一化为合法 RetrievalMode。
@@ -18,7 +24,7 @@ export function normalizeRetrievalMode(
     fallback: RetrievalMode = 'lexical_only',
 ): RetrievalMode {
     const text = String(value ?? '').trim().toLowerCase();
-    if (text === 'lexical_only' || text === 'vector_only' || text === 'hybrid') {
+    if (text === 'auto' || text === 'lexical_only' || text === 'vector_only' || text === 'hybrid') {
         return text;
     }
     return fallback;

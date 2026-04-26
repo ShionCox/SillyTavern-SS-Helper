@@ -1,6 +1,7 @@
 import type { SummaryMutationAction, SummaryMutationDocument } from './mutation-types';
 import { isHighValueEntityType } from '../core/entity-schema';
 import { compareKeysNearMatch } from '../core/compare-key';
+import { isRelationTag } from '../constants/relationTags';
 
 /**
  * 功能：定义总结 mutation 校验结果。
@@ -18,6 +19,54 @@ export interface ValidateSummaryMutationResult {
 export type EditableFieldMap = Map<string, Set<string>>;
 
 const ALLOWED_ACTIONS = new Set(['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE', 'NOOP']);
+const MUTATION_ACTIONS_REQUIRING_EVIDENCE = new Set(['ADD', 'MERGE', 'UPDATE', 'INVALIDATE']);
+const FORBIDDEN_SOURCE_EVIDENCE_TYPES = new Set([
+    'system_prompt',
+    'developer_instruction',
+    'tool_artifact',
+    'error_log',
+    'debug_output',
+    'json_schema',
+    'code',
+    'think',
+    'reasoning',
+    'plugin_internal_state',
+]);
+const WEAK_SOURCE_EVIDENCE_TYPES = new Set([
+    'assistant_summary',
+    'meta_discussion',
+    'future_plan',
+    'analysis_note',
+    'unknown',
+]);
+const NATURAL_LANGUAGE_FIELD_NAMES = new Set([
+    'summary',
+    'state',
+    'description',
+    'goal',
+    'reason',
+    'openThreads',
+    'identityFacts',
+    'originFacts',
+    'traits',
+    'detail',
+]);
+const SYSTEM_TONE_PATTERNS: RegExp[] = [
+    /本轮/g,
+    /当前系统/g,
+    /抽取结果/g,
+    /结构化处理/g,
+    /已识别/g,
+    /该批次/g,
+    /输出内容/g,
+    /处理结果/g,
+];
+const USER_ALIAS_PATTERNS: RegExp[] = [
+    /用户/g,
+    /主角/g,
+    /玩家/g,
+    /你/g,
+];
 
 /**
  * 功能：校验并归一化总结 mutation 文档。
@@ -67,6 +116,7 @@ export function validateSummaryMutationDocument(
             schemaVersion,
             window: normalizedWindow,
             actions: actionNormalizeResult.actions,
+            diagnostics: normalizeDiagnostics(source.diagnostics),
         },
         errors: [],
         warnings: dedupeStrings(warnings),
@@ -136,7 +186,52 @@ function validateDocumentSafety(actions: SummaryMutationAction[]): string[] {
             errors.push(`low_confidence_high_priority_mutation:${action.targetKind}`);
         }
     }
+    errors.push(...validateDuplicateAddActions(actions));
     return dedupeStrings(errors);
+}
+
+/**
+ * 功能：校验同一文档中重复 ADD 的风险。
+ * @param actions 动作列表。
+ * @returns 错误列表。
+ */
+function validateDuplicateAddActions(actions: SummaryMutationAction[]): string[] {
+    const errors: string[] = [];
+    const addCompareKeys = new Map<string, number>();
+    for (const action of actions) {
+        if (action.action !== 'ADD') {
+            continue;
+        }
+        const compareKey = String(action.compareKey ?? '').trim();
+        if (!compareKey) {
+            continue;
+        }
+        addCompareKeys.set(compareKey, (addCompareKeys.get(compareKey) ?? 0) + 1);
+    }
+    for (const [compareKey, count] of addCompareKeys.entries()) {
+        if (count > 1) {
+            errors.push(`duplicate_add_comparekey:${compareKey}`);
+        }
+    }
+    return errors;
+}
+
+/**
+ * 功能：归一化总结诊断字段。
+ * @param value 原始诊断。
+ * @returns 诊断字段。
+ */
+function normalizeDiagnostics(value: unknown): SummaryMutationDocument['diagnostics'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    return {
+        skippedCount: normalizeOptionalNumber(record.skippedCount),
+        noopReasons: dedupeStrings(Array.isArray(record.noopReasons) ? record.noopReasons as string[] : []),
+        possibleDuplicates: dedupeStrings(Array.isArray(record.possibleDuplicates) ? record.possibleDuplicates as string[] : []),
+        sourceWarnings: dedupeStrings(Array.isArray(record.sourceWarnings) ? record.sourceWarnings as string[] : []),
+    };
 }
 
 /**
@@ -219,6 +314,8 @@ function normalizeAction(
     const payloadResult = sanitizePayloadByAllowedFields(rawPayload, allowedFields);
     const enumErrors = validatePayloadEnums(targetKind, payloadResult.payload);
     const semanticErrors = validateActionShape(action, row, payloadResult.payload);
+    const contractResult = validateActionContract(action, row, payloadResult.payload);
+    const sourceEvidence = normalizeSourceEvidence(row.sourceEvidence);
     return {
         action: {
             action: action as SummaryMutationAction['action'],
@@ -227,10 +324,14 @@ function normalizeAction(
             title: normalizeOptionalString(row.title),
             reason: normalizeOptionalString(row.reason),
             confidence: normalizeOptionalNumber(row.confidence),
+            memoryValue: normalizeMemoryValue(row.memoryValue),
+            sourceEvidence,
             targetId: normalizeOptionalString(row.targetId),
             sourceIds: dedupeStrings(Array.isArray(row.sourceIds) ? (row.sourceIds as string[]) : []),
             candidateId: normalizeOptionalString(row.candidateId),
+            entityKey: normalizeOptionalString(row.entityKey),
             compareKey: normalizeOptionalString(row.compareKey),
+            matchKeys: dedupeStrings(Array.isArray(row.matchKeys) ? (row.matchKeys as string[]) : []),
             patch: toPlainRecord(row.patch),
             newRecord: toPlainRecord(row.newRecord),
             payload: payloadResult.payload,
@@ -239,12 +340,184 @@ function normalizeAction(
         errors: [
             ...enumErrors,
             ...semanticErrors,
+            ...contractResult.errors,
         ],
         // payload_field_not_allowed 降级为警告：因 strict JSON schema 不支持 anyOf/oneOf，
         // 所有类型的可写字段被合并到统一 payload schema，AI 不可避免使用跨类型字段。
         // sanitizePayloadByAllowedFields 已将不属于当前 targetKind 的字段从 payload 移除，
         // 仅作为 warning 输出以便诊断与 prompt 调优。
-        warnings: payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
+        warnings: [
+            ...payloadResult.errors.map((path): string => `payload_field_not_allowed:${targetKind}:${path}`),
+            ...contractResult.warnings,
+        ],
+    };
+}
+
+/**
+ * 功能：校验 action 契约与污染风险。
+ * @param action 动作名称。
+ * @param row 原始 action。
+ * @param payload 已过滤 payload。
+ * @returns 错误与警告。
+ */
+function validateActionContract(
+    action: string,
+    row: Record<string, unknown>,
+    payload: Record<string, unknown>,
+): { errors: string[]; warnings: string[] } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const confidence = Number(row.confidence);
+    const sourceEvidence = normalizeSourceEvidence(row.sourceEvidence);
+    const compareKey = String(row.compareKey ?? '').trim();
+    const entityKey = String(row.entityKey ?? '').trim();
+    const reasonCodes = Array.isArray(row.reasonCodes) ? dedupeStrings(row.reasonCodes as string[]) : [];
+
+    if (Number.isFinite(confidence) && (confidence < 0 || confidence > 1)) {
+        errors.push('confidence_out_of_range');
+    }
+    if (reasonCodes.length <= 0) {
+        errors.push('reason_codes_required');
+    }
+    if (compareKey && !compareKey.startsWith('ck:v2:')) {
+        warnings.push(`comparekey_not_v2:${compareKey}`);
+    }
+    if ((action === 'ADD' || action === 'MERGE') && !entityKey) {
+        errors.push(`${action.toLowerCase()}_requires_entity_key`);
+    }
+    if (action === 'ADD' && !toPlainRecord(row.newRecord)) {
+        errors.push('add_missing_new_record');
+    }
+    if ((action === 'UPDATE' || action === 'MERGE' || action === 'INVALIDATE') && !toPlainRecord(row.patch)) {
+        errors.push('patch_missing');
+    }
+    if ((action === 'DELETE' || action === 'NOOP') && (toPlainRecord(row.patch) || toPlainRecord(row.newRecord) || toPlainRecord(row.payload))) {
+        errors.push('delete_noop_should_not_have_payload');
+    }
+    if (MUTATION_ACTIONS_REQUIRING_EVIDENCE.has(action)) {
+        if (!sourceEvidence || !sourceEvidence.type || !sourceEvidence.brief) {
+            errors.push('source_evidence_required');
+        } else if (FORBIDDEN_SOURCE_EVIDENCE_TYPES.has(sourceEvidence.type)) {
+            errors.push(`source_evidence_forbidden:${sourceEvidence.type}`);
+        } else if (WEAK_SOURCE_EVIDENCE_TYPES.has(sourceEvidence.type)) {
+            warnings.push(`source_evidence_weak:${sourceEvidence.type}`);
+        }
+    }
+
+    errors.push(...validateNaturalLanguagePollution(action, row, payload));
+    return {
+        errors: dedupeStrings(errors),
+        warnings: dedupeStrings(warnings),
+    };
+}
+
+/**
+ * 功能：校验记忆文本字段是否包含系统腔或用户指代污染。
+ * @param action 动作名称。
+ * @param row 原始 action。
+ * @param payload 已过滤 payload。
+ * @returns 错误列表。
+ */
+function validateNaturalLanguagePollution(
+    action: string,
+    row: Record<string, unknown>,
+    payload: Record<string, unknown>,
+): string[] {
+    const errors: string[] = [];
+    const naturalTextMap = {
+        ...collectNaturalLanguageFields(payload),
+        ...collectNaturalLanguageFields({
+            title: row.title,
+            reason: row.reason,
+            sourceEvidence: row.sourceEvidence,
+        }),
+    };
+    for (const [path, value] of Object.entries(naturalTextMap)) {
+        for (const pattern of SYSTEM_TONE_PATTERNS) {
+            pattern.lastIndex = 0;
+            if (pattern.test(value)) {
+                errors.push(`system_tone_pollution:${action}:${path}`);
+                break;
+            }
+        }
+        for (const pattern of USER_ALIAS_PATTERNS) {
+            pattern.lastIndex = 0;
+            if (pattern.test(value)) {
+                errors.push(`user_alias_pollution:${action}:${path}`);
+                break;
+            }
+        }
+    }
+    return dedupeStrings(errors);
+}
+
+/**
+ * 功能：收集需要进行自然语言污染扫描的字段。
+ * @param value 原始对象。
+ * @param path 当前路径。
+ * @returns path 到文本的映射。
+ */
+function collectNaturalLanguageFields(value: unknown, path: string = ''): Record<string, string> {
+    const result: Record<string, string> = {};
+    if (typeof value === 'string') {
+        const leafName = path.split('.').pop() ?? path;
+        if (NATURAL_LANGUAGE_FIELD_NAMES.has(leafName) || path.endsWith('sourceEvidence.brief')) {
+            result[path || leafName] = value;
+        }
+        return result;
+    }
+    if (Array.isArray(value)) {
+        value.forEach((item: unknown, index: number): void => {
+            Object.assign(result, collectNaturalLanguageFields(item, `${path}.${index}`.replace(/^\./, '')));
+        });
+        return result;
+    }
+    if (!value || typeof value !== 'object') {
+        return result;
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        Object.assign(result, collectNaturalLanguageFields(item, path ? `${path}.${key}` : key));
+    }
+    return result;
+}
+
+/**
+ * 功能：归一化记忆价值字段。
+ * @param value 原始值。
+ * @returns 记忆价值。
+ */
+function normalizeMemoryValue(value: unknown): SummaryMutationAction['memoryValue'] {
+    const text = String(value ?? '').trim();
+    if (text === 'low' || text === 'medium' || text === 'high') {
+        return text;
+    }
+    return undefined;
+}
+
+/**
+ * 功能：归一化证据来源字段。
+ * @param value 原始值。
+ * @returns 证据来源。
+ */
+function normalizeSourceEvidence(value: unknown): SummaryMutationAction['sourceEvidence'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    const type = String(record.type ?? '').trim();
+    const brief = String(record.brief ?? '').trim();
+    if (!type && !brief) {
+        return undefined;
+    }
+    const turnRefs = Array.isArray(record.turnRefs)
+        ? record.turnRefs
+            .map((item: unknown): number => Number(item))
+            .filter((item: number): boolean => Number.isFinite(item))
+        : undefined;
+    return {
+        type,
+        brief,
+        ...(turnRefs && turnRefs.length > 0 ? { turnRefs } : {}),
     };
 }
 
@@ -294,7 +567,7 @@ function validateActionShape(action: string, row: Record<string, unknown>, paylo
     if (action === 'DELETE' && !String(row.targetId ?? row.candidateId ?? '').trim()) {
         errors.push('delete_requires_target');
     }
-    if (action === 'NOOP' && Object.keys(payload).length > 0) {
+    if ((action === 'DELETE' || action === 'NOOP') && Object.keys(payload).length > 0) {
         errors.push('noop_payload_should_be_empty');
     }
     return errors;
@@ -307,9 +580,18 @@ function validateActionShape(action: string, row: Record<string, unknown>, paylo
  * @returns 错误列表。
  */
 function validatePayloadEnums(targetKind: string, payload: Record<string, unknown>): string[] {
-    void targetKind;
-    void payload;
-    return [];
+    const errors: string[] = [];
+    if (String(targetKind ?? '').trim() !== 'relationship') {
+        return errors;
+    }
+    const fields = payload.fields && typeof payload.fields === 'object' && !Array.isArray(payload.fields)
+        ? payload.fields as Record<string, unknown>
+        : {};
+    const relationTag = fields.relationTag ?? payload.relationTag;
+    if (relationTag !== undefined && !isRelationTag(relationTag)) {
+        errors.push('payload_field_invalid_enum:relationship:fields.relationTag');
+    }
+    return errors;
 }
 
 /**

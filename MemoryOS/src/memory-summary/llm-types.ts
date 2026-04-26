@@ -20,6 +20,34 @@ export interface MemoryLLMConsumerRegistration {
     tasks: MemoryLLMTaskDescriptor[];
 }
 
+export type MemoryLLMCapabilityKind = 'generation' | 'embedding' | 'rerank';
+
+export type MemoryLLMRoutePreview = {
+    consumer: string;
+    taskKind: MemoryLLMCapabilityKind;
+    taskKey?: string;
+    requiredCapabilities: string[];
+    available: boolean;
+    resourceId?: string;
+    resourceLabel?: string;
+    model?: string;
+    blockedReason?: string;
+};
+
+export type MemoryLLMStatusSnapshot = {
+    readiness?: Partial<Record<MemoryLLMCapabilityKind, boolean>>;
+};
+
+export interface MemoryLLMInspectApi {
+    getStatusSnapshot?: () => Promise<MemoryLLMStatusSnapshot> | MemoryLLMStatusSnapshot;
+    previewRoute?: (args: {
+        consumer: string;
+        taskKind: MemoryLLMCapabilityKind;
+        taskKey?: string;
+        requiredCapabilities?: string[];
+    }) => Promise<MemoryLLMRoutePreview> | MemoryLLMRoutePreview;
+}
+
 /**
  * 功能：定义 runTask 返回结构。
  */
@@ -32,6 +60,7 @@ export type MemoryLLMRunResult<T> =
  */
 export interface MemoryLLMApi {
     registerConsumer: (registration: MemoryLLMConsumerRegistration) => void;
+    inspect?: MemoryLLMInspectApi;
     runTask: <T>(args: {
         consumer: string;
         taskKey: string;

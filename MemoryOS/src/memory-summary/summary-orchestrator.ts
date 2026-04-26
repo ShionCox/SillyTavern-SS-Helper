@@ -20,7 +20,7 @@ import {
     type EditableFieldMap,
 } from './mutation-validator';
 import { buildSummaryWindow, type SummaryWindowMessage, type SummaryWindowOptions } from './summary-window';
-import type { SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
+import type { SummaryMutationAction, SummaryMutationDocument, SummaryPlannerOutput } from './mutation-types';
 import type { MemoryLLMApi } from './llm-types';
 import { normalizeNarrativeValueWithUserPlaceholder, resolveCurrentNarrativeUserName } from '../utils/narrative-user-name';
 import { readMemoryOSSettings } from '../settings/store';
@@ -226,6 +226,9 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 entities: plannerDecision.entities,
                 topics: plannerDecision.topics,
                 reasons: plannerDecision.reasons,
+                memoryValue: plannerDecision.memory_value ?? 'none',
+                suggestedOperationBias: plannerDecision.suggested_operation_bias ?? [],
+                skipReason: plannerDecision.skip_reason ?? '',
                 narrativeStyle: plannerResult.context.narrativeStyle,
                 userPlaceholder,
             },
@@ -252,6 +255,12 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
                 fromTurn: plannerResult.context.window.fromTurn,
                 toTurn: plannerResult.context.window.toTurn,
             },
+            diagnostics: {
+                skippedCount: 1,
+                noopReasons: [resolvedPlannerDecision.skip_reason || resolvedPlannerDecision.reasons[0] || '规划阶段判定无需更新。'],
+                possibleDuplicates: [],
+                sourceWarnings: [],
+            },
             actions: [
                 {
                     action: 'NOOP',
@@ -267,6 +276,10 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             payload: {
                 actionCount: 1,
                 plannerNoop: true,
+                window: noopDocument.window,
+                actions: noopDocument.actions,
+                mutationCounts: buildSummaryMutationActionCounts(noopDocument.actions),
+                qualityGuard: buildSummaryQualityGuardSummary([], [], noopDocument.actions),
                 worldProfile: plannerResult.diagnostics.worldProfile,
             },
         });
@@ -359,6 +372,8 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         worldProfile: plannerResult.diagnostics.worldProfile,
         reasonCode: 'ok',
     };
+    const summaryQualityWarnings: string[] = [];
+    const summaryQualityErrors: string[] = [];
 
     for (const batchPlan of batchPlans) {
         if (readSummaryMutationStagingSnapshot(summaryJobId)?.batchResults.some((item) => item.batchId === batchPlan.batchId)) {
@@ -419,6 +434,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         // 稀疏 patch 校验：确保 LLM 输出为有效 patch，而非完整 state 副本
         const patchValidation = validateSummaryPatch(trimmedDocument.actions);
         if (patchValidation.warnings.length > 0) {
+            summaryQualityWarnings.push(...patchValidation.warnings);
             await input.dependencies.appendMutationHistory({
                 action: 'patch_validation_warnings',
                 payload: {
@@ -436,6 +452,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
         );
         trimmedDocument.actions = diffGuardResult.document.actions;
         if (diffGuardResult.diagnostics.some((item) => item.removedPaths.length > 0 || item.downgradedToNoop)) {
+            summaryQualityWarnings.push('patch_diff_guard_applied');
             await input.dependencies.appendMutationHistory({
                 action: 'patch_diff_guard_applied',
                 payload: {
@@ -447,6 +464,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 
         const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
         if (!validation.valid || !validation.document) {
+            summaryQualityErrors.push(...validation.errors);
             const reasonCode = `validation_failed:${validation.errors.join(',') || 'unknown'}`;
             await input.dependencies.appendMutationHistory({
                 action: 'summary_failed',
@@ -469,6 +487,19 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             focusTypes: batchPlan.focusTypes,
             mutationDocument: validation.document,
         });
+        await input.dependencies.appendMutationHistory({
+            action: 'summary_mutation_batch_resolved',
+            payload: {
+                summaryJobId,
+                batchId: batchPlan.batchId,
+                focusTypes: batchPlan.focusTypes,
+                rawDocument: batchResult.data,
+                decodedDocument,
+                validatedDocument: validation.document,
+                validationWarnings: validation.warnings,
+            },
+        });
+        summaryQualityWarnings.push(...validation.warnings);
     }
 
     const stagingSnapshot = readSummaryMutationStagingSnapshot(summaryJobId);
@@ -554,6 +585,11 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             actionCount: finalMutationDocument.actions.length,
             batchCount: stagingSnapshot.batchResults.length,
             plannerDecision: resolvedPlannerDecision,
+            window: finalMutationDocument.window,
+            actions: finalMutationDocument.actions,
+            mutationCounts: buildSummaryMutationActionCounts(finalMutationDocument.actions),
+            qualityGuard: buildSummaryQualityGuardSummary(summaryQualityErrors, summaryQualityWarnings, finalMutationDocument.actions),
+            diagnostics: finalMutationDocument.diagnostics ?? {},
             worldProfile: resumedDiagnostics.worldProfile,
         },
     });
@@ -825,6 +861,78 @@ function normalizePlannerOutput(value: unknown): SummaryPlannerOutput {
         entities: normalizeStringArray(source.entities),
         topics: normalizeStringArray(source.topics),
         reasons: normalizeStringArray(source.reasons),
+        memory_value: normalizePlannerMemoryValue(source.memory_value),
+        suggested_operation_bias: normalizePlannerOperationBias(source.suggested_operation_bias),
+        skip_reason: String(source.skip_reason ?? '').trim() || undefined,
+    };
+}
+
+/**
+ * 功能：归一化 planner 记忆价值。
+ * @param value 原始值。
+ * @returns 记忆价值。
+ */
+function normalizePlannerMemoryValue(value: unknown): SummaryPlannerOutput['memory_value'] {
+    const text = String(value ?? '').trim();
+    if (text === 'none' || text === 'low' || text === 'medium' || text === 'high') {
+        return text;
+    }
+    return undefined;
+}
+
+/**
+ * 功能：归一化 planner 建议动作偏好。
+ * @param value 原始值。
+ * @returns 动作偏好列表。
+ */
+function normalizePlannerOperationBias(value: unknown): SummaryPlannerOutput['suggested_operation_bias'] {
+    const allowed = new Set(['ADD', 'UPDATE', 'MERGE', 'INVALIDATE', 'DELETE', 'NOOP']);
+    return normalizeStringArray(value)
+        .map((item: string): string => item.trim().toUpperCase())
+        .filter((item: string): boolean => allowed.has(item)) as SummaryPlannerOutput['suggested_operation_bias'];
+}
+
+/**
+ * 功能：统计总结 mutation 动作数量。
+ * @param actions 动作列表。
+ * @returns 动作计数。
+ */
+function buildSummaryMutationActionCounts(actions: SummaryMutationAction[]): Record<string, number> {
+    const counts: Record<string, number> = {
+        actionCount: actions.length,
+        addCount: 0,
+        updateCount: 0,
+        mergeCount: 0,
+        invalidateCount: 0,
+        deleteCount: 0,
+        noopCount: 0,
+    };
+    for (const action of actions) {
+        const key = `${String(action.action ?? '').trim().toLowerCase()}Count`;
+        counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+}
+
+/**
+ * 功能：构建总结质量守卫摘要。
+ * @param errors 错误列表。
+ * @param warnings 警告列表。
+ * @param actions 最终动作列表。
+ * @returns 质量守卫摘要。
+ */
+function buildSummaryQualityGuardSummary(
+    errors: string[],
+    warnings: string[],
+    actions: SummaryMutationAction[],
+): Record<string, unknown> {
+    const droppedCount = actions.filter((action: SummaryMutationAction): boolean => action.action === 'NOOP').length;
+    return {
+        issueCount: errors.length + warnings.length,
+        fixedCount: warnings.length,
+        droppedCount,
+        errors: normalizeStringArray(errors),
+        warnings: normalizeStringArray(warnings),
     };
 }
 

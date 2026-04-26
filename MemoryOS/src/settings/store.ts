@@ -251,7 +251,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     retrievalLogLevel: 'info',
     retrievalRulePack: 'hybrid',
     retrievalTracePanelEnabled: true,
-    retrievalMode: 'lexical_only',
+    retrievalMode: 'auto',
     retrievalDefaultTopK: 18,
     retrievalDefaultExpandDepth: 1,
     retrievalEnablePayloadFilter: true,
@@ -291,7 +291,7 @@ export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
 export function resolveRetrievalEnableQueryContextBuilder(
     retrievalMode: RetrievalMode,
 ): boolean {
-    return retrievalMode === 'vector_only' || retrievalMode === 'hybrid';
+    return retrievalMode === 'auto' || retrievalMode === 'vector_only' || retrievalMode === 'hybrid';
 }
 
 /**

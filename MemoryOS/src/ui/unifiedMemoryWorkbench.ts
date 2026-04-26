@@ -68,6 +68,7 @@ import {
     DEFAULT_MEMORY_FILTER_RULES,
 } from '../memory-filter';
 import { collectTakeoverSourceBundle, type MemoryTakeoverMessageSlice } from '../memory-takeover/takeover-source';
+import { hasMemoryLlmRuntime } from '../memory-summary';
 import { mountRelationshipGraph } from './workbenchTabs/actorTabs/relationshipGraph';
 import {
     buildMemoryGraphPageMarkup,
@@ -76,6 +77,19 @@ import {
 } from './workbenchPages/memoryGraphPage';
 import { DreamUiStateService } from './dream-ui-state-service';
 import { inspectMemoryDatabaseSnapshot } from '../db/database-snapshot-inspector';
+
+/**
+ * 功能：检查 LLMHub 是否可用于工作台 LLM 任务。
+ * @param taskName 当前任务名称。
+ * @returns 是否可以继续执行。
+ */
+function ensureWorkbenchLlmRuntime(taskName: string): boolean {
+    if (hasMemoryLlmRuntime()) {
+        return true;
+    }
+    toast.warning(`MemoryOS 需要 LLMHub 才能执行${taskName}，请先启用或配置 LLMHub。`);
+    return false;
+}
 
 const WORKBENCH_STYLE_ID = 'stx-memory-workbench-style';
 const graphService = new GraphService();
@@ -456,6 +470,7 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
         embeddingAvailable: false,
         vectorStoreAvailable: false,
         retrievalMode: settings.retrievalMode,
+        llmhubRerankAvailable: false,
         documentCount: 0,
         readyCount: 0,
         pendingCount: 0,
@@ -1140,10 +1155,20 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'capture-summary') {
+                if (!ensureWorkbenchLlmRuntime('总结任务')) {
+                    return;
+                }
                 await memory.postGeneration.scheduleRoundProcessing('unified_memory_workbench', { force: true });
                 invalidatePreviewSnapshot();
                 toast.success('已触发强制快照归档。');
                 await render();
+                return;
+            }
+            if (action === 'export-summary-replay') {
+                const replayBundle = buildSummaryReplayBundle(snapshot, memory.getChatKey());
+                const fileName = buildSummaryReplayExportFileName(memory.getChatKey());
+                downloadJsonFile(fileName, replayBundle);
+                toast.success('本轮提炼回放包已导出。');
                 return;
             }
             if (action === 'set-dream-subview') {
@@ -1183,6 +1208,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'dream-workbench-manual-dream') {
+                if (!ensureWorkbenchLlmRuntime('梦境任务')) {
+                    return;
+                }
                 const result = await memory.chatState.startDreamSession('manual');
                 if (!result.ok) {
                     toast.error(`手动 dream 启动失败：${String(result.errorMessage ?? result.reasonCode ?? 'unknown')}`);
@@ -1247,6 +1275,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'trigger-manual-dream') {
+                if (!ensureWorkbenchLlmRuntime('梦境任务')) {
+                    return;
+                }
                 const result = await memory.chatState.startDreamSession('manual');
                 if (!result.ok) {
                     toast.error(`手动 dream 启动失败：${String(result.errorMessage ?? result.reasonCode ?? 'unknown')}`);
@@ -1498,6 +1529,10 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                     await render();
                     return;
                 }
+                if (!ensureWorkbenchLlmRuntime('旧聊天接管')) {
+                    await render();
+                    return;
+                }
                 runTakeoverActionInBackground(async (): Promise<void> => {
                     takeoverProgressCache = null;
                     const plannedProgress = await memory.chatState.createTakeoverPlan(parsed.config);
@@ -1530,6 +1565,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'takeover-resume') {
+                if (!ensureWorkbenchLlmRuntime('旧聊天接管')) {
+                    return;
+                }
                 runTakeoverActionInBackground(async (): Promise<void> => {
                     toast.info('接管任务正在后台继续执行。');
                     const executionResult = await memory.chatState.resumeTakeover();
@@ -1547,6 +1585,9 @@ async function mountWorkbench(instance: SharedDialogInstance, options: UnifiedMe
                 return;
             }
             if (action === 'takeover-consolidate') {
+                if (!ensureWorkbenchLlmRuntime('旧聊天接管')) {
+                    return;
+                }
                 runTakeoverActionInBackground(async (): Promise<void> => {
                     toast.info('接管整合正在后台执行。');
                     const executionResult = await memory.chatState.runTakeoverConsolidation();
@@ -2846,6 +2887,68 @@ function buildChatDatabaseExportFileName(chatKey: string): string {
         .slice(0, 96) || 'memory_chat';
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     return `memory-chat-database-${normalizedChatKey}-${timestamp}.json`;
+}
+
+/**
+ * 功能：生成总结提炼回放包文件名。
+ * @param chatKey 当前聊天键。
+ * @returns 可下载的文件名。
+ */
+function buildSummaryReplayExportFileName(chatKey: string): string {
+    const normalizedChatKey = String(chatKey ?? '')
+        .trim()
+        .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 96) || 'memory_chat';
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `memory-summary-replay-${normalizedChatKey}-${timestamp}.json`;
+}
+
+/**
+ * 功能：构建总结提炼回放包。
+ * @param snapshot 工作台快照。
+ * @param chatKey 当前聊天键。
+ * @returns 回放包。
+ */
+function buildSummaryReplayBundle(snapshot: WorkbenchSnapshot, chatKey: string): Record<string, unknown> {
+    const latestSummary = [...(snapshot.summaries ?? [])]
+        .sort((left, right): number => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0] ?? null;
+    const summaryHistory = [...(snapshot.mutationHistory ?? [])]
+        .filter((record): boolean => [
+            'summary_planner_resolved',
+            'summary_mutation_batches_planned',
+            'summary_mutation_batch_resolved',
+            'patch_validation_warnings',
+            'patch_diff_guard_applied',
+            'mutation_validated',
+            'mutation_applied',
+            'summary_failed',
+        ].includes(record.action))
+        .sort((left, right): number => Number(left.ts ?? 0) - Number(right.ts ?? 0));
+    const latestPlanner = [...summaryHistory]
+        .filter((record): boolean => record.action === 'summary_planner_resolved')
+        .sort((left, right): number => Number(right.ts ?? 0) - Number(left.ts ?? 0))[0] ?? null;
+    const latestValidated = [...summaryHistory]
+        .filter((record): boolean => record.action === 'mutation_validated')
+        .sort((left, right): number => Number(right.ts ?? 0) - Number(left.ts ?? 0))[0] ?? null;
+    return {
+        schemaVersion: 'memory-summary-replay:v1',
+        exportedAt: Date.now(),
+        chatKey,
+        planner: latestPlanner?.payload ?? null,
+        mutation: latestValidated?.payload ?? null,
+        summary: latestSummary,
+        promptPreview: snapshot.preview ? {
+            query: snapshot.preview.query,
+            generatedAt: snapshot.preview.generatedAt,
+            systemText: snapshot.preview.systemText,
+            roleText: snapshot.preview.roleText,
+            finalText: snapshot.preview.finalText,
+            diagnostics: snapshot.preview.diagnostics,
+        } : null,
+        history: summaryHistory,
+        entryAuditRecords: snapshot.entryAuditRecords ?? [],
+    };
 }
 
 /**

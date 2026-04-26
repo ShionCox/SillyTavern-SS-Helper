@@ -1,6 +1,7 @@
 import { openSharedDialog, type SharedDialogInstance } from '../../../_Components/sharedDialog';
 import { logger, toast } from '../runtime/runtime-services';
 import { readMemoryOSSettings } from '../settings/store';
+import { hasMemoryLlmRuntime } from '../memory-summary';
 import type { MemorySDKImpl } from '../sdk/memory-sdk';
 import type {
     DreamMaintenanceProposalRecord,
@@ -13,6 +14,18 @@ import {
     resolveDreamMaintenanceEffectiveStatus,
 } from '../services/dream-maintenance-state';
 import { formatDreamWorkbenchText, resolveDreamWorkbenchText } from './workbenchLocale';
+
+/**
+ * 功能：检查梦境工作台是否可执行 LLM 任务。
+ * @returns 是否可以继续执行。
+ */
+function ensureDreamWorkbenchLlmRuntime(): boolean {
+    if (hasMemoryLlmRuntime()) {
+        return true;
+    }
+    toast.warning('MemoryOS 需要 LLMHub 才能执行梦境任务，请先启用或配置 LLMHub。');
+    return false;
+}
 
 const DREAM_WORKBENCH_ID = 'stx-memory-dream-workbench';
 const DREAM_WORKBENCH_STYLE_ID = 'stx-memory-dream-workbench-style';
@@ -409,6 +422,9 @@ export function openDreamWorkbench(): void {
                         void render();
                     });
                     root.querySelector('[data-dream-workbench-action="manual-dream"]')?.addEventListener('click', (): void => {
+                        if (!ensureDreamWorkbenchLlmRuntime()) {
+                            return;
+                        }
                         void memory.chatState.startDreamSession('manual').then(() => render());
                     });
                     /**

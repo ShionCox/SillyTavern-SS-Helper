@@ -86,6 +86,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
     const latestTraceRecords = snapshot.recallExplanation?.traceRecords ?? [];
     const promptSizeStats = buildPromptSizeStatsMarkup(snapshot);
     const actionDistribution = buildActionDistributionMarkup(snapshot);
+    const summaryExtractionDiagnostics = buildSummaryExtractionDiagnosticsMarkup(snapshot);
     const summaryStageDetails = buildSummaryStageDetailsMarkup(snapshot);
 
     return `
@@ -96,6 +97,7 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                     <input class="stx-memory-workbench__input" id="stx-memory-preview-query" placeholder="${escapeAttr(resolvePreviewWorkbenchText('preview_query_placeholder'))}" style="width:280px;" value="${escapeAttr(state.previewQuery)}">
                     <button class="stx-memory-workbench__button" data-action="refresh-preview"><i class="fa-solid fa-satellite-dish"></i> ${escapeHtml(resolvePreviewWorkbenchText('refresh_preview'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="capture-summary"><i class="fa-solid fa-camera"></i> ${escapeHtml(resolvePreviewWorkbenchText('capture_summary'))}</button>
+                    <button class="stx-memory-workbench__ghost-btn" data-action="export-summary-replay"><i class="fa-solid fa-box-archive"></i> ${escapeHtml(resolvePreviewWorkbenchText('export_summary_replay'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="export-chat-database"><i class="fa-solid fa-file-export"></i> ${escapeHtml(resolvePreviewWorkbenchText('export_chat_database'))}</button>
                     <button class="stx-memory-workbench__ghost-btn" data-action="select-database-snapshot"><i class="fa-solid fa-file-import"></i> ${escapeHtml(resolvePreviewWorkbenchText('read_exported_database'))}</button>
                     <input id="stx-memory-database-snapshot-file" type="file" accept="application/json,.json" hidden>
@@ -164,6 +166,8 @@ export function buildPreviewViewMarkup(snapshot: WorkbenchSnapshot, state: Workb
                 ${promptSizeStats}
 
                 ${actionDistribution}
+
+                ${summaryExtractionDiagnostics}
 
                 ${summaryStageDetails}
 
@@ -570,6 +574,194 @@ function buildActionDistributionMarkup(snapshot: WorkbenchSnapshot): string {
             ${failedSummary}
         </div>
     `;
+}
+
+/**
+ * 功能：构建本轮记忆提炼诊断卡片。
+ * @param snapshot 工作台快照。
+ * @returns HTML 片段。
+ */
+function buildSummaryExtractionDiagnosticsMarkup(snapshot: WorkbenchSnapshot): string {
+    const plannerRecord = findLatestMutationHistoryRecord(snapshot, 'summary_planner_resolved');
+    const validatedRecord = findLatestMutationHistoryRecord(snapshot, 'mutation_validated');
+    const appliedRecord = findLatestMutationHistoryRecord(snapshot, 'mutation_applied');
+    const failedRecord = findLatestMutationHistoryRecord(snapshot, 'summary_failed');
+    if (!plannerRecord && !validatedRecord && !failedRecord) {
+        return `
+            <div class="stx-memory-workbench__card">
+                <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('summary_extraction_diagnostics'))}</div>
+                <div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_summary_extraction_diagnostics'))}</div>
+            </div>
+        `;
+    }
+
+    const plannerPayload = normalizeRecord(plannerRecord?.payload);
+    const validatedPayload = normalizeRecord(validatedRecord?.payload);
+    const qualityGuard = normalizeRecord(validatedPayload.qualityGuard);
+    const mutationCounts = normalizeRecord(validatedPayload.mutationCounts);
+    const actions = Array.isArray(validatedPayload.actions) ? validatedPayload.actions as Array<Record<string, unknown>> : [];
+    const windowRecord = normalizeRecord(validatedPayload.window);
+    const failedPayload = normalizeRecord(failedRecord?.payload);
+    const validationErrors = Array.isArray(failedPayload.validationErrors)
+        ? (failedPayload.validationErrors as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    const qualityWarnings = Array.isArray(qualityGuard.warnings)
+        ? (qualityGuard.warnings as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+
+    return `
+        <div class="stx-memory-workbench__card">
+            <div class="stx-memory-workbench__panel-title">${escapeHtml(resolvePreviewWorkbenchText('summary_extraction_diagnostics'))}</div>
+            <div class="stx-memory-workbench__info-list stx-memory-workbench__info-list--triple">
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('raw_timeline'))}</span><strong>${escapeHtml(formatSummaryWindowRange(windowRecord, plannerPayload))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('planner_result'))}</span><strong>${escapeHtml(String(plannerPayload.shouldUpdate ?? '-'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('memory_value'))}</span><strong>${escapeHtml(String(plannerPayload.memoryValue ?? '-'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('focus_types'))}</span><strong>${escapeHtml(formatStringList(plannerPayload.focusTypes))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('operation_bias'))}</span><strong>${escapeHtml(formatStringList(plannerPayload.suggestedOperationBias))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('skip_reason'))}</span><strong>${escapeHtml(String(plannerPayload.skipReason ?? '-'))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('mutation_overview'))}</span><strong>${escapeHtml(formatMutationCounts(mutationCounts, validatedPayload))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('quality_guard'))}</span><strong>${escapeHtml(formatQualityGuard(qualityGuard, validationErrors))}</strong></div>
+                <div class="stx-memory-workbench__info-row"><span>${escapeHtml(resolvePreviewWorkbenchText('summary_id'))}</span><strong>${escapeHtml(String(appliedRecord?.payload.summaryId ?? '-'))}</strong></div>
+            </div>
+            ${qualityWarnings.length > 0 || validationErrors.length > 0 ? `
+                <div style="margin-top:10px; padding:8px 10px; border-left:3px solid var(--mw-warn); background:rgba(239,68,68,0.08); border-radius:0 4px 4px 0; font-size:12px; line-height:1.6;">
+                    ${validationErrors.length > 0 ? `<div>${escapeHtml(resolvePreviewWorkbenchText('validation_errors'))}${escapeHtml(validationErrors.join('；'))}</div>` : ''}
+                    ${qualityWarnings.length > 0 ? `<div>${escapeHtml(resolvePreviewWorkbenchText('quality_guard'))}：${escapeHtml(qualityWarnings.join('；'))}</div>` : ''}
+                </div>
+            ` : ''}
+            <div style="margin-top:12px;">
+                <div class="stx-memory-workbench__mini-title">${escapeHtml(resolvePreviewWorkbenchText('action_detail_list'))}</div>
+                <div class="stx-memory-workbench__stack" style="gap:8px; max-height:520px; overflow-y:auto; padding-right:4px;">
+                    ${actions.length > 0 ? actions.map((action: Record<string, unknown>, index: number): string => renderSummaryActionDiagnostic(action, index)).join('') : `<div class="stx-memory-workbench__empty">${escapeHtml(resolvePreviewWorkbenchText('no_action_records'))}</div>`}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 功能：渲染单条 summary action 诊断。
+ * @param action action 记录。
+ * @param index 序号。
+ * @returns HTML。
+ */
+function renderSummaryActionDiagnostic(action: Record<string, unknown>, index: number): string {
+    const sourceEvidence = normalizeRecord(action.sourceEvidence);
+    const reasonCodes = Array.isArray(action.reasonCodes)
+        ? (action.reasonCodes as unknown[]).map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+        : [];
+    const detailPayload = firstNonEmptyRecord(action.patch, action.newRecord, action.payload);
+    const title = String(action.title ?? action.entityKey ?? action.compareKey ?? action.candidateId ?? action.targetKind ?? '').trim();
+    const rawId = `summary_action_raw_${index}_${Math.random().toString(36).slice(2, 8)}`;
+    return `
+        <article style="padding:10px 12px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.12); border-radius:8px;">
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
+                <span style="padding:3px 8px; border-radius:4px; background:rgba(56,189,248,0.12); color:var(--mw-accent-cyan); font-weight:700; font-size:12px;">${escapeHtml(String(action.action ?? '-'))}</span>
+                <strong style="font-size:13px; color:var(--mw-text);">${escapeHtml(title || `Action #${index + 1}`)}</strong>
+                <span style="font-size:12px; color:var(--mw-muted);">${escapeHtml(String(action.targetKind ?? '-'))}</span>
+                <span style="font-size:12px; color:var(--mw-muted);">${escapeHtml(resolvePreviewWorkbenchText('confidence'))} ${escapeHtml(String(action.confidence ?? '-'))}</span>
+                <span style="font-size:12px; color:var(--mw-muted);">${escapeHtml(resolvePreviewWorkbenchText('memory_value'))} ${escapeHtml(String(action.memoryValue ?? '-'))}</span>
+            </div>
+            <div style="font-size:12px; line-height:1.7; color:var(--mw-text);">
+                <div>${escapeHtml(resolvePreviewWorkbenchText('source_evidence'))}：<strong>${escapeHtml(String(sourceEvidence.brief ?? '-'))}</strong></div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('evidence_type'))}：<strong>${escapeHtml(String(sourceEvidence.type ?? '-'))}</strong>${Array.isArray(sourceEvidence.turnRefs) ? ` / ${escapeHtml(resolvePreviewWorkbenchText('turn_refs'))}：${escapeHtml((sourceEvidence.turnRefs as unknown[]).join('、'))}` : ''}</div>
+                <div>${escapeHtml(resolvePreviewWorkbenchText('reason_codes'))}：<strong>${escapeHtml(reasonCodes.join('、') || '-')}</strong></div>
+                ${Object.keys(detailPayload).length > 0 ? `<div>${escapeHtml(resolvePreviewWorkbenchText('raw_action'))}摘要：<strong>${escapeHtml(truncateText(stringifyData(detailPayload), 180))}</strong></div>` : ''}
+            </div>
+            <style>#${rawId}:checked ~ .content-${rawId} { display:block !important; }</style>
+            <div style="margin-top:8px;">
+                <input id="${rawId}" type="checkbox" style="display:none;">
+                <label for="${rawId}" style="cursor:pointer; font-size:11px; color:var(--mw-accent-cyan);">${escapeHtml(resolvePreviewWorkbenchText('view_raw_data'))} ▼</label>
+                <pre class="content-${rawId}" style="display:none; max-height:180px; overflow:auto; margin-top:6px; padding:8px; background:rgba(0,0,0,0.35); border-radius:4px; font-size:11px;">${escapeHtml(stringifyData(action))}</pre>
+            </div>
+        </article>
+    `;
+}
+
+/**
+ * 功能：读取第一个非空对象。
+ * @param values 候选对象。
+ * @returns 非空对象。
+ */
+function firstNonEmptyRecord(...values: unknown[]): Record<string, unknown> {
+    for (const value of values) {
+        const record = normalizeRecord(value);
+        if (Object.keys(record).length > 0) {
+            return record;
+        }
+    }
+    return {};
+}
+
+/**
+ * 功能：查找最新的变更历史记录。
+ * @param snapshot 工作台快照。
+ * @param action 动作名。
+ * @returns 最新记录或空值。
+ */
+function findLatestMutationHistoryRecord(snapshot: WorkbenchSnapshot, action: string): WorkbenchSnapshot['mutationHistory'][number] | null {
+    return [...(snapshot.mutationHistory ?? [])]
+        .filter((record): boolean => record.action === action)
+        .sort((left, right): number => Number(right.ts ?? 0) - Number(left.ts ?? 0))[0] ?? null;
+}
+
+/**
+ * 功能：格式化总结窗口范围。
+ * @param windowRecord 窗口字段。
+ * @param plannerPayload planner 字段。
+ * @returns 展示文本。
+ */
+function formatSummaryWindowRange(windowRecord: Record<string, unknown>, plannerPayload: Record<string, unknown>): string {
+    const fromTurn = Number(windowRecord.fromTurn ?? plannerPayload.fromTurn);
+    const toTurn = Number(windowRecord.toTurn ?? plannerPayload.toTurn);
+    if (Number.isFinite(fromTurn) && Number.isFinite(toTurn) && toTurn > 0) {
+        return `${Math.trunc(fromTurn)}-${Math.trunc(toTurn)} 楼`;
+    }
+    return '-';
+}
+
+/**
+ * 功能：格式化字符串列表。
+ * @param value 原始列表。
+ * @returns 展示文本。
+ */
+function formatStringList(value: unknown): string {
+    if (!Array.isArray(value)) {
+        return '-';
+    }
+    return value.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean).join(' / ') || '-';
+}
+
+/**
+ * 功能：格式化 mutation 计数。
+ * @param counts 计数字段。
+ * @param fallback 兜底 payload。
+ * @returns 展示文本。
+ */
+function formatMutationCounts(counts: Record<string, unknown>, fallback: Record<string, unknown>): string {
+    const actionCount = Number(counts.actionCount ?? fallback.actionCount ?? 0);
+    return [
+        `${resolvePreviewWorkbenchText('action_count')} ${Number.isFinite(actionCount) ? actionCount : 0}`,
+        `ADD ${Number(counts.addCount ?? 0) || 0}`,
+        `UPDATE ${Number(counts.updateCount ?? 0) || 0}`,
+        `MERGE ${Number(counts.mergeCount ?? 0) || 0}`,
+        `INVALIDATE ${Number(counts.invalidateCount ?? 0) || 0}`,
+        `DELETE ${Number(counts.deleteCount ?? 0) || 0}`,
+        `NOOP ${Number(counts.noopCount ?? 0) || 0}`,
+    ].join('，');
+}
+
+/**
+ * 功能：格式化质量守卫摘要。
+ * @param qualityGuard 质量守卫 payload。
+ * @param validationErrors 校验错误。
+ * @returns 展示文本。
+ */
+function formatQualityGuard(qualityGuard: Record<string, unknown>, validationErrors: string[]): string {
+    const issueCount = Number(qualityGuard.issueCount ?? validationErrors.length ?? 0) || 0;
+    const fixedCount = Number(qualityGuard.fixedCount ?? 0) || 0;
+    const droppedCount = Number(qualityGuard.droppedCount ?? 0) || 0;
+    return `${resolvePreviewWorkbenchText('quality_issue_count')} ${issueCount}，${resolvePreviewWorkbenchText('quality_fixed_count')} ${fixedCount}，${resolvePreviewWorkbenchText('quality_dropped_count')} ${droppedCount}`;
 }
 
 /**

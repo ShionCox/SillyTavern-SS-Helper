@@ -24,3 +24,9 @@ export type { SummaryMutationDocument, SummaryMutationAction, SummaryMutationAct
 export type { MemoryLLMApi, MemoryLLMConsumerRegistration, MemoryLLMTaskDescriptor, MemoryLLMRunResult } from './llm-types';
 export { readMemoryLLMApi } from './llm-types';
 export { registerMemoryLLMTasks } from './consumer-registration';
+export {
+    hasMemoryLlmRuntime,
+    readMemoryLlmDependencyStatus,
+    type MemoryLlmDependencyStatus,
+    type MemoryLlmTaskStatus,
+} from './llm-status';

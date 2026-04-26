@@ -1,0 +1,58 @@
+{
+  "name": "duplicate_should_noop",
+  "mutationDocument": {
+    "schemaVersion": "1.0.0",
+    "window": {
+      "fromTurn": 10,
+      "toTurn": 12
+    },
+    "actions": [
+      {
+        "action": "ADD",
+        "targetKind": "event",
+        "entityKey": "entity:event:north_gate_route",
+        "compareKey": "ck:v2:event:确认北城门撤离路线:王都",
+        "matchKeys": ["mk:event:确认北城门撤离路线"],
+        "confidence": 0.86,
+        "memoryValue": "high",
+        "sourceEvidence": {
+          "type": "story_narrative",
+          "brief": "艾琳确认北城门仍是可行撤离路线。",
+          "turnRefs": [10]
+        },
+        "newRecord": {
+          "summary": "艾琳确认北城门仍是可行撤离路线。"
+        },
+        "reasonCodes": ["event_confirmed"]
+      },
+      {
+        "action": "ADD",
+        "targetKind": "event",
+        "entityKey": "entity:event:north_gate_route_duplicate",
+        "compareKey": "ck:v2:event:确认北城门撤离路线:王都",
+        "matchKeys": ["mk:event:确认北城门撤离路线"],
+        "confidence": 0.84,
+        "memoryValue": "medium",
+        "sourceEvidence": {
+          "type": "story_narrative",
+          "brief": "撤离路线的同一事实再次出现。",
+          "turnRefs": [11]
+        },
+        "newRecord": {
+          "summary": "北城门路线被重复提及。"
+        },
+        "reasonCodes": ["event_repeated"]
+      }
+    ],
+    "diagnostics": {
+      "skippedCount": 0,
+      "noopReasons": [],
+      "possibleDuplicates": ["ck:v2:event:确认北城门撤离路线:王都"],
+      "sourceWarnings": []
+    }
+  },
+  "expected": {
+    "valid": false,
+    "requiredErrors": ["duplicate_add_comparekey:ck:v2:event:确认北城门撤离路线:王都"]
+  }
+}

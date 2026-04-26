@@ -20,9 +20,12 @@ describe('normalizeMemoryPromptSchema', () => {
         const newRecord = toRecord(itemProperties.newRecord);
         const payload = toRecord(itemProperties.payload);
 
-        expect(schemaRecord.required).toEqual(['schemaVersion', 'window', 'actions']);
-        expect(items.required).toEqual(['action', 'targetKind']);
+        expect(schemaRecord.required).toEqual(['schemaVersion', 'window', 'actions', 'diagnostics']);
+        expect(items.required).toEqual(['action', 'targetKind', 'reasonCodes']);
         expect(itemProperties.reasonCodes).toBeTruthy();
+        expect(itemProperties.memoryValue).toBeTruthy();
+        expect(itemProperties.sourceEvidence).toBeTruthy();
+        expect(itemProperties.timeContext).toBeTruthy();
         expect(itemProperties.targetId).toBeTruthy();
         expect(itemProperties.sourceIds).toBeTruthy();
         expect(patch.type).toBe('object');

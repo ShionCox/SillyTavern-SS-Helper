@@ -9,7 +9,7 @@
  */
 
 import type { RetrievalResultItem, RetrievalCandidate, RetrievalContextRoute } from '../memory-retrieval/types';
-import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
+import type { EffectiveRetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { MemoryRetrievalProgress } from '../memory-retrieval/retrieval-input';
 import type { VectorStrategyDecision } from '../types/vector-strategy';
 import type { VectorSearchHit } from '../types/vector-search';
@@ -27,7 +27,7 @@ import { loadVectorRecallStats, saveVectorRecallStat } from '../db/vector-db';
 
 export interface HybridRetrievalInput {
     /** 检索模式 */
-    retrievalMode: RetrievalMode;
+    retrievalMode: EffectiveRetrievalMode;
     /** 查询文本 */
     query: string;
     /** 聊天键 */
@@ -313,6 +313,7 @@ export class HybridRetrievalService {
      * @returns 策略决策。
      */
     private buildDecision(input: HybridRetrievalInput, settings: MemoryOSSettings): VectorStrategyDecision {
+        const routedMode: 'vector_only' | 'hybrid' = input.retrievalMode === 'vector_only' ? 'vector_only' : 'hybrid';
         if (!settings.vectorEnableStrategyRouting) {
             return {
                 route: 'fast_vector',
@@ -325,7 +326,7 @@ export class HybridRetrievalService {
         const baseDecision = this.strategyRouter.route({
             query: input.query,
             mergedContextText: input.queryContext?.mergedContextText,
-            retrievalMode: input.retrievalMode as 'vector_only' | 'hybrid',
+            retrievalMode: routedMode,
             actorAnchorKeys: input.contextRoute?.entityAnchors?.actorKeys,
             relationAnchorKeys: input.contextRoute?.entityAnchors?.relationKeys,
             worldAnchorKeys: input.contextRoute?.entityAnchors?.worldKeys,

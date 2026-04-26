@@ -127,10 +127,14 @@ export function normalizeSummaryPatch(
                 ...(action.title ? { title: String(action.title).trim() } : {}),
                 ...(action.reason ? { reason: String(action.reason).trim() } : {}),
                 ...(action.confidence !== undefined ? { confidence: clampConfidence(action.confidence) } : {}),
+                ...(action.memoryValue ? { memoryValue: action.memoryValue } : {}),
+                ...(action.sourceEvidence ? { sourceEvidence: action.sourceEvidence } : {}),
                 ...(action.targetId ? { targetId: String(action.targetId).trim() } : {}),
                 ...(action.sourceIds ? { sourceIds: action.sourceIds } : {}),
                 ...(action.candidateId ? { candidateId: String(action.candidateId).trim() } : {}),
+                ...(action.entityKey ? { entityKey: String(action.entityKey).trim() } : {}),
                 ...(action.compareKey ? { compareKey: String(action.compareKey).trim() } : {}),
+                ...(action.matchKeys ? { matchKeys: dedupeStrings(action.matchKeys) } : {}),
                 ...(action.reasonCodes ? { reasonCodes: dedupeStrings(action.reasonCodes) } : {}),
             };
 

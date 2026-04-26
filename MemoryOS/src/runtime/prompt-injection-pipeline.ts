@@ -160,6 +160,10 @@ function buildSkippedInjectionResult(): PromptInjectResult {
 export async function runPromptReadyInjectionPipeline(input: {
     memory: PipelineMemoryLike;
     promptMessages: SdkTavernPromptMessageEvent[];
+    promptTargetDiagnostics?: {
+        selectedPath: string;
+        allPaths: string[];
+    };
     readSettings: () => PipelineSettings;
     query?: string;
     sourceMessageId?: string;
@@ -184,6 +188,19 @@ export async function runPromptReadyInjectionPipeline(input: {
         ?? latestUserRecord.id
         ?? '',
     ).trim() || undefined;
+
+    if ((input.promptTargetDiagnostics?.allPaths.length ?? 0) > 1) {
+        logs.push({
+            stage: 'prompt_target',
+            status: 'ok',
+            reasonCodes: ['multiple_prompt_targets_detected'],
+            summary: '检测到多个 prompt 数组目标，本次已记录实际选用路径。',
+            details: {
+                selectedPath: input.promptTargetDiagnostics?.selectedPath ?? '',
+                allPaths: input.promptTargetDiagnostics?.allPaths ?? [],
+            },
+        });
+    }
 
     const promptTrace = createMemoryTraceContext({
         chatKey: String(input.memory?.getChatKey?.() ?? input.currentChatKey ?? '').trim() || 'unknown',
@@ -272,10 +289,7 @@ export async function runPromptReadyInjectionPipeline(input: {
         latestExplanation: latestExplanation ?? null,
         finalPromptMessages: promptMessages,
         finalPromptText: promptMessages
-            .map((item: SdkTavernPromptMessageEvent): string => {
-                const record = item as Record<string, unknown>;
-                return String(record.content ?? record.mes ?? '');
-            })
+            .map((item: SdkTavernPromptMessageEvent): string => getTavernPromptMessageTextEvent(item))
             .join('\n'),
         logs,
     };

@@ -14,6 +14,18 @@ export interface SummaryPlannerOutput {
     entities: string[];
     topics: string[];
     reasons: string[];
+    memory_value?: 'none' | 'low' | 'medium' | 'high';
+    suggested_operation_bias?: SummaryMutationActionType[];
+    skip_reason?: string;
+}
+
+/**
+ * 功能：定义总结动作的证据来源。
+ */
+export interface SummaryMutationSourceEvidence {
+    type: string;
+    brief: string;
+    turnRefs?: number[];
 }
 
 /**
@@ -40,10 +52,14 @@ export interface SummaryMutationAction {
     title?: string;
     reason?: string;
     confidence?: number;
+    memoryValue?: 'low' | 'medium' | 'high';
+    sourceEvidence?: SummaryMutationSourceEvidence;
     targetId?: string;
     sourceIds?: string[];
     candidateId?: string;
+    entityKey?: string;
     compareKey?: string;
+    matchKeys?: string[];
     patch?: Record<string, unknown>;
     newRecord?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -64,5 +80,10 @@ export interface SummaryMutationDocument {
     /** 批次时间评估（由时间引擎生成） */
     batchTimeAssessment?: BatchTimeAssessment;
     actions: SummaryMutationAction[];
+    diagnostics?: {
+        skippedCount?: number;
+        noopReasons?: string[];
+        possibleDuplicates?: string[];
+        sourceWarnings?: string[];
+    };
 }
-

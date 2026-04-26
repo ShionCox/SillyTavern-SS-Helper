@@ -10,6 +10,7 @@ import changelogData from '../../changelog.json';
 import { logger } from '../runtime/runtime-services';
 import { openUnifiedMemoryWorkbench } from './unifiedMemoryWorkbench';
 import { DEFAULT_MEMORY_OS_SETTINGS, MEMORY_OS_SETTINGS_NAMESPACE, type MemoryOSSettings, readMemoryOSSettings, writeMemoryOSSettings } from '../settings/store';
+import { readMemoryLlmDependencyStatus, type MemoryLlmDependencyStatus, type MemoryLlmTaskStatus } from '../memory-summary';
 
 const CARD_ID = 'stx-memoryos-card';
 const STYLE_ID = 'stx-memoryos-settings-style';
@@ -19,6 +20,7 @@ const DRAWER_ICON_ID = 'stx-memoryos-drawer-icon';
 const BTN_ID = 'stx-memoryos-open-workbench';
 const RESET_BTN_ID = 'stx-memoryos-reset-settings';
 const STATUS_ID = 'stx-memoryos-settings-status';
+const LLM_STATUS_CARD_ID = 'stx-memoryos-llm-status-card';
 const ADVANCED_MODE_ID = 'stx-memoryos-advanced-mode';
 const ADVANCED_MODE_UI_STATE_KEY = 'settingsAdvancedModeEnabled';
 const ADVANCED_OPTION_ATTR = 'data-memoryos-advanced-option="true"';
@@ -282,6 +284,7 @@ const TABS: TabBinding[] = [
 
 let isSyncingForm = false;
 let autoSaveTimer: number | null = null;
+let llmStatusTimer: number | null = null;
 let MEMORYOS_THEME_BINDING_READY = false;
 
 /**
@@ -378,6 +381,43 @@ function buildChangelogHtml(): string {
 }
 
 /**
+ * 功能：转义 HTML 文本。
+ * @param value 原始文本。
+ * @returns 转义后的文本。
+ */
+function escapeHtml(value: string): string {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * 功能：构建 LLMHub 任务状态占位卡。
+ * @returns HTML。
+ */
+function buildLlmStatusCardHtml(): string {
+    return `
+        <div id="${LLM_STATUS_CARD_ID}" class="stx-ui-item stx-ui-item-stack stx-memoryos-llm-status-card">
+            <div class="stx-ui-item-main">
+                <div class="stx-ui-item-title">LLMHub 状态</div>
+                <div class="stx-ui-item-desc">正在读取 LLMHub 连接和任务路由状态。</div>
+            </div>
+            <div class="stx-memoryos-llm-status-grid">
+                <div class="stx-memoryos-llm-status-row"><span>LLMHub</span><strong>读取中</strong></div>
+                <div class="stx-memoryos-llm-status-row"><span>当前模型</span><strong>读取中</strong></div>
+                <div class="stx-memoryos-llm-status-row"><span>总结任务</span><strong>读取中</strong></div>
+                <div class="stx-memoryos-llm-status-row"><span>梦境任务</span><strong>读取中</strong></div>
+                <div class="stx-memoryos-llm-status-row"><span>旧聊天接管</span><strong>读取中</strong></div>
+                <div class="stx-memoryos-llm-status-row"><span>冷启动</span><strong>读取中</strong></div>
+            </div>
+        </div>
+    `;
+}
+
+/**
  * 功能：构建数字输入框。
  * @param id 控件 ID。
  * @param min 最小值。
@@ -440,6 +480,15 @@ function ensureSettingsStyles(): void {
         #${CARD_ID} .stx-ui-input:focus{border-color:var(--ss-theme-border-strong,rgba(197,160,89,.72));box-shadow:0 0 0 2px var(--ss-theme-focus-ring,rgba(197,160,89,.22));}
         #${CARD_ID} .stx-ui-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:6px;}
         #${CARD_ID} .stx-ui-status{font-size:12px;opacity:.84;}
+        #${CARD_ID} .stx-memoryos-llm-status-card{border-color:color-mix(in srgb,var(--ss-theme-accent,#c5a059) 35%,var(--ss-theme-border,rgba(255,255,255,.2)));background:linear-gradient(180deg,var(--ss-theme-surface-2,rgba(0,0,0,.18)),var(--ss-theme-surface-1,rgba(0,0,0,.12)));}
+        #${CARD_ID} .stx-memoryos-llm-status-card.is-unavailable{border-color:rgba(244,67,54,.45);}
+        #${CARD_ID} .stx-memoryos-llm-status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;}
+        #${CARD_ID} .stx-memoryos-llm-status-row{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--ss-theme-border,rgba(255,255,255,.12));border-radius:8px;padding:8px 10px;background:var(--ss-theme-surface-1,rgba(0,0,0,.12));min-width:0;}
+        #${CARD_ID} .stx-memoryos-llm-status-row span{font-size:12px;opacity:.76;overflow-wrap:anywhere;}
+        #${CARD_ID} .stx-memoryos-llm-status-row strong{font-size:12px;text-align:right;overflow-wrap:anywhere;}
+        #${CARD_ID} .stx-memoryos-llm-status-ok{color:#81c784;}
+        #${CARD_ID} .stx-memoryos-llm-status-bad{color:#ef9a9a;}
+        #${CARD_ID} .stx-memoryos-llm-status-muted{opacity:.72;}
         #${CARD_ID} .stx-ui-about-meta{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:6px;}
         #${CARD_ID} .stx-ui-about-meta-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;opacity:.86;word-break:break-word;}
         #${CARD_ID} .stx-ui-about-meta-item a{color:var(--ss-theme-accent,var(--SmartThemeQuoteColor,#c5a059));text-decoration:none;word-break:break-all;}
@@ -453,7 +502,7 @@ function ensureSettingsStyles(): void {
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-copy{display:none;}
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-body{width:auto;}
         #${CARD_ID} .stx-ui-inline-checkbox.is-control-only .stx-shared-checkbox-control{min-width:70px;justify-content:center;}
-        @media (max-width:900px){#${CARD_ID} .stx-ui-form-grid{grid-template-columns:minmax(0,1fr);}#${CARD_ID} .stx-ui-tabs,#${CARD_ID} .stx-ui-actions{justify-content:flex-start;}}
+        @media (max-width:900px){#${CARD_ID} .stx-ui-form-grid,#${CARD_ID} .stx-memoryos-llm-status-grid{grid-template-columns:minmax(0,1fr);}#${CARD_ID} .stx-ui-tabs,#${CARD_ID} .stx-ui-actions{justify-content:flex-start;}}
     `;
     document.head.appendChild(style);
 }
@@ -474,7 +523,7 @@ function buildSettingsContentHtml(): string {
     });
     const retrievalLogLevelSelect = `<select id="${RETRIEVAL_LOG_LEVEL_ID}" class="stx-ui-input"><option value="info">信息级</option><option value="debug">调试级</option></select>`;
     const retrievalRulePackSelect = `<select id="${RETRIEVAL_RULE_PACK_ID}" class="stx-ui-input"><option value="hybrid">混合规则包</option><option value="native">原生规则包</option><option value="perocore">PeroCore 兼容包</option></select>`;
-    const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
+    const retrievalModeSelect = `<select id="${RETRIEVAL_MODE_ID}" class="stx-ui-input"><option value="auto">自动策略</option><option value="lexical_only">仅词法检索</option><option value="vector_only">仅向量检索</option><option value="hybrid">混合检索</option></select>`;
     const dreamStylePresetSelect = `<select id="${DREAM_STYLE_PRESET_ID}" class="stx-ui-input"><option value="reflective">内省型 reflective</option><option value="analytic">分析型 analytic</option><option value="symbolic">象征型 symbolic</option></select>`;
     const displayName = String((manifestJson as Record<string, unknown>).display_name ?? 'MemoryOS').trim() || 'MemoryOS';
     return `
@@ -487,6 +536,7 @@ function buildSettingsContentHtml(): string {
         </div>
         ${advancedModeToggle}
         <div id="${PANEL_GENERAL_ID}" class="stx-ui-panel">
+            ${buildLlmStatusCardHtml()}
             ${divider('通用控制')}
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">统一记忆工作台</div><div class="stx-ui-item-desc">进入统一工作台，管理条目、类型、角色、世界实体和接管测试能力。</div></div><div class="stx-ui-inline">${openWorkbenchBtn}</div></div>
             <div class="stx-ui-item"><div class="stx-ui-item-main"><div class="stx-ui-item-title">启用 MemoryOS</div><div class="stx-ui-item-desc">关闭后将停止消息写入、自动总结、注入和相关后台流程。</div></div><div class="stx-ui-inline">${inlineCheckbox(ENABLED_ID, '启用 MemoryOS')}</div></div>
@@ -904,7 +954,7 @@ function readSettingsFromForm(): Partial<MemoryOSSettings> {
         interpretationMaxItems: Number(text(INTERPRETATION_MAX_ITEMS_ID, String(DEFAULT_MEMORY_OS_SETTINGS.interpretationMaxItems))),
         retrievalMode: (() => {
             const v = text(RETRIEVAL_MODE_ID, DEFAULT_MEMORY_OS_SETTINGS.retrievalMode);
-            return v === 'lexical_only' || v === 'vector_only' || v === 'hybrid' ? v : DEFAULT_MEMORY_OS_SETTINGS.retrievalMode;
+            return v === 'auto' || v === 'lexical_only' || v === 'vector_only' || v === 'hybrid' ? v : DEFAULT_MEMORY_OS_SETTINGS.retrievalMode;
         })(),
         retrievalDefaultTopK: Number(text(RETRIEVAL_DEFAULT_TOPK_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultTopK))),
         retrievalDefaultExpandDepth: Number(text(RETRIEVAL_DEFAULT_EXPAND_DEPTH_ID, String(DEFAULT_MEMORY_OS_SETTINGS.retrievalDefaultExpandDepth))),
@@ -1039,6 +1089,73 @@ function syncInjectionBudgetUiState(): void {
 function setStatusText(text: string): void {
     const element = document.getElementById(STATUS_ID);
     if (element) element.textContent = text;
+}
+
+/**
+ * 功能：渲染单个 LLM 任务状态。
+ * @param label 标签。
+ * @param status 任务状态。
+ * @returns HTML。
+ */
+function renderLlmTaskStatusRow(label: string, status: MemoryLlmTaskStatus): string {
+    const stateClass = status.available ? 'stx-memoryos-llm-status-ok' : 'stx-memoryos-llm-status-bad';
+    const stateText = status.available ? '可用' : '不可用';
+    const detail = status.model || status.resourceLabel || status.blockedReason;
+    return `<div class="stx-memoryos-llm-status-row"><span>${escapeHtml(label)}</span><strong class="${stateClass}">${stateText}${detail ? ` · ${escapeHtml(detail)}` : ''}</strong></div>`;
+}
+
+/**
+ * 功能：把 LLMHub 状态快照写入设置页状态卡。
+ * @param status LLMHub 依赖状态。
+ * @returns 无返回值。
+ */
+function renderLlmDependencyStatus(status: MemoryLlmDependencyStatus): void {
+    const card = document.getElementById(LLM_STATUS_CARD_ID);
+    if (!card) {
+        return;
+    }
+    card.classList.toggle('is-unavailable', !status.connected);
+    card.innerHTML = `
+        <div class="stx-ui-item-main">
+            <div class="stx-ui-item-title">LLMHub 状态</div>
+            <div class="stx-ui-item-desc">${status.connected ? 'MemoryOS 已检测到 LLMHub，以下为核心 LLM 任务路由状态。' : 'MemoryOS 需要 LLMHub 才能执行总结、梦境、旧聊天接管和冷启动。'}</div>
+        </div>
+        <div class="stx-memoryos-llm-status-grid">
+            <div class="stx-memoryos-llm-status-row"><span>LLMHub</span><strong class="${status.connected ? 'stx-memoryos-llm-status-ok' : 'stx-memoryos-llm-status-bad'}">${status.connected ? '已连接' : '未连接'}</strong></div>
+            <div class="stx-memoryos-llm-status-row"><span>当前模型</span><strong class="${status.currentModel ? '' : 'stx-memoryos-llm-status-muted'}">${escapeHtml(status.currentModel || '未解析')}</strong></div>
+            ${renderLlmTaskStatusRow('总结任务', status.summary)}
+            ${renderLlmTaskStatusRow('梦境任务', status.dream)}
+            ${renderLlmTaskStatusRow('旧聊天接管', status.takeover)}
+            ${renderLlmTaskStatusRow('冷启动', status.coldStart)}
+        </div>
+    `;
+}
+
+/**
+ * 功能：刷新设置页 LLMHub 状态卡。
+ * @returns 异步完成。
+ */
+async function refreshLlmDependencyStatusCard(): Promise<void> {
+    try {
+        renderLlmDependencyStatus(await readMemoryLlmDependencyStatus());
+    } catch (error) {
+        logger.warn('[MemoryOS] LLMHub 状态读取失败', error);
+    }
+}
+
+/**
+ * 功能：启动设置页 LLMHub 状态轮询。
+ * @returns 无返回值。
+ */
+function startLlmDependencyStatusPolling(): void {
+    if (llmStatusTimer !== null) {
+        window.clearInterval(llmStatusTimer);
+        llmStatusTimer = null;
+    }
+    void refreshLlmDependencyStatusCard();
+    llmStatusTimer = window.setInterval((): void => {
+        void refreshLlmDependencyStatusCard();
+    }, 5000);
 }
 
 /**
@@ -1212,6 +1329,7 @@ export async function renderSettingsUi(): Promise<void> {
     bindActionEvents();
     syncSettingsToForm(readMemoryOSSettings());
     syncAdvancedModeToForm();
+    startLlmDependencyStatusPolling();
     setStatusText('已加载当前设置');
 }
 

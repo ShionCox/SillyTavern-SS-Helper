@@ -1,4 +1,4 @@
-import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
+import { getTavernPromptMessageTextEvent, type SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../core/actor-key';
 import { buildRelationshipCompareKey } from '../core/compare-key';
 import { CompareKeyService } from '../core/compare-key-service';
@@ -10,7 +10,7 @@ import { renderRetentionNarrativePrefix } from '../memory-retention';
 import type { RetrievalCandidate } from '../memory-retrieval';
 import { EntryRepository } from '../repository/entry-repository';
 import { readMemoryOSSettings } from '../settings/store';
-import type { ActorMemoryProfile, MemoryEntry, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
+import type { ActorMemoryProfile, MemoryEntry, MemoryEntryType, PromptAssemblyRoleEntry, PromptAssemblySnapshot, RoleEntryMemory, StructuredBindings } from '../types';
 import type { MemoryCompareKeyIndexRecord } from '../db/db';
 import { getSharedRetrievalService } from '../runtime/vector-runtime';
 import { buildPromptTimeMeta } from '../memory-time/time-ranking';
@@ -107,9 +107,12 @@ export class PromptAssemblyService {
         });
 
         const matchedEntryIdSet = new Set(retrievalResult.items.map((item) => item.candidate.entryId));
-        const selectedEntries = sortEntriesByWorldStrategy(matchedEntryIdSet.size > 0
-            ? entries.filter((entry: MemoryEntry): boolean => matchedEntryIdSet.has(entry.entryId))
-            : entries.filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true).slice(0, 8), worldStrategy);
+        const selectedEntries = sortEntriesByWorldStrategy(
+            matchedEntryIdSet.size > 0
+                ? entries.filter((entry: MemoryEntry): boolean => matchedEntryIdSet.has(entry.entryId))
+                : this.selectFallbackSystemEntries(entries, typeMap, currentMaxFloor),
+            worldStrategy,
+        );
         const matchedActorKeys = this.resolvePromptMatchedActorKeys(
             retrievalResult.contextRoute?.entityAnchors.actorKeys ?? [],
             retrievalResult.items.map((item) => item.candidate),
@@ -505,6 +508,65 @@ export class PromptAssemblyService {
     }
 
     /**
+     * 功能：在召回为空时选择保守 fallback 条目。
+     * @param entries 全部记忆条目。
+     * @param typeMap 条目类型映射。
+     * @param currentMaxFloor 当前最大楼层。
+     * @returns 排序后的 fallback 条目。
+     */
+    private selectFallbackSystemEntries(
+        entries: MemoryEntry[],
+        typeMap: Map<string, MemoryEntryType>,
+        currentMaxFloor: number,
+    ): MemoryEntry[] {
+        return entries
+            .filter((entry: MemoryEntry): boolean => typeMap.get(entry.entryType)?.injectToSystem === true)
+            .sort((left: MemoryEntry, right: MemoryEntry): number => {
+                return this.resolveFallbackEntryScore(right, currentMaxFloor) - this.resolveFallbackEntryScore(left, currentMaxFloor);
+            })
+            .slice(0, 8);
+    }
+
+    /**
+     * 功能：计算 fallback 条目的排序分数。
+     * @param entry 记忆条目。
+     * @param currentMaxFloor 当前最大楼层。
+     * @returns 排序分数。
+     */
+    private resolveFallbackEntryScore(entry: MemoryEntry, currentMaxFloor: number): number {
+        const typeScore = this.resolveFallbackEntryTypeScore(entry);
+        const importanceScore = this.resolveEntryImportance(entry);
+        const updatedAtScore = Math.min(30, Math.max(0, (Number(entry.updatedAt ?? 0) || 0) / 86_400_000));
+        const floor = Number(entry.timeContext?.sequenceTime?.lastFloor ?? 0);
+        const floorDistance = floor > 0 && currentMaxFloor > 0 ? Math.max(0, currentMaxFloor - floor) : 9999;
+        const floorScore = floorDistance === 9999 ? 0 : Math.max(0, 40 - Math.min(40, floorDistance));
+        return typeScore + importanceScore + updatedAtScore + floorScore;
+    }
+
+    /**
+     * 功能：计算 fallback 条目的类型优先级。
+     * @param entry 记忆条目。
+     * @returns 类型优先级分数。
+     */
+    private resolveFallbackEntryTypeScore(entry: MemoryEntry): number {
+        const entryType = String(entry.entryType ?? '').trim();
+        const category = String(entry.category ?? '').trim();
+        if (entryType.startsWith('world_') || category.includes('世界') || category.includes('国家') || category.includes('城市') || category.includes('地点') || category.includes('组织')) {
+            return 500;
+        }
+        if (entryType === 'scene_shared_state' || entryType.includes('scene') || category.includes('场景')) {
+            return 420;
+        }
+        if (entryType === 'event' || category.includes('事件')) {
+            return 340;
+        }
+        if (entryType.includes('relationship') || category.includes('关系')) {
+            return 260;
+        }
+        return 120;
+    }
+
+    /**
      * 功能：估算条目重要度。
      * @param entry 记忆条目
      * @returns 重要度
@@ -716,8 +778,7 @@ export class PromptAssemblyService {
      * @returns 文本内容
      */
     private readPromptText(message: SdkTavernPromptMessageEvent): string {
-        const record = message as Record<string, unknown>;
-        return this.normalizeText(record.content ?? record.mes ?? record.text ?? '');
+        return this.normalizeText(getTavernPromptMessageTextEvent(message));
     }
 
     /**

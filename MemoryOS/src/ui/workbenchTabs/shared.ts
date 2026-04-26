@@ -115,6 +115,7 @@ export interface WorkbenchVectorRuntimeStatus {
     vectorEnableStrategyRouting?: boolean;
     vectorEnableRerank?: boolean;
     vectorEnableLLMHubRerank?: boolean;
+    llmhubRerankAvailable?: boolean;
 }
 
 export interface WorkbenchVectorSnapshot extends WorkbenchVectorRuntimeStatus {
@@ -133,7 +134,7 @@ export interface WorkbenchVectorSnapshot extends WorkbenchVectorRuntimeStatus {
 export interface WorkbenchVectorTestResult {
     generatedAt: number;
     query: string;
-    retrievalMode: 'lexical_only' | 'vector_only' | 'hybrid';
+    retrievalMode: 'auto' | 'lexical_only' | 'vector_only' | 'hybrid';
     providerId: string;
     diagnostics: RetrievalOutputDiagnostics;
     items: RetrievalResultItem[];
@@ -202,7 +203,7 @@ export interface WorkbenchState {
     takeoverProgressLoading: boolean;
     takeoverActionRunning: boolean;
     vectorQuery: string;
-    vectorMode: 'lexical_only' | 'vector_only' | 'hybrid';
+    vectorMode: 'auto' | 'lexical_only' | 'vector_only' | 'hybrid';
     vectorSourceKindFilter: string;
     vectorStatusFilter: string;
     vectorSchemaFilter: string;

@@ -7,6 +7,8 @@ import {
     buildSdkChatIdEvent,
     extractTavernPromptMessagesEvent,
     getTavernMessageTextEvent,
+    getTavernPromptMessageTextEvent,
+    listTavernPromptTargetsEvent,
 } from '../../../SDK/tavern';
 import type { SdkTavernPromptMessageEvent } from '../../../SDK/tavern';
 import { db, rebuildSSHelperDatabase } from '../db/db';
@@ -16,7 +18,7 @@ import { runPromptReadyInjectionPipeline, type PromptInjectionPipelineResult } f
 import manifestJson from '../../manifest.json';
 import { readMemoryOSSettings, subscribeMemoryOSSettings, type MemoryOSSettings } from '../settings/store';
 import { MEMORY_OS_PLUGIN_ID } from '../constants/pluginIdentity';
-import { readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
+import { hasMemoryLlmRuntime, readMemoryLLMApi, registerMemoryLLMTasks } from '../memory-summary';
 import { openMemoryBootstrapDialog } from '../ui/memory-bootstrap-dialog';
 import { openMemoryBootstrapReviewDialog } from '../ui/memory-bootstrap-review-dialog';
 import { openMemoryTakeoverDialog } from '../ui/memory-takeover-dialog';
@@ -36,7 +38,7 @@ import { resolveMemoryChatInitializationDecision } from './chat-initialization-d
 import type { MemoryTakeoverDetectionResult } from '../types';
 
 type HostEventSource = {
-    on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void;
+    on: (eventName: string, handler: (payload?: unknown) => void | Promise<void>) => void | (() => void);
 };
 
 type HostContext = {
@@ -89,8 +91,7 @@ function readPromptMessageText(message: unknown): string {
     if (!message || typeof message !== 'object') {
         return '';
     }
-    const record = message as Record<string, unknown>;
-    return String(record.content ?? record.mes ?? record.text ?? '').trim();
+    return getTavernPromptMessageTextEvent(message as SdkTavernPromptMessageEvent).trim();
 }
 
 /**
@@ -149,6 +150,15 @@ function confirmTakeoverRetry(errorMessage?: string, reasonCode?: string): boole
         + '是否立即重试当前任务？\n\n'
         + '选择“确定”会从当前暂停/失败的位置继续执行；选择“取消”则保留当前状态，稍后可手动恢复。',
     );
+}
+
+/**
+ * 功能：提示 LLMHub 依赖不可用。
+ * @param taskName 当前任务名称。
+ * @returns 无返回值。
+ */
+function warnLlmHubRequired(taskName: string): void {
+    toast.warning(`MemoryOS 需要 LLMHub 才能执行${taskName}，请先启用或配置 LLMHub。`);
 }
 
 /**
@@ -229,6 +239,7 @@ const MEMORY_OS_MANIFEST: PluginManifest = {
 export class MemoryOS {
     private readonly stxBus: EventBus;
     private readonly registry: PluginRegistry;
+    private readonly disposers: Array<() => void>;
     private llmTasksRegistered: boolean;
     private readonly coldStartPromptedChats: Set<string>;
     private readonly coldStartRunningChats: Set<string>;
@@ -247,6 +258,9 @@ export class MemoryOS {
     private dreamUiPollHandle: number | null;
     private dreamUiRefreshInFlight: boolean;
     private dreamUiRefreshPending: boolean;
+    private summaryProgressIntervalHandle: number | null;
+    private startupBroadcastTimerHandle: number | null;
+    private destroyed: boolean;
 
     /**
      * 功能：初始化 MemoryOS 运行时。
@@ -254,6 +268,7 @@ export class MemoryOS {
     constructor() {
         this.stxBus = new EventBus();
         this.registry = new PluginRegistry();
+        this.disposers = [];
         this.llmTasksRegistered = false;
         this.coldStartPromptedChats = new Set<string>();
         this.coldStartRunningChats = new Set<string>();
@@ -271,7 +286,13 @@ export class MemoryOS {
         this.dreamUiPollHandle = null;
         this.dreamUiRefreshInFlight = false;
         this.dreamUiRefreshPending = false;
-        window.setInterval((): void => {
+        this.summaryProgressIntervalHandle = null;
+        this.startupBroadcastTimerHandle = null;
+        this.destroyed = false;
+        this.summaryProgressIntervalHandle = window.setInterval((): void => {
+            if (this.destroyed) {
+                return;
+            }
             void this.refreshSummaryProgressUi();
         }, 2500);
         this.refreshChatBindingHandler = null;
@@ -283,10 +304,62 @@ export class MemoryOS {
         this.bindHostEvents();
         this.bindDreamUiRefreshTriggers();
         this.bindToolbarActions();
-        subscribeMemoryOSSettings((): void => {
+        this.addDisposer(subscribeMemoryOSSettings((): void => {
+            if (this.destroyed) {
+                return;
+            }
             this.syncAuxiliaryUi();
-        });
+        }));
         this.syncAuxiliaryUi();
+    }
+
+    /**
+     * 功能：销毁 MemoryOS 运行时，清理轮询、订阅、DOM 监听和当前聊天绑定。
+     *
+     * 参数：
+     *   无。
+     *
+     * 返回：
+     *   无返回值。
+     */
+    public destroy(): void {
+        if (this.destroyed) {
+            return;
+        }
+        this.destroyed = true;
+        if (this.summaryProgressIntervalHandle !== null) {
+            window.clearInterval(this.summaryProgressIntervalHandle);
+            this.summaryProgressIntervalHandle = null;
+        }
+        if (this.startupBroadcastTimerHandle !== null) {
+            window.clearTimeout(this.startupBroadcastTimerHandle);
+            this.startupBroadcastTimerHandle = null;
+        }
+        this.stopDreamUiPoll();
+        this.clearActiveMemoryBinding();
+        removeSdkFloatingToolbarGroup({
+            toolbarId: SDK_FLOATING_TOOLBAR_ID,
+            groupId: 'memoryos',
+        });
+        setMemorySummaryProgressFloatEnabled(false);
+        updateMemorySummaryProgressFloat(null);
+        for (const dispose of this.disposers.splice(0)) {
+            try {
+                dispose();
+            } catch (error) {
+                logger.warn('[MemoryOS] 运行时销毁回调执行失败', error);
+            }
+        }
+        this.refreshChatBindingHandler = null;
+    }
+
+    /**
+     * 功能：登记运行时销毁时需要执行的清理函数。
+     * @param dispose 清理函数。
+     * @returns 无返回值。
+     */
+    private addDisposer(dispose: () => void): void {
+        this.disposers.push(dispose);
     }
 
     /**
@@ -344,6 +417,9 @@ export class MemoryOS {
      * 功能：统一刷新工具栏和总结进度悬浮框。
      */
     private syncAuxiliaryUi(): void {
+        if (this.destroyed) {
+            return;
+        }
         this.refreshToolbarShortcuts();
         void this.refreshSummaryProgressUi();
         this.ensureDreamUiPoll();
@@ -353,6 +429,9 @@ export class MemoryOS {
      * 功能：启动梦境 UI 状态轮询。
      */
     private ensureDreamUiPoll(): void {
+        if (this.destroyed) {
+            return;
+        }
         const settings = this.readSettings();
         if (!settings.enabled || !settings.dreamEnabled) {
             this.stopDreamUiPoll();
@@ -398,6 +477,9 @@ export class MemoryOS {
      * @returns 无返回值。
      */
     private scheduleDreamUiRefresh(delayMs: number): void {
+        if (this.destroyed) {
+            return;
+        }
         const settings = this.readSettings();
         if (!settings.enabled || !settings.dreamEnabled) {
             this.stopDreamUiPoll();
@@ -418,6 +500,9 @@ export class MemoryOS {
      * @returns 无返回值。
      */
     private queueDreamUiRefresh(delayMs = DREAM_UI_REFRESH_DEBOUNCE_MS): void {
+        if (this.destroyed) {
+            return;
+        }
         if (this.dreamUiRefreshInFlight) {
             this.dreamUiRefreshPending = true;
             return;
@@ -430,9 +515,12 @@ export class MemoryOS {
      * @returns 无返回值。
      */
     private bindDreamUiRefreshTriggers(): void {
-        subscribeBroadcast<{ table?: string; pluginId?: string; chatKey?: string }>(
+        this.addDisposer(subscribeBroadcast<{ table?: string; pluginId?: string; chatKey?: string }>(
             'sdk:chat_data:changed',
             (data): void => {
+                if (this.destroyed) {
+                    return;
+                }
                 const settings = this.readSettings();
                 if (!settings.enabled || !settings.dreamEnabled) {
                     return;
@@ -451,13 +539,16 @@ export class MemoryOS {
                 this.queueDreamUiRefresh(DREAM_UI_REFRESH_DEBOUNCE_MS);
             },
             { from: 'stx_sdk' },
-        );
+        ));
     }
 
     /**
      * 功能：刷新梦境 UI 状态（pill + 通知）。
      */
     private async refreshDreamUiState(): Promise<void> {
+        if (this.destroyed) {
+            return;
+        }
         if (this.dreamUiRefreshInFlight) {
             this.dreamUiRefreshPending = true;
             return;
@@ -492,6 +583,9 @@ export class MemoryOS {
             logger.debug('[DreamUiPoll] 刷新失败', error);
         } finally {
             this.dreamUiRefreshInFlight = false;
+            if (this.destroyed) {
+                return;
+            }
             if (this.dreamUiRefreshPending) {
                 this.dreamUiRefreshPending = false;
                 this.scheduleDreamUiRefresh(DREAM_UI_REFRESH_DEBOUNCE_MS);
@@ -630,7 +724,10 @@ export class MemoryOS {
      * 功能：绑定 MemoryOS 工具栏按钮点击事件。
      */
     private bindToolbarActions(): void {
-        document.addEventListener('click', (event: Event): void => {
+        const clickHandler = (event: Event): void => {
+            if (this.destroyed) {
+                return;
+            }
             const target = event.target as HTMLElement | null;
             const button = target?.closest<HTMLButtonElement>('button[data-memoryos-toolbar-action]');
             if (!button) {
@@ -661,6 +758,10 @@ export class MemoryOS {
                     void this.refreshSummaryProgressUi();
                 }
             }
+        };
+        document.addEventListener('click', clickHandler);
+        this.addDisposer((): void => {
+            document.removeEventListener('click', clickHandler);
         });
     }
 
@@ -671,6 +772,10 @@ export class MemoryOS {
         const settings = this.readSettings();
         if (!settings.enabled || !settings.dreamEnabled) {
             toast.info('请先在 MemoryOS 设置中启用梦境系统。');
+            return;
+        }
+        if (!hasMemoryLlmRuntime()) {
+            warnLlmHubRequired('梦境任务');
             return;
         }
         const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
@@ -719,6 +824,9 @@ export class MemoryOS {
      * 功能：刷新 AI 总结进度悬浮框。
      */
     private async refreshSummaryProgressUi(): Promise<void> {
+        if (this.destroyed) {
+            return;
+        }
         const settings = this.readSettings();
         if (!settings.enabled || !settings.summaryProgressOverlayEnabled) {
             setMemorySummaryProgressFloatEnabled(false);
@@ -874,6 +982,10 @@ export class MemoryOS {
         if (!normalizedChatKey || this.coldStartPromptedChats.has(normalizedChatKey) || this.coldStartRunningChats.has(normalizedChatKey)) {
             return;
         }
+        if (!hasMemoryLlmRuntime()) {
+            warnLlmHubRequired('冷启动');
+            return;
+        }
 
         this.coldStartPromptedChats.add(normalizedChatKey);
         const selection = await openMemoryBootstrapDialog();
@@ -946,6 +1058,10 @@ export class MemoryOS {
         if (!normalizedChatKey || this.takeoverPromptedChats.has(normalizedChatKey) || this.takeoverRunningChats.has(normalizedChatKey)) {
             return;
         }
+        if (!hasMemoryLlmRuntime()) {
+            warnLlmHubRequired('旧聊天接管');
+            return;
+        }
 
         this.takeoverPromptedChats.add(normalizedChatKey);
         const selection = await openMemoryTakeoverDialog({
@@ -1015,7 +1131,10 @@ export class MemoryOS {
      * 功能：绑定插件注册中心事件。
      */
     private bindRegistryEvents(): void {
-        this.registry.onChanged((event: RegistryChangeEvent): void => {
+        this.addDisposer(this.registry.onChanged((event: RegistryChangeEvent): void => {
+            if (this.destroyed) {
+                return;
+            }
             this.stxBus.emit(
                 'plugin:broadcast:registry_changed',
                 {
@@ -1029,7 +1148,7 @@ export class MemoryOS {
                 },
                 { chatKey: 'global' },
             );
-        });
+        }));
     }
 
     /**
@@ -1044,15 +1163,15 @@ export class MemoryOS {
      * 功能：注册基础 RPC 端点。
      */
     private setupPluginBusEndpoints(): void {
-        respond('plugin:request:ping', 'stx_memory_os', async () => {
+        this.addDisposer(respond('plugin:request:ping', 'stx_memory_os', async () => {
             return {
                 alive: true,
                 pluginId: 'stx_memory_os',
                 version: '1.0.0',
                 capabilities: ['memory', 'chat_index', 'rpc', 'ui'],
             };
-        });
-        respond('plugin:request:memory_chat_keys', 'stx_memory_os', async () => {
+        }));
+        this.addDisposer(respond('plugin:request:memory_chat_keys', 'stx_memory_os', async () => {
             try {
                 const [metaKeys, eventKeys] = await Promise.all([
                     db.meta.toCollection().primaryKeys(),
@@ -1073,8 +1192,12 @@ export class MemoryOS {
                     updatedAt: Date.now(),
                 };
             }
-        });
-        setTimeout((): void => {
+        }));
+        this.startupBroadcastTimerHandle = window.setTimeout((): void => {
+            this.startupBroadcastTimerHandle = null;
+            if (this.destroyed) {
+                return;
+            }
             const settings = this.readSettings();
             broadcast('plugin:broadcast:state_changed', {
                 pluginId: 'stx_memory_os',
@@ -1087,12 +1210,14 @@ export class MemoryOS {
      * 功能：挂载全局 STX 对象。
      */
     private initGlobalSTX(): void {
+        const previousSTX = (window as unknown as { STX?: Record<string, unknown> }).STX || {};
         (window as unknown as { STX: Record<string, unknown> }).STX = {
+            ...previousSTX,
             version: '1.0.0',
             bus: this.stxBus,
             registry: this.registry,
             memory: null,
-            llm: null,
+            llm: previousSTX.llm ?? null,
         };
     }
 
@@ -1144,12 +1269,31 @@ export class MemoryOS {
         const chatInitializationCheckingChats = new Set<string>();
 
         /**
+         * 功能：绑定宿主事件，并在宿主支持时登记取消订阅函数。
+         * @param eventName 宿主事件名。
+         * @param handler 事件处理函数。
+         * @returns 无返回值。
+         */
+        const bindHostEvent = (
+            eventName: string,
+            handler: (payload?: unknown) => void | Promise<void>,
+        ): void => {
+            const dispose = eventSource.on(eventName, handler);
+            if (typeof dispose === 'function') {
+                this.addDisposer(dispose);
+            }
+        };
+
+        /**
          * 功能：执行聊天打开后的初始化检查流程。
          * @param chatKey 当前聊天键。
          * @param sdk 当前聊天的 Memory SDK。
          * @returns 异步完成。
          */
         const maybeRunChatInitialization = async (chatKey: string, sdk: MemorySDKImpl): Promise<void> => {
+            if (this.destroyed) {
+                return;
+            }
             const normalizedChatKey = String(chatKey ?? '').trim();
             if (!normalizedChatKey || chatInitializationCheckingChats.has(normalizedChatKey)) {
                 return;
@@ -1168,6 +1312,9 @@ export class MemoryOS {
                 triggerColdStart?: boolean;
             } = {},
         ): Promise<void> => {
+            if (this.destroyed) {
+                return;
+            }
             const triggerColdStart = options.triggerColdStart === true;
             const chatKey = String(buildSdkChatIdEvent() ?? '').trim();
             if (!chatKey) {
@@ -1233,6 +1380,9 @@ export class MemoryOS {
             if (serial !== bindingSerial) {
                 return;
             }
+            if (this.destroyed) {
+                return;
+            }
             this.clearActiveMemoryBinding();
             (window as unknown as { STX?: Record<string, unknown> }).STX = {
                 ...((window as unknown as { STX?: Record<string, unknown> }).STX || {}),
@@ -1263,6 +1413,9 @@ export class MemoryOS {
         void rebindChat(true, { triggerColdStart: true });
 
         const onMessage = (eventType: 'chat.message.sent' | 'chat.message.received', payload: unknown): void => {
+            if (this.destroyed) {
+                return;
+            }
             const settings = this.readSettings();
             if (!settings.enabled) {
                 return;
@@ -1295,22 +1448,25 @@ export class MemoryOS {
             void this.refreshSummaryProgressUi();
         };
 
-        eventSource.on(types.CHAT_CHANGED || 'chat_changed', (): void => {
+        bindHostEvent(types.CHAT_CHANGED || 'chat_changed', (): void => {
             void rebindChat(false, { triggerColdStart: true });
         });
-        eventSource.on(types.CHAT_STARTED || 'chat_started', (): void => {
+        bindHostEvent(types.CHAT_STARTED || 'chat_started', (): void => {
             void rebindChat(false, { triggerColdStart: true });
         });
-        eventSource.on(types.CHAT_NEW || 'chat_new', (): void => {
+        bindHostEvent(types.CHAT_NEW || 'chat_new', (): void => {
             void rebindChat(false, { triggerColdStart: true });
         });
-        eventSource.on(types.USER_MESSAGE_RENDERED || 'user_message_rendered', (payload?: unknown): void => {
+        bindHostEvent(types.USER_MESSAGE_RENDERED || 'user_message_rendered', (payload?: unknown): void => {
             onMessage('chat.message.sent', payload);
         });
-        eventSource.on(types.MESSAGE_RECEIVED || 'message_received', (payload?: unknown): void => {
+        bindHostEvent(types.MESSAGE_RECEIVED || 'message_received', (payload?: unknown): void => {
             onMessage('chat.message.received', payload);
         });
-        eventSource.on(types.GENERATION_ENDED || 'generation_ended', (): void => {
+        bindHostEvent(types.GENERATION_ENDED || 'generation_ended', (): void => {
+            if (this.destroyed) {
+                return;
+            }
             const settings = this.readSettings();
             if (!settings.enabled) {
                 return;
@@ -1320,6 +1476,11 @@ export class MemoryOS {
                 return;
             }
             if (settings.summaryAutoTriggerEnabled) {
+                if (!hasMemoryLlmRuntime()) {
+                    logger.warn('[MemoryOS] 已跳过自动总结：LLMHub 未连接。');
+                    void this.refreshSummaryProgressUi();
+                    return;
+                }
                 const summaryKey = String(memory.getChatKey?.() ?? buildSdkChatIdEvent() ?? '').trim();
                 if (summaryKey) {
                     this.summaryRunningChats.add(summaryKey);
@@ -1339,13 +1500,17 @@ export class MemoryOS {
         });
 
         let lastPromptReadyTs = 0;
-        eventSource.on(types.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready', async (payload?: unknown) => {
+        bindHostEvent(types.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready', async (payload?: unknown) => {
+            if (this.destroyed) {
+                return;
+            }
             const settings = this.readSettings();
             if (!settings.enabled || !settings.injectionPromptEnabled) {
                 return;
             }
             const memory = (window as unknown as { STX?: { memory?: MemorySDKImpl } })?.STX?.memory || null;
-            const promptMessages = extractTavernPromptMessagesEvent(payload as Record<string, unknown>);
+            const promptTargets = listTavernPromptTargetsEvent(payload as Record<string, unknown>);
+            const promptMessages = promptTargets[0]?.messages ?? extractTavernPromptMessagesEvent(payload as Record<string, unknown>);
             if (!memory || !Array.isArray(promptMessages)) {
                 return;
             }
@@ -1359,7 +1524,7 @@ export class MemoryOS {
                 const role = String((row as Record<string, unknown>).role ?? '').trim().toLowerCase();
                 return role === 'user' || (row as Record<string, unknown>).is_user === true;
             });
-            const query = latestUser ? String((latestUser as Record<string, unknown>).content ?? '').trim() : '';
+            const query = latestUser ? getTavernPromptMessageTextEvent(latestUser).trim() : '';
             const sourceMessageId = latestUser
                 ? String(
                     (latestUser as Record<string, unknown>).mes_id
@@ -1376,6 +1541,9 @@ export class MemoryOS {
                 logger.info('[MemoryOS] 已跳过本次 prompt_ready 注入：未命中真实发送窗口。');
                 return;
             }
+            if (this.destroyed) {
+                return;
+            }
 
             await memory.chatState.setPromptReadyCaptureSnapshotForTest({
                 promptFixture: promptMessages.map((row: SdkTavernPromptMessageEvent): Record<string, unknown> => ({
@@ -1389,6 +1557,9 @@ export class MemoryOS {
                 },
             });
 
+            if (this.destroyed) {
+                return;
+            }
             const pipelineResult = await runPromptReadyInjectionPipeline({
                 memory,
                 promptMessages,
@@ -1397,6 +1568,10 @@ export class MemoryOS {
                 sourceMessageId,
                 source: 'chat_completion_prompt_ready',
                 currentChatKey: currentChatKey || undefined,
+                promptTargetDiagnostics: {
+                    selectedPath: promptTargets[0]?.path ?? 'unknown',
+                    allPaths: promptTargets.map((target): string => target.path),
+                },
             });
             await memory.chatState.setPromptReadyRunResultForTest(
                 buildPromptReadyRunResultSnapshot({
@@ -1408,13 +1583,13 @@ export class MemoryOS {
             );
         });
 
-        subscribeBroadcast(
+        this.addDisposer(subscribeBroadcast(
             'plugin:broadcast:state_changed',
             (_data: unknown, _envelope: { from?: string }): void => {
                 return;
             },
             { from: 'stx_llmhub' },
-        );
+        ));
     }
 
     /**
@@ -1423,6 +1598,9 @@ export class MemoryOS {
      * @param sdk 当前聊天的 Memory SDK。
      */
     private initDreamSchedulerForChat(chatKey: string, sdk: MemorySDKImpl): void {
+        if (this.destroyed) {
+            return;
+        }
         this.clearDreamIdleTimer();
         const settings = this.readSettings();
         if (!settings.enabled || !settings.dreamEnabled || !settings.dreamSchedulerEnabled) {
@@ -1442,6 +1620,9 @@ export class MemoryOS {
      * @param sdk 当前聊天的 Memory SDK。
      */
     private startDreamIdleTimer(chatKey: string, sdk: MemorySDKImpl): void {
+        if (this.destroyed) {
+            return;
+        }
         this.clearDreamIdleTimer();
         const settings = this.readSettings();
         const idleMs = Math.max(1, settings.dreamSchedulerIdleMinutes) * 60 * 1000;
@@ -1455,6 +1636,9 @@ export class MemoryOS {
         document.addEventListener('pointerdown', onUserActivity, { passive: true });
 
         this.dreamIdleTimerHandle = window.setInterval((): void => {
+            if (this.destroyed) {
+                return;
+            }
             const now = Date.now();
             const currentSettings = this.readSettings();
             if (!currentSettings.enabled || !currentSettings.dreamEnabled
@@ -1497,6 +1681,10 @@ export class MemoryOS {
     private async maybeEnqueueDreamOnGenerationEnded(memory: MemorySDKImpl): Promise<void> {
         const settings = this.readSettings();
         if (!settings.dreamEnabled || !settings.dreamAutoTriggerEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowGenerationEndedTrigger) {
+            return;
+        }
+        if (!hasMemoryLlmRuntime()) {
+            logger.warn('[DreamScheduler] 已跳过 generation_ended 自动做梦：LLMHub 未连接。');
             return;
         }
         if (!this.dreamScheduler) {
@@ -1542,6 +1730,10 @@ export class MemoryOS {
     private async maybeEnqueueDreamOnIdle(chatKey: string, memory: MemorySDKImpl): Promise<void> {
         const settings = this.readSettings();
         if (!settings.dreamEnabled || !settings.dreamAutoTriggerEnabled || !settings.dreamSchedulerEnabled || !settings.dreamSchedulerAllowIdleTrigger) {
+            return;
+        }
+        if (!hasMemoryLlmRuntime()) {
+            logger.warn('[DreamScheduler] 已跳过 idle 自动做梦：LLMHub 未连接。');
             return;
         }
         if (!this.dreamScheduler) {

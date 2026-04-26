@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { validateSummaryMutationDocument, type EditableFieldMap } from '../src/memory-summary';
 
+/**
+ * 功能：构建测试用的可靠故事证据。
+ * @returns sourceEvidence 字段。
+ */
+function storyEvidence(): Record<string, unknown> {
+    return {
+        type: 'story_dialogue',
+        brief: '艾琳明确向{{user}}说明了后续安排。',
+        turnRefs: [1, 2],
+    };
+}
+
 describe('validateSummaryMutationDocument', () => {
     it('rejects non-whitelisted fields including fields.* paths', () => {
         const editableMap: EditableFieldMap = new Map([
@@ -14,7 +26,9 @@ describe('validateSummaryMutationDocument', () => {
                     action: 'UPDATE',
                     targetKind: 'relationship',
                     candidateId: 'cand_1',
-                    payload: {
+                    reasonCodes: ['relationship_progressed'],
+                    sourceEvidence: storyEvidence(),
+                    patch: {
                         summary: 'ok',
                         fields: {
                             allowed: 'ok',
@@ -43,7 +57,9 @@ describe('validateSummaryMutationDocument', () => {
                     action: 'UPDATE',
                     targetKind: 'world_global_state',
                     candidateId: 'cand_1',
-                    payload: {
+                    reasonCodes: ['world_state_changed'],
+                    sourceEvidence: storyEvidence(),
+                    patch: {
                         summary: 'ok',
                         state: 99999999,
                         tags: ['a', 'a', 'b'],
@@ -70,7 +86,9 @@ describe('validateSummaryMutationDocument', () => {
                     action: 'UPDATE',
                     targetKind: 'relationship',
                     candidateId: 'cand_1',
-                    payload: {
+                    reasonCodes: ['relationship_progressed'],
+                    sourceEvidence: storyEvidence(),
+                    patch: {
                         summary: '关系更新',
                         fields: {
                             relationTag: '宿敌',
@@ -96,7 +114,9 @@ describe('validateSummaryMutationDocument', () => {
                     action: 'UPDATE',
                     targetKind: 'relationship',
                     candidateId: 'cand_1',
-                    payload: {
+                    reasonCodes: ['relationship_progressed'],
+                    sourceEvidence: storyEvidence(),
+                    patch: {
                         summary: '关系更新',
                         fields: {
                             relationTag: '死对头',
