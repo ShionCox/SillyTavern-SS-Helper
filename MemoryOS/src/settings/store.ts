@@ -3,8 +3,11 @@ import type { RetrievalMode } from '../memory-retrieval/retrieval-mode';
 import { normalizeRetrievalMode } from '../memory-retrieval/retrieval-mode';
 import type { DreamExecutionMode } from '../services/dream-types';
 
+export type MemoryStrategyMode = 'auto' | 'light' | 'balanced' | 'deep' | 'economy';
+
 export type MemoryOSSettings = {
     enabled: boolean;
+    memoryStrategyMode: MemoryStrategyMode;
     coldStartEnabled: boolean;
     takeoverEnabled: boolean;
     toolbarQuickActionsEnabled: boolean;
@@ -159,6 +162,7 @@ export const MEMORY_OS_SETTINGS_NAMESPACE: string = 'stx_memory_os';
 
 export const DEFAULT_MEMORY_OS_SETTINGS: MemoryOSSettings = {
     enabled: true,
+    memoryStrategyMode: 'auto',
     coldStartEnabled: true,
     takeoverEnabled: true,
     toolbarQuickActionsEnabled: true,
@@ -292,6 +296,80 @@ export function resolveRetrievalEnableQueryContextBuilder(
     retrievalMode: RetrievalMode,
 ): boolean {
     return retrievalMode === 'auto' || retrievalMode === 'vector_only' || retrievalMode === 'hybrid';
+}
+
+/**
+ * 功能：归一化 MemoryOS 自动策略档位。
+ * @param value 原始策略值。
+ * @returns 合法策略档位。
+ */
+export function normalizeMemoryStrategyMode(value: unknown): MemoryStrategyMode {
+    const text = String(value ?? '').trim().toLowerCase();
+    if (text === 'light' || text === 'balanced' || text === 'deep' || text === 'economy') {
+        return text;
+    }
+    return 'auto';
+}
+
+/**
+ * 功能：按轻量/均衡/深度/省钱策略生成运行时设置。
+ * 说明：只返回运行期派生结果，不回写用户配置，避免覆盖高级设置。
+ * @param settings 原始设置。
+ * @returns 已应用策略的设置。
+ */
+export function resolveMemoryStrategySettings(settings: MemoryOSSettings): MemoryOSSettings {
+    const strategyMode = normalizeMemoryStrategyMode(settings.memoryStrategyMode);
+    if (strategyMode === 'auto' || strategyMode === 'balanced') {
+        return {
+            ...settings,
+            memoryStrategyMode: strategyMode,
+            retrievalMode: settings.retrievalMode === 'auto' ? 'auto' : settings.retrievalMode,
+        };
+    }
+    if (strategyMode === 'light') {
+        return {
+            ...settings,
+            memoryStrategyMode: strategyMode,
+            retrievalMode: settings.retrievalMode === 'vector_only' ? 'hybrid' : settings.retrievalMode,
+            retrievalDefaultTopK: Math.min(settings.retrievalDefaultTopK, 12),
+            retrievalDefaultExpandDepth: Math.min(settings.retrievalDefaultExpandDepth, 1),
+            vectorFinalTopK: Math.min(settings.vectorFinalTopK, 4),
+            vectorEnableLLMHubRerank: false,
+            dreamPromptMaxHighlights: Math.min(settings.dreamPromptMaxHighlights, 3),
+            dreamPromptMaxMutations: Math.min(settings.dreamPromptMaxMutations, 4),
+            pipelineMaxActionsPerMutation: Math.min(settings.pipelineMaxActionsPerMutation, 6),
+        };
+    }
+    if (strategyMode === 'economy') {
+        return {
+            ...settings,
+            memoryStrategyMode: strategyMode,
+            retrievalMode: 'lexical_only',
+            retrievalDefaultTopK: Math.min(settings.retrievalDefaultTopK, 10),
+            retrievalDefaultExpandDepth: 0,
+            vectorEnableRerank: false,
+            vectorEnableLLMHubRerank: false,
+            dreamExecutionMode: 'silent',
+            dreamPromptMaxHighlights: Math.min(settings.dreamPromptMaxHighlights, 2),
+            dreamPromptMaxMutations: Math.min(settings.dreamPromptMaxMutations, 2),
+            dreamAutoApplyLowRiskMaintenance: false,
+            pipelineMaxInputCharsPerBatch: Math.min(settings.pipelineMaxInputCharsPerBatch, 9000),
+            pipelineMaxActionsPerMutation: Math.min(settings.pipelineMaxActionsPerMutation, 4),
+        };
+    }
+    return {
+        ...settings,
+        memoryStrategyMode: strategyMode,
+        retrievalMode: settings.retrievalMode === 'lexical_only' ? 'auto' : settings.retrievalMode,
+        retrievalDefaultTopK: Math.max(settings.retrievalDefaultTopK, 24),
+        retrievalDefaultExpandDepth: Math.max(settings.retrievalDefaultExpandDepth, 2),
+        vectorFinalTopK: Math.max(settings.vectorFinalTopK, 8),
+        vectorEnableRerank: true,
+        dreamPromptMaxHighlights: Math.max(settings.dreamPromptMaxHighlights, 5),
+        dreamPromptMaxMutations: Math.max(settings.dreamPromptMaxMutations, 10),
+        pipelineMaxInputCharsPerBatch: Math.max(settings.pipelineMaxInputCharsPerBatch, 24000),
+        pipelineMaxActionsPerMutation: Math.max(settings.pipelineMaxActionsPerMutation, 12),
+    };
 }
 
 /**
@@ -493,6 +571,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
         Math.min(100, Math.trunc(Number(candidate.summaryMaxActionsPerMutationBatch) || DEFAULT_MEMORY_OS_SETTINGS.summaryMaxActionsPerMutationBatch)),
     );
     const retrievalLogLevel = candidate.retrievalLogLevel === 'debug' ? 'debug' : 'info';
+    const memoryStrategyMode = normalizeMemoryStrategyMode(candidate.memoryStrategyMode);
     const dreamExecutionMode: DreamExecutionMode = candidate.dreamExecutionMode === 'silent'
         ? 'silent'
         : DEFAULT_MEMORY_OS_SETTINGS.dreamExecutionMode;
@@ -572,6 +651,7 @@ export function normalizeMemoryOSSettings(candidate: Partial<MemoryOSSettings>):
 
     return {
         enabled: candidate.enabled !== false,
+        memoryStrategyMode,
         coldStartEnabled: candidate.coldStartEnabled !== false,
         takeoverEnabled: candidate.takeoverEnabled !== false,
         toolbarQuickActionsEnabled: candidate.toolbarQuickActionsEnabled !== false,

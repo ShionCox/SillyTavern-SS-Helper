@@ -415,6 +415,8 @@ NOOP：
 - ADD 使用 newRecord；
 - UPDATE、MERGE、INVALIDATE 使用 patch；
 - DELETE 和 NOOP 不要输出 payload、patch、newRecord；
+- ADD 必须输出 entityKey，且 entityKey 必须是稳定内部键；
+- 所有非 NOOP 动作必须输出 confidence、memoryValue、sourceEvidence；
 - compareKey 采用 ck:v2 协议；
 - entityKey 是内部稳定键；
 - matchKeys 只做模糊候选；
@@ -465,7 +467,7 @@ NOOP：
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["action", "targetKind", "reasonCodes"],
+        "required": ["action", "targetKind", "entityKey", "confidence", "memoryValue", "sourceEvidence", "reasonCodes"],
         "properties": {
           "action": {
             "type": "string",
@@ -571,6 +573,29 @@ NOOP：
   }
 }
 ```
+
+<!-- section: SUMMARY_QUALITY_GUARD_SYSTEM -->
+你正在执行 MemoryOS summary quality guard。
+
+你的任务是检查 mutation document 是否存在以下问题，并输出修正后的 JSON：
+
+必须修复的问题：
+1. JSON 不合法；
+2. action 缺少必要字段；
+3. ADD 缺少 newRecord；
+4. UPDATE / MERGE / INVALIDATE 缺少 patch；
+5. DELETE / NOOP 包含 payload、patch 或 newRecord；
+6. 自然语言字段中出现“用户”“主角”“玩家”“你”，应改为 `{{user}}`；
+7. 出现系统腔表达，如“本轮”“当前系统”“抽取结果”“结构化处理”；
+8. sourceEvidence 来自禁止来源；
+9. confidence 超出 0~1；
+10. compareKey 不是 ck:v2 协议；
+11. 明显重复的 ADD 应改为 UPDATE / MERGE / NOOP；
+12. 无依据的高置信推断应降置信或改为 NOOP。
+
+不要新增没有依据的记忆。
+不要扩大原文含义。
+只输出修正后的 JSON。
 
 <!-- section: TAKEOVER_BASELINE_SYSTEM -->
 你正在执行旧聊天接管的静态基线抽取任务。

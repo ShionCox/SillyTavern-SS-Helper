@@ -2,6 +2,7 @@ import type { SummaryMutationAction, SummaryMutationDocument } from './mutation-
 import { isHighValueEntityType } from '../core/entity-schema';
 import { compareKeysNearMatch } from '../core/compare-key';
 import { isRelationTag } from '../constants/relationTags';
+import { collectMemoryNaturalLanguageFields, findMemoryTextPollution } from '../core/memory-quality-guard';
 
 /**
  * 功能：定义总结 mutation 校验结果。
@@ -51,22 +52,6 @@ const NATURAL_LANGUAGE_FIELD_NAMES = new Set([
     'traits',
     'detail',
 ]);
-const SYSTEM_TONE_PATTERNS: RegExp[] = [
-    /本轮/g,
-    /当前系统/g,
-    /抽取结果/g,
-    /结构化处理/g,
-    /已识别/g,
-    /该批次/g,
-    /输出内容/g,
-    /处理结果/g,
-];
-const USER_ALIAS_PATTERNS: RegExp[] = [
-    /用户/g,
-    /主角/g,
-    /玩家/g,
-    /你/g,
-];
 
 /**
  * 功能：校验并归一化总结 mutation 文档。
@@ -425,60 +410,21 @@ function validateNaturalLanguagePollution(
 ): string[] {
     const errors: string[] = [];
     const naturalTextMap = {
-        ...collectNaturalLanguageFields(payload),
-        ...collectNaturalLanguageFields({
+        ...collectMemoryNaturalLanguageFields(payload, NATURAL_LANGUAGE_FIELD_NAMES),
+        ...collectMemoryNaturalLanguageFields({
             title: row.title,
             reason: row.reason,
             sourceEvidence: row.sourceEvidence,
-        }),
+        }, NATURAL_LANGUAGE_FIELD_NAMES),
     };
-    for (const [path, value] of Object.entries(naturalTextMap)) {
-        for (const pattern of SYSTEM_TONE_PATTERNS) {
-            pattern.lastIndex = 0;
-            if (pattern.test(value)) {
-                errors.push(`system_tone_pollution:${action}:${path}`);
-                break;
-            }
-        }
-        for (const pattern of USER_ALIAS_PATTERNS) {
-            pattern.lastIndex = 0;
-            if (pattern.test(value)) {
-                errors.push(`user_alias_pollution:${action}:${path}`);
-                break;
-            }
+    for (const issue of findMemoryTextPollution(naturalTextMap)) {
+        if (issue.kind === 'system_tone') {
+            errors.push(`system_tone_pollution:${action}:${issue.path}`);
+        } else {
+            errors.push(`user_alias_pollution:${action}:${issue.path}`);
         }
     }
     return dedupeStrings(errors);
-}
-
-/**
- * 功能：收集需要进行自然语言污染扫描的字段。
- * @param value 原始对象。
- * @param path 当前路径。
- * @returns path 到文本的映射。
- */
-function collectNaturalLanguageFields(value: unknown, path: string = ''): Record<string, string> {
-    const result: Record<string, string> = {};
-    if (typeof value === 'string') {
-        const leafName = path.split('.').pop() ?? path;
-        if (NATURAL_LANGUAGE_FIELD_NAMES.has(leafName) || path.endsWith('sourceEvidence.brief')) {
-            result[path || leafName] = value;
-        }
-        return result;
-    }
-    if (Array.isArray(value)) {
-        value.forEach((item: unknown, index: number): void => {
-            Object.assign(result, collectNaturalLanguageFields(item, `${path}.${index}`.replace(/^\./, '')));
-        });
-        return result;
-    }
-    if (!value || typeof value !== 'object') {
-        return result;
-    }
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-        Object.assign(result, collectNaturalLanguageFields(item, path ? `${path}.${key}` : key));
-    }
-    return result;
 }
 
 /**

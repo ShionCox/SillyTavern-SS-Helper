@@ -14,6 +14,7 @@ import styleAnalyticText from '../memory-prompts/dream/style.analytic.md?raw';
 import styleSymbolicText from '../memory-prompts/dream/style.symbolic.md?raw';
 import safetyRulesText from '../memory-prompts/dream/safety.rules.md?raw';
 import outputSchemaText from '../memory-prompts/dream/output.schema.md?raw';
+import promptPackText from '../memory-prompts/prompt-pack.md?raw';
 
 export const DREAM_PROMPT_VERSION = 'v1.0.0';
 export const DREAM_PROMPT_SCHEMA_VERSION = 'dream-output.v1';
@@ -71,6 +72,7 @@ export class DreamPromptService {
             systemBaseText.trim(),
             this.resolveStyleLayer(stylePreset),
             String(input.worldStrategyHintText ?? '').trim(),
+            this.extractPromptPackSection('MEMORY_ACTION_POLICY'),
             safetyRulesText.trim(),
             outputSchemaText.trim(),
             this.buildRuntimeRuleText(settings, input.plan),
@@ -110,6 +112,18 @@ export class DreamPromptService {
             return styleSymbolicText.trim();
         }
         return styleReflectiveText.trim();
+    }
+
+    private extractPromptPackSection(sectionName: string): string {
+        const marker = new RegExp(`<!--\\s*section:\\s*${sectionName}\\s*-->`, 'u');
+        const match = marker.exec(promptPackText);
+        if (!match) {
+            return '';
+        }
+        const start = match.index + match[0].length;
+        const rest = promptPackText.slice(start);
+        const next = rest.search(/<!--\s*section:\s*[A-Z0-9_]+\s*-->/u);
+        return rest.slice(0, next >= 0 ? next : undefined).trim();
     }
 
     private buildRuntimeRuleText(settings: MemoryOSSettings, plan?: ResolvedDreamExecutionPlan): string {

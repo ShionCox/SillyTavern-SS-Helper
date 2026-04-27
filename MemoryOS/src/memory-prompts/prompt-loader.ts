@@ -21,6 +21,7 @@ export type PromptPackSectionName =
     | 'SUMMARY_SYSTEM'
     | 'SUMMARY_SCHEMA'
     | 'SUMMARY_OUTPUT_SAMPLE'
+    | 'SUMMARY_QUALITY_GUARD_SYSTEM'
     | 'TAKEOVER_BASELINE_SYSTEM'
     | 'TAKEOVER_BASELINE_SCHEMA'
     | 'TAKEOVER_BASELINE_OUTPUT_SAMPLE'
@@ -58,6 +59,7 @@ export interface PromptPackSections {
     SUMMARY_SYSTEM: string;
     SUMMARY_SCHEMA: string;
     SUMMARY_OUTPUT_SAMPLE: string;
+    SUMMARY_QUALITY_GUARD_SYSTEM: string;
     TAKEOVER_BASELINE_SYSTEM: string;
     TAKEOVER_BASELINE_SCHEMA: string;
     TAKEOVER_BASELINE_OUTPUT_SAMPLE: string;
@@ -95,6 +97,7 @@ const REQUIRED_SECTIONS: string[] = [
     'SUMMARY_SYSTEM',
     'SUMMARY_SCHEMA',
     'SUMMARY_OUTPUT_SAMPLE',
+    'SUMMARY_QUALITY_GUARD_SYSTEM',
     'TAKEOVER_BASELINE_SYSTEM',
     'TAKEOVER_BASELINE_SCHEMA',
     'TAKEOVER_BASELINE_OUTPUT_SAMPLE',
@@ -108,16 +111,6 @@ const REQUIRED_SECTIONS: string[] = [
     'TAKEOVER_CONFLICT_RESOLUTION_OUTPUT_SAMPLE',
     'TAKEOVER_CONFLICT_RESOLUTION_BATCH_SCHEMA',
     'TAKEOVER_CONFLICT_RESOLUTION_BATCH_OUTPUT_SAMPLE',
-];
-
-const SUMMARY_COMMON_RULES: string[] = [
-    '这是 summary mutation 任务，只输出真正需要落库的稀疏 mutation。',
-    'ADD 使用 newRecord，UPDATE、MERGE、INVALIDATE 使用 patch，DELETE 和 NOOP 不要输出 payload、patch、newRecord。',
-    'compareKey 采用 ck:v2 协议；entityKey 是内部稳定键，compareKey 是跨流程比对键，matchKeys 仅用于模糊候选。',
-    'actorKey 只能使用 user 或 actor_*，禁止输出 char_*、ck:*、ek:* 或任何临时引用。',
-    '不要输出 targetKind=actor_profile；关系变化必须使用 targetKind=relationship，并提供 sourceActorKey、targetActorKey、relationTag 写入关系主表。',
-    '无法确认同一对象时优先 NOOP、UPDATE 或 MERGE，不要因名字变化盲目 ADD。',
-    'reasonCodes、candidateId、compareKey、matchKeys 不是每个动作都必须出现，只有确认时才填写。',
 ];
 
 const TAKEOVER_COMMON_RULES: string[] = [
@@ -214,11 +207,9 @@ function parsePromptPackSections(raw: string): Partial<PromptPackSections> {
  * @returns 是否完整。
  */
 function hasAllRequiredSections(sections: Partial<PromptPackSections>): sections is PromptPackSections {
-    return REQUIRED_SECTIONS
-        .filter((name: string): boolean => /^(COLD_START|SUMMARY|TAKEOVER)_/.test(String(name)))
-        .every((name: string): boolean => {
+    return REQUIRED_SECTIONS.every((name: string): boolean => {
         return typeof sections[name as PromptPackSectionName] === 'string' && String(sections[name as PromptPackSectionName]).trim().length > 0;
-        });
+    });
 }
 
 /**
@@ -243,7 +234,7 @@ function enrichPromptPackSections(sections: PromptPackSections): PromptPackSecti
     return {
         ...sections,
         SUMMARY_PLANNER_SYSTEM: plannerPolicyPrompt,
-        SUMMARY_SYSTEM: appendPromptRules(summaryPolicyPrompt, SUMMARY_COMMON_RULES),
+        SUMMARY_SYSTEM: summaryPolicyPrompt,
         TAKEOVER_BATCH_SYSTEM: appendPromptRules(sections.TAKEOVER_BATCH_SYSTEM, TAKEOVER_COMMON_RULES),
     };
 }
@@ -385,6 +376,15 @@ focus_types 只能使用 identity、relationship、task、event、world_global_s
         `),
         section('SUMMARY_SCHEMA', fencedJson(summaryMutationSchema())),
         section('SUMMARY_OUTPUT_SAMPLE', fencedJson(summaryMutationSample())),
+        section('SUMMARY_QUALITY_GUARD_SYSTEM', `
+你正在执行 MemoryOS summary quality guard。
+你的任务是检查 mutation document 是否存在结构错误、动作契约错误、证据污染、置信度越界、compareKey 协议错误、重复 ADD、用户指代污染或系统腔表达，并输出修正后的 JSON。
+- ADD 必须使用 newRecord；UPDATE、MERGE、INVALIDATE 必须使用 patch；DELETE 和 NOOP 不得包含 payload、patch、newRecord。
+- 自然语言字段中出现“用户”“主角”“玩家”“你”时应改为 \`{{user}}\`。
+- sourceEvidence 来自 system prompt、tool artifact、debug output、代码、reasoning、插件内部状态等禁止来源时，不得作为正式写入依据。
+- 不要新增没有依据的记忆，不要扩大原文含义。
+只输出修正后的 JSON。
+        `),
         section('TAKEOVER_BASELINE_SYSTEM', `
 你正在执行旧聊天接管的静态基线抽取任务。
 提取稳定设定、人格基线、世界规则和静态背景。
@@ -466,7 +466,7 @@ function summaryPlannerSchema(): Record<string, unknown> {
 function summaryMutationSchema(): Record<string, unknown> {
     return {
         type: 'object',
-        required: ['schemaVersion', 'window', 'actions'],
+        required: ['schemaVersion', 'window', 'actions', 'diagnostics'],
         properties: {
             schemaVersion: { type: 'string' },
             window: { type: 'object' },

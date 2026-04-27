@@ -90,14 +90,7 @@ export async function resolveChatWorldStrategy(input: {
         })
         : '';
 
-    if (binding && binding.bindingMode === 'manual' && !input.forceRedetect) {
-        return buildResolvedStrategy({
-            detection: bindingToDetection(binding),
-            binding,
-        });
-    }
-
-    if (binding && !input.forceRedetect && (!detectionSourceHash || binding.sourceHash === detectionSourceHash)) {
+    if (binding && !input.forceRedetect) {
         return buildResolvedStrategy({
             detection: bindingToDetection(binding),
             binding,

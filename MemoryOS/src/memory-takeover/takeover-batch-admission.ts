@@ -1,4 +1,5 @@
 import { isStrictActorKey, normalizeStrictActorKeySyntax } from '../core/actor-key';
+import { collectMemoryNaturalLanguageFields, findMemoryTextPollution } from '../core/memory-quality-guard';
 import type {
     MemoryTakeoverActorCardCandidate,
     MemoryTakeoverBatchResult,
@@ -18,6 +19,20 @@ export interface TakeoverBatchAdmissionOutcome {
     validationErrors: string[];
     repairActions: string[];
 }
+
+const NATURAL_LANGUAGE_FIELD_NAMES = new Set([
+    'summary',
+    'state',
+    'reason',
+    'displayName',
+    'identityFacts',
+    'originFacts',
+    'traits',
+    'title',
+    'description',
+    'from',
+    'to',
+]);
 
 /**
  * 功能：在 takeover 主链进入 reducer 前执行批次准入校验。
@@ -84,6 +99,8 @@ function validateTakeoverBatchResult(result: MemoryTakeoverBatchResult): { valid
             validationErrors.push(`actorCards[${index}].actorKey:${String(actorCard.actorKey ?? '').trim() || '<empty>'}`);
         }
     });
+    validationErrors.push(...validateDuplicateTakeoverKeys(result));
+    validationErrors.push(...validateTakeoverTextQuality(result));
 
     result.relationships.forEach((relationship: MemoryTakeoverRelationshipCard, index: number): void => {
         if (!isStrictActorKey(relationship.sourceActorKey)) {
@@ -125,6 +142,58 @@ function validateTakeoverBatchResult(result: MemoryTakeoverBatchResult): { valid
     return {
         validationErrors: Array.from(new Set(validationErrors)),
     };
+}
+
+/**
+ * 功能：检查 takeover 批次中的重复主键风险。
+ * @param result 批次结果。
+ * @returns 验证错误。
+ */
+function validateDuplicateTakeoverKeys(result: MemoryTakeoverBatchResult): string[] {
+    const errors: string[] = [];
+    const actorKeys = new Map<string, number>();
+    result.actorCards.forEach((actorCard: MemoryTakeoverActorCardCandidate): void => {
+        const key = String(actorCard.actorKey ?? '').trim();
+        if (key) {
+            actorKeys.set(key, (actorKeys.get(key) ?? 0) + 1);
+        }
+    });
+    for (const [key, count] of actorKeys.entries()) {
+        if (count > 1) {
+            errors.push(`duplicate_actor_key:${key}`);
+        }
+    }
+    const entityKeys = new Map<string, number>();
+    result.entityCards.forEach((entity: MemoryTakeoverEntityCardCandidate): void => {
+        const key = String(entity.entityKey ?? '').trim();
+        if (key) {
+            entityKeys.set(key, (entityKeys.get(key) ?? 0) + 1);
+        }
+    });
+    for (const [key, count] of entityKeys.entries()) {
+        if (count > 1) {
+            errors.push(`duplicate_entity_key:${key}`);
+        }
+    }
+    return errors;
+}
+
+/**
+ * 功能：检查 takeover 输出是否包含系统腔或用户指代污染。
+ * @param result 批次结果。
+ * @returns 验证错误。
+ */
+function validateTakeoverTextQuality(result: MemoryTakeoverBatchResult): string[] {
+    const errors: string[] = [];
+    const textMap = collectMemoryNaturalLanguageFields(result, NATURAL_LANGUAGE_FIELD_NAMES);
+    for (const issue of findMemoryTextPollution(textMap, { includeSecondPersonAlias: false })) {
+        if (issue.kind === 'system_tone') {
+            errors.push(`system_tone_pollution:${issue.path}`);
+        } else {
+            errors.push(`user_alias_pollution:${issue.path}`);
+        }
+    }
+    return errors;
 }
 
 function repairTakeoverBatchResult(result: MemoryTakeoverBatchResult): MemoryTakeoverBatchResult {

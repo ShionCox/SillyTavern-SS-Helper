@@ -314,7 +314,7 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
 
     const summarySchema = normalizeMemoryPromptSchema('SUMMARY_SCHEMA', parseJsonSection(promptPack.SUMMARY_SCHEMA));
     const summaryOutputSample = parseJsonSection(promptPack.SUMMARY_OUTPUT_SAMPLE);
-    const patchModeInstruction = '本次输出为稀疏 patch 模式：payload 中只输出发生变化的字段，未变化字段不要出现。严禁在 payload 中重复旧 state 的完整内容。若某字段无变化，直接省略该字段。';
+    const patchModeInstruction = '本次输出为稀疏 mutation 模式：ADD 只使用 newRecord；UPDATE、MERGE、INVALIDATE 只使用 patch；DELETE、NOOP 不要输出 payload、patch、newRecord。patch/newRecord 中只输出发生变化的字段，未变化字段不要出现。严禁输出 payload，严禁重复旧 state 的完整内容。若某字段无变化，直接省略该字段。';
     const summarySystemPrompt = `${renderPromptTemplate(promptPack.SUMMARY_SYSTEM, {
         worldProfile: plannerResult.diagnostics.worldProfile,
         user: userPlaceholder,
@@ -772,9 +772,10 @@ function buildSlimMutationContext(
             rules: context.rules,
             patchMode: {
                 enabled: true,
-                description: '本次输出为稀疏 patch 模式，仅输出变化字段。',
+                description: '本次输出为稀疏 mutation 模式，ADD 使用 newRecord，UPDATE/MERGE/INVALIDATE 使用 patch。',
                 constraints: [
-                    '只输出发生变化的字段，未变化字段不要出现在 payload 中。',
+                    '只输出发生变化的字段，未变化字段不要出现在 patch 或 newRecord 中。',
+                    '严禁输出 payload 字段。',
                     '严禁返回完整旧 state 副本。',
                     '数组字段如需变更请输出完整新数组。',
                     '嵌套 fields 对象中只输出变化的子字段。',
@@ -1150,14 +1151,34 @@ function buildStrictActionItemsSchema(
                 enum: targetKinds.length > 0 ? targetKinds : ['other'],
             },
             candidateId: { type: 'string' },
+            entityKey: { type: 'string' },
             compareKey: { type: 'string' },
-            payload: buildStrictMutationPayloadSchema(mergedEditableFields, false),
+            confidence: { type: 'number' },
+            memoryValue: {
+                type: 'string',
+                enum: ['low', 'medium', 'high'],
+            },
+            sourceEvidence: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    type: { type: 'string' },
+                    brief: { type: 'string' },
+                    turnRefs: {
+                        type: 'array',
+                        items: { type: 'number' },
+                    },
+                },
+                required: ['type', 'brief'],
+            },
+            patch: buildStrictMutationPayloadSchema(mergedEditableFields, false),
+            newRecord: buildStrictMutationPayloadSchema(mergedEditableFields, false),
             reasonCodes: {
                 type: 'array',
                 items: { type: 'string' },
             },
         },
-        required: ['action', 'targetKind'],
+        required: ['action', 'targetKind', 'reasonCodes'],
     };
 }
 

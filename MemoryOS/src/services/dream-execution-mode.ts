@@ -1,4 +1,4 @@
-import type { MemoryOSSettings } from '../settings/store';
+import { resolveMemoryStrategySettings, type MemoryOSSettings } from '../settings/store';
 import type { DreamExecutionMode, DreamTriggerReason } from './dream-types';
 
 export type DreamRunProfile = 'auto_light' | 'auto_review' | 'manual_deep';
@@ -24,7 +24,8 @@ export function resolveDreamExecutionPlan(input: {
     settings: MemoryOSSettings;
     executionMode?: DreamExecutionMode;
 }): ResolvedDreamExecutionPlan {
-    const executionMode = input.executionMode ?? input.settings.dreamExecutionMode;
+    const settings = resolveMemoryStrategySettings(input.settings);
+    const executionMode = input.executionMode ?? settings.dreamExecutionMode;
     if (input.triggerReason === 'manual') {
         return {
             executionMode,
@@ -37,8 +38,8 @@ export function resolveDreamExecutionPlan(input: {
             allowAutoApplyLowRiskMaintenance: false,
             allowHighRiskMutationOutput: true,
             requireApprovalBeforeMutationApply: true,
-            maxHighlights: input.settings.dreamPromptMaxHighlights,
-            maxMutations: input.settings.dreamPromptMaxMutations,
+            maxHighlights: settings.dreamPromptMaxHighlights,
+            maxMutations: settings.dreamPromptMaxMutations,
             outputKind: 'full',
         };
     }
@@ -54,7 +55,7 @@ export function resolveDreamExecutionPlan(input: {
             allowAutoApplyLowRiskMaintenance: true,
             allowHighRiskMutationOutput: false,
             requireApprovalBeforeMutationApply: true,
-            maxHighlights: Math.max(1, Math.min(2, input.settings.dreamPromptMaxHighlights)),
+            maxHighlights: Math.max(1, Math.min(2, settings.dreamPromptMaxHighlights)),
             maxMutations: 0,
             outputKind: 'light',
         };
@@ -70,8 +71,8 @@ export function resolveDreamExecutionPlan(input: {
         allowAutoApplyLowRiskMaintenance: false,
         allowHighRiskMutationOutput: true,
         requireApprovalBeforeMutationApply: true,
-        maxHighlights: Math.max(1, Math.min(3, input.settings.dreamPromptMaxHighlights)),
-        maxMutations: Math.max(1, Math.min(input.settings.dreamPromptMaxMutations, 5)),
+        maxHighlights: Math.max(1, Math.min(3, settings.dreamPromptMaxHighlights)),
+        maxMutations: Math.max(1, Math.min(settings.dreamPromptMaxMutations, 5)),
         outputKind: 'full',
     };
 }

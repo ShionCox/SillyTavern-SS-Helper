@@ -17,7 +17,7 @@ import { applyPayloadFilter } from '../memory-retrieval/payload-filter';
 import { RetrievalOrchestrator } from '../memory-retrieval/retrieval-orchestrator';
 import { projectMemoryRetentionCore } from '../core/memory-retention-core';
 import { resolveSemanticKindLabel } from '../core/memory-semantic';
-import { readMemoryOSSettings, resolveRetrievalEnableQueryContextBuilder } from '../settings/store';
+import { readMemoryOSSettings, resolveMemoryStrategySettings, resolveRetrievalEnableQueryContextBuilder } from '../settings/store';
 import { HybridRetrievalService } from './hybrid-retrieval-service';
 import { buildQueryContextBundle } from './query-context-builder';
 import { estimateXmlNarrativeRetrievalMaxChars } from '../memory-injection/xml-markdown-renderer';
@@ -59,7 +59,7 @@ export class MemoryRetrievalService {
      * @returns 统一检索输出。
      */
     async searchHybrid(input: MemoryRetrievalInput): Promise<MemoryRetrievalOutput> {
-        const settings = readMemoryOSSettings();
+        const settings = resolveMemoryStrategySettings(readMemoryOSSettings());
         const baseConfig = buildDefaultRecallConfig();
         baseConfig.retrievalMode = settings.retrievalMode;
         baseConfig.topK = settings.retrievalDefaultTopK;
