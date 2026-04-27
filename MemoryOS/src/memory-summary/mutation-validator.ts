@@ -3,6 +3,7 @@ import { isHighValueEntityType } from '../core/entity-schema';
 import { compareKeysNearMatch } from '../core/compare-key';
 import { isRelationTag } from '../constants/relationTags';
 import { collectMemoryNaturalLanguageFields, findMemoryTextPollution } from '../core/memory-quality-guard';
+import { TargetRefValidator } from '../core/target-ref-validator';
 
 /**
  * 功能：定义总结 mutation 校验结果。
@@ -18,6 +19,11 @@ export interface ValidateSummaryMutationResult {
  * 功能：定义字段白名单映射。
  */
 export type EditableFieldMap = Map<string, Set<string>>;
+
+export interface ValidateSummaryMutationOptions {
+    targetEditablePaths?: Map<string, Set<string>>;
+    requireTargetRefForExistingMutations?: boolean;
+}
 
 const ALLOWED_ACTIONS = new Set(['ADD', 'MERGE', 'UPDATE', 'INVALIDATE', 'DELETE', 'NOOP']);
 const MUTATION_ACTIONS_REQUIRING_EVIDENCE = new Set(['ADD', 'MERGE', 'UPDATE', 'INVALIDATE']);
@@ -52,6 +58,7 @@ const NATURAL_LANGUAGE_FIELD_NAMES = new Set([
     'traits',
     'detail',
 ]);
+const targetRefValidator = new TargetRefValidator();
 
 /**
  * 功能：校验并归一化总结 mutation 文档。
@@ -62,6 +69,7 @@ const NATURAL_LANGUAGE_FIELD_NAMES = new Set([
 export function validateSummaryMutationDocument(
     rawDocument: unknown,
     editableFieldMap: EditableFieldMap,
+    options: ValidateSummaryMutationOptions = {},
 ): ValidateSummaryMutationResult {
     if (!rawDocument || typeof rawDocument !== 'object' || Array.isArray(rawDocument)) {
         return {
@@ -74,7 +82,7 @@ export function validateSummaryMutationDocument(
     const source = rawDocument as Record<string, unknown>;
     const schemaVersion = String(source.schemaVersion ?? '').trim();
     const window = normalizeWindow(source.window);
-    const actionNormalizeResult = normalizeActions(source.actions, editableFieldMap);
+    const actionNormalizeResult = normalizeActions(source.actions, editableFieldMap, options);
     const errors = [...actionNormalizeResult.errors, ...validateDocumentSafety(actionNormalizeResult.actions)];
     const warnings = [...actionNormalizeResult.warnings];
     if (!schemaVersion) {
@@ -246,6 +254,7 @@ function normalizeWindow(value: unknown): SummaryMutationDocument['window'] | nu
 function normalizeActions(
     value: unknown,
     editableFieldMap: EditableFieldMap,
+    options: ValidateSummaryMutationOptions,
 ): { actions: SummaryMutationAction[]; errors: string[]; warnings: string[] } {
     if (!Array.isArray(value)) {
         return { actions: [], errors: [], warnings: [] };
@@ -254,7 +263,7 @@ function normalizeActions(
     const errors: string[] = [];
     const warnings: string[] = [];
     for (const row of value) {
-        const normalized = normalizeAction(row, editableFieldMap);
+        const normalized = normalizeAction(row, editableFieldMap, options);
         if (!normalized.action) {
             if (normalized.error) {
                 errors.push(normalized.error);
@@ -281,6 +290,7 @@ function normalizeActions(
 function normalizeAction(
     value: unknown,
     editableFieldMap: EditableFieldMap,
+    options: ValidateSummaryMutationOptions,
 ): { action: SummaryMutationAction | null; error?: string; errors: string[]; warnings: string[] } {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return { action: null, error: 'invalid_action_type', errors: [], warnings: [] };
@@ -300,7 +310,14 @@ function normalizeAction(
     const enumErrors = validatePayloadEnums(targetKind, payloadResult.payload);
     const semanticErrors = validateActionShape(action, row, payloadResult.payload);
     const contractResult = validateActionContract(action, row, payloadResult.payload);
+    const targetPathErrors = validateTargetPatchPaths(action, row, rawPayload, options);
     const sourceEvidence = normalizeSourceEvidence(row.sourceEvidence);
+    const normalizedPatch = (action === 'UPDATE' || action === 'MERGE' || action === 'INVALIDATE') && Object.keys(payloadResult.payload).length > 0
+        ? payloadResult.payload
+        : undefined;
+    const normalizedNewRecord = action === 'ADD' && Object.keys(payloadResult.payload).length > 0
+        ? payloadResult.payload
+        : undefined;
     return {
         action: {
             action: action as SummaryMutationAction['action'],
@@ -311,14 +328,17 @@ function normalizeAction(
             confidence: normalizeOptionalNumber(row.confidence),
             memoryValue: normalizeMemoryValue(row.memoryValue),
             sourceEvidence,
+            targetRef: normalizeOptionalString(row.targetRef),
+            sourceRefs: dedupeStrings(Array.isArray(row.sourceRefs) ? (row.sourceRefs as string[]) : []),
             targetId: normalizeOptionalString(row.targetId),
             sourceIds: dedupeStrings(Array.isArray(row.sourceIds) ? (row.sourceIds as string[]) : []),
             candidateId: normalizeOptionalString(row.candidateId),
+            keySeed: normalizeKeySeed(row.keySeed),
             entityKey: normalizeOptionalString(row.entityKey),
             compareKey: normalizeOptionalString(row.compareKey),
             matchKeys: dedupeStrings(Array.isArray(row.matchKeys) ? (row.matchKeys as string[]) : []),
-            patch: toPlainRecord(row.patch),
-            newRecord: toPlainRecord(row.newRecord),
+            patch: normalizedPatch,
+            newRecord: normalizedNewRecord,
             payload: payloadResult.payload,
             reasonCodes: dedupeStrings(Array.isArray(row.reasonCodes) ? (row.reasonCodes as string[]) : []),
         },
@@ -326,6 +346,7 @@ function normalizeAction(
             ...enumErrors,
             ...semanticErrors,
             ...contractResult.errors,
+            ...targetPathErrors,
         ],
         // payload_field_not_allowed 降级为警告：因 strict JSON schema 不支持 anyOf/oneOf，
         // 所有类型的可写字段被合并到统一 payload schema，AI 不可避免使用跨类型字段。
@@ -367,8 +388,11 @@ function validateActionContract(
     if (compareKey && !compareKey.startsWith('ck:v2:')) {
         warnings.push(`comparekey_not_v2:${compareKey}`);
     }
-    if ((action === 'ADD' || action === 'MERGE') && !entityKey) {
+    if (action === 'MERGE' && !entityKey) {
         errors.push(`${action.toLowerCase()}_requires_entity_key`);
+    }
+    if (action === 'ADD' && !normalizeKeySeed(row.keySeed)) {
+        errors.push('add_requires_key_seed');
     }
     if (action === 'ADD' && !toPlainRecord(row.newRecord)) {
         errors.push('add_missing_new_record');
@@ -378,6 +402,9 @@ function validateActionContract(
     }
     if ((action === 'DELETE' || action === 'NOOP') && (toPlainRecord(row.patch) || toPlainRecord(row.newRecord) || toPlainRecord(row.payload))) {
         errors.push('delete_noop_should_not_have_payload');
+    }
+    if ((action === 'ADD' || action === 'UPDATE' || action === 'MERGE' || action === 'INVALIDATE') && toPlainRecord(row.payload)) {
+        errors.push('payload_field_deprecated');
     }
     if (MUTATION_ACTIONS_REQUIRING_EVIDENCE.has(action)) {
         if (!sourceEvidence || !sourceEvidence.type || !sourceEvidence.brief) {
@@ -394,6 +421,21 @@ function validateActionContract(
         errors: dedupeStrings(errors),
         warnings: dedupeStrings(warnings),
     };
+}
+
+function validateTargetPatchPaths(
+    action: string,
+    row: Record<string, unknown>,
+    rawPayload: unknown,
+    options: ValidateSummaryMutationOptions,
+): string[] {
+    return targetRefValidator.validatePatch({
+        action,
+        targetRef: String(row.targetRef ?? '').trim(),
+        patch: rawPayload,
+        targetEditablePaths: options.targetEditablePaths,
+        requireTargetRef: options.requireTargetRefForExistingMutations === true,
+    }).errors;
 }
 
 /**
@@ -438,6 +480,23 @@ function normalizeMemoryValue(value: unknown): SummaryMutationAction['memoryValu
         return text;
     }
     return undefined;
+}
+
+function normalizeKeySeed(value: unknown): SummaryMutationAction['keySeed'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    const keySeed = {
+        kind: normalizeOptionalString(record.kind),
+        title: normalizeOptionalString(record.title),
+        qualifier: normalizeOptionalString(record.qualifier),
+        participants: dedupeStrings(Array.isArray(record.participants) ? record.participants as string[] : []),
+    };
+    if (!keySeed.kind && !keySeed.title && !keySeed.qualifier && keySeed.participants.length <= 0) {
+        return undefined;
+    }
+    return keySeed;
 }
 
 /**

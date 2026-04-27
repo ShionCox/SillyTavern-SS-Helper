@@ -415,14 +415,23 @@ NOOP：
 - ADD 使用 newRecord；
 - UPDATE、MERGE、INVALIDATE 使用 patch；
 - DELETE 和 NOOP 不要输出 payload、patch、newRecord；
-- ADD 必须输出 entityKey，且 entityKey 必须是稳定内部键；
+- UPDATE、MERGE、INVALIDATE、DELETE 必须选择 patchTargetManifest.patchTargets 中的 targetRef；
+- ADD 不要编造 entityKey、compareKey 或真实 ID；ADD 必须输出 keySeed 和 newRecord，系统会生成 entityKey / compareKey / matchKeys；
 - 所有非 NOOP 动作必须输出 confidence、memoryValue、sourceEvidence；
-- compareKey 采用 ck:v2 协议；
-- entityKey 是内部稳定键；
+- 不要输出真实 entryId、recordId、targetId；
 - matchKeys 只做模糊候选；
 - 无法确认同一对象时优先 NOOP、UPDATE 或 MERGE，不要盲目 ADD；
 - 所有自然语言字段中，凡是指代主角/玩家/当前用户，一律使用 `{{user}}`；
 - 只输出 JSON。
+
+Patch Target 规则：
+- 你会收到 patchTargetManifest，其中包含本次允许更新的已有记忆目标；
+- targetRef 必须来自 patchTargetManifest.patchTargets，不要猜测 targetRef；
+- 如果信息是对某个 targetRef 的阶段推进、状态变化、关系变化或细节补充，使用 UPDATE；
+- patch 只能包含该 targetRef.editablePaths 中允许的字段；
+- patch 只写变化字段，不要重复 current 中未变化的内容；
+- 如果没有合适 targetRef，但信息值得保存，使用 ADD；
+- 如果信息已被某个 targetRef 完整覆盖，使用 NOOP。
 
 记忆价值原则：
 - 输出长期可复用的事实、状态变化、关系变化、任务进展、世界状态、开放悬念；
@@ -467,13 +476,24 @@ NOOP：
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["action", "targetKind", "entityKey", "confidence", "memoryValue", "sourceEvidence", "reasonCodes"],
+        "required": ["action", "targetKind", "confidence", "memoryValue", "sourceEvidence", "reasonCodes"],
         "properties": {
           "action": {
             "type": "string",
             "enum": ["ADD", "UPDATE", "MERGE", "INVALIDATE", "DELETE", "NOOP"]
           },
           "targetKind": { "type": "string" },
+          "targetRef": { "type": "string" },
+          "sourceRefs": { "type": "array", "items": { "type": "string" } },
+          "keySeed": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string" },
+              "title": { "type": "string" },
+              "qualifier": { "type": "string" },
+              "participants": { "type": "array", "items": { "type": "string" } }
+            }
+          },
           "entityKey": { "type": "string" },
           "compareKey": { "type": "string" },
           "matchKeys": { "type": "array", "items": { "type": "string" } },
@@ -533,9 +553,7 @@ NOOP：
     {
       "action": "UPDATE",
       "targetKind": "task",
-      "entityKey": "entity:task:escort_messenger",
-      "compareKey": "ck:v2:task:护送密使离开王都:王都",
-      "matchKeys": ["mk:task:护送密使离开王都"],
+      "targetRef": "T1",
       "schemaVersion": "v2",
       "confidence": 0.84,
       "memoryValue": "high",
@@ -551,11 +569,6 @@ NOOP：
       },
       "patch": {
         "summary": "任务已从确认情报升级为正式撤离执行。",
-        "bindings": {
-          "actors": ["user", "actor_erin"],
-          "organizations": ["entity:organization:night_raven"],
-          "cities": ["entity:city:royal_capital"]
-        },
         "fields": {
           "objective": "护送密使离开王都",
           "status": "进行中",
@@ -585,13 +598,14 @@ NOOP：
 3. ADD 缺少 newRecord；
 4. UPDATE / MERGE / INVALIDATE 缺少 patch；
 5. DELETE / NOOP 包含 payload、patch 或 newRecord；
-6. 自然语言字段中出现“用户”“主角”“玩家”“你”，应改为 `{{user}}`；
-7. 出现系统腔表达，如“本轮”“当前系统”“抽取结果”“结构化处理”；
-8. sourceEvidence 来自禁止来源；
-9. confidence 超出 0~1；
-10. compareKey 不是 ck:v2 协议；
-11. 明显重复的 ADD 应改为 UPDATE / MERGE / NOOP；
-12. 无依据的高置信推断应降置信或改为 NOOP。
+6. UPDATE / MERGE / INVALIDATE / DELETE 缺少 targetRef；
+7. ADD 编造 entityKey、compareKey 或真实 ID，而不是使用 keySeed；
+8. 自然语言字段中出现“用户”“主角”“玩家”“你”，应改为 `{{user}}`；
+9. 出现系统腔表达，如“本轮”“当前系统”“抽取结果”“结构化处理”；
+10. sourceEvidence 来自禁止来源；
+11. confidence 超出 0~1；
+12. 明显重复的 ADD 应改为 UPDATE / MERGE / NOOP；
+13. 无依据的高置信推断应降置信或改为 NOOP。
 
 不要新增没有依据的记忆。
 不要扩大原文含义。
@@ -658,9 +672,11 @@ NOOP：
 
 <!-- section: TAKEOVER_BATCH_SYSTEM -->
 你正在执行旧聊天接管的历史批次分析任务。
-请优先复用 knownContext 与 knownEntities，保持 compareKey、entityKey、bindings 的稳定性。
-- compareKey 采用 ck:v2 协议。
-- entityKey 是内部稳定主键，compareKey 是跨流程归并键，matchKeys 只做模糊候选。
+请优先复用 knownContext.knownEntityManifest 与 knownEntities，保持 targetRef、patch 与 bindings 的稳定性。
+- UPDATE / MERGE / INVALIDATE / DELETE 已有任务、世界状态、组织、城市、国家、地点时，必须选择 knownEntityManifest.targets 中的 targetRef。
+- ADD 不要编造 entityKey / compareKey；请输出 keySeed，系统会生成 entityKey / compareKey / matchKeys。
+- patch 只写变化字段，不要复制 current 中未变化内容。
+- compareKey/entityKey 是系统内部稳定键，matchKeys 只做模糊候选。
 - 关系必须保留 sourceActorKey、targetActorKey、relationTag 的结构语义。
 - 任务、事件、世界状态、实体优先输出结构化主源，不要只给模糊摘要。
 - 你输出的是故事世界内部可读的记忆文本，不是系统日志、不是批处理说明、不是分析报告。
@@ -722,8 +738,14 @@ NOOP：
   "entityCards": [
     {
       "entityType": "organization",
-      "entityKey": "entity:organization:night_raven",
-      "compareKey": "ck:v2:organization:夜鸦组:王都",
+      "keySeed": {
+        "kind": "organization",
+        "title": "夜鸦组",
+        "qualifier": "王都",
+        "participants": ["actor_erin"]
+      },
+      "entityKey": "",
+      "compareKey": "",
       "matchKeys": ["mk:organization:夜鸦组"],
       "schemaVersion": "v2",
       "canonicalName": "夜鸦组",
@@ -751,6 +773,12 @@ NOOP：
   "entityTransitions": [],
   "stableFacts": [
     {
+      "keySeed": {
+        "kind": "event",
+        "title": "确认北城门撤离路线",
+        "qualifier": "王都",
+        "participants": ["actor_erin", "user"]
+      },
       "type": "event",
       "subject": "艾琳",
       "predicate": "确认",
@@ -758,8 +786,8 @@ NOOP：
       "confidence": 0.86,
       "title": "确认北城门撤离路线",
       "summary": "艾琳把撤离的希望押在北城门上，那是眼下最像一条生路的出口。",
-      "entityKey": "entity:event:north_gate_route",
-      "compareKey": "ck:v2:event:确认北城门撤离路线:王都",
+      "entityKey": "",
+      "compareKey": "",
       "matchKeys": ["mk:event:确认北城门撤离路线"],
       "schemaVersion": "v2",
       "canonicalName": "确认北城门撤离路线",
@@ -799,6 +827,13 @@ NOOP：
   ],
   "taskTransitions": [
     {
+      "targetRef": "T1",
+      "patch": {
+        "summary": "原本停在筹划里的撤离，终于被逼着迈进了真刀真枪的路上。",
+        "description": "北城门成了唯一还能赌一把的出口，密使能不能活着离城，全看这一程。",
+        "goal": "确保密使安全离城",
+        "status": "进行中"
+      },
       "task": "护送密使离开王都",
       "from": "未开始",
       "to": "进行中",
@@ -807,8 +842,8 @@ NOOP：
       "description": "北城门成了唯一还能赌一把的出口，密使能不能活着离城，全看这一程。",
       "goal": "确保密使安全离城",
       "status": "进行中",
-      "entityKey": "entity:task:escort_messenger",
-      "compareKey": "ck:v2:task:护送密使离开王都:王都",
+      "entityKey": "",
+      "compareKey": "",
       "matchKeys": ["mk:task:护送密使离开王都"],
       "schemaVersion": "v2",
       "canonicalName": "护送密使离开王都",
@@ -826,6 +861,11 @@ NOOP：
   ],
   "worldStateChanges": [
     {
+      "targetRef": "T2",
+      "patch": {
+        "value": "持续执行中",
+        "summary": "夜禁没有半点松动，整座王都入夜后像被无形的铁闸一寸寸扣紧。"
+      },
       "key": "王都夜禁",
       "value": "持续执行中",
       "summary": "夜禁没有半点松动，整座王都入夜后像被无形的铁闸一寸寸扣紧。",
@@ -838,8 +878,8 @@ NOOP：
         "tasks": ["entity:task:escort_messenger"],
         "events": ["entity:event:north_gate_route"]
       },
-      "entityKey": "entity:world_state:royal_capital_curfew",
-      "compareKey": "ck:v2:world_global_state:王都夜禁:global",
+      "entityKey": "",
+      "compareKey": "",
       "matchKeys": ["mk:world_global_state:王都夜禁"],
       "schemaVersion": "v2",
       "canonicalName": "王都夜禁",
@@ -871,8 +911,11 @@ NOOP：
   "resolutions": [
     {
       "action": "merge",
-      "primaryKey": "entity:organization:night_raven",
-      "secondaryKeys": ["entity:organization:night_raven_alias"],
+      "targetRef": "T1",
+      "sourceRefs": ["T2"],
+      "primaryKey": "",
+      "secondaryKeys": [],
+      "patch": {},
       "fieldOverrides": {},
       "reasonCodes": ["llm_conflict_merge"]
     }

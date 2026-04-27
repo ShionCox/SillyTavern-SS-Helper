@@ -135,7 +135,7 @@ export class DreamRollbackService {
                 rolledBackEntryIds.push(entry.entryId);
             }
         } else if (targetMutation.mutationType === 'entry_patch') {
-            const patchTargetId = String(targetMutation.payload.entryId ?? '').trim();
+            const patchTargetId = String(targetMutation.payload.targetEntryId ?? targetMutation.payload.entryId ?? '').trim();
             if (patchTargetId) {
                 const beforeEntry = beforeEntryMap.get(patchTargetId);
                 if (beforeEntry) {
@@ -148,7 +148,7 @@ export class DreamRollbackService {
                 }
             }
         } else if (targetMutation.mutationType === 'relationship_patch') {
-            const patchRelId = String(targetMutation.payload.relationshipId ?? '').trim();
+            const patchRelId = String(targetMutation.payload.targetRelationshipId ?? targetMutation.payload.relationshipId ?? '').trim();
             if (patchRelId) {
                 const beforeRel = session.rollback.before.relationships.find((r) => r.relationshipId === patchRelId);
                 if (beforeRel) {

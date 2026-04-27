@@ -36,6 +36,26 @@ import type { MemoryTimeContext } from '../memory-time/time-types';
 import { buildTimeMetaByEntryType } from '../memory-time/time-context';
 import { logTimeDebug } from '../memory-time/time-debug';
 import { applyWorldProfileFieldPolicy, type WorldProfileFieldPolicy } from '../services/world-profile-field-policy';
+import { resolveMemoryKeys, type MemoryKeySeed } from '../core/memory-key-resolver';
+import { WritablePathRegistry } from '../core/writable-path-registry';
+import { PromptReferenceService } from '../services/prompt-reference-service';
+
+export interface MemoryTakeoverKnownEntityManifestItem {
+    targetRef: string;
+    entityType: 'organization' | 'city' | 'nation' | 'location' | 'task' | 'world_global_state';
+    entityKey: string;
+    title: string;
+    current: Record<string, unknown>;
+    editablePaths: string[];
+    allowedActions: Array<'UPDATE' | 'MERGE' | 'INVALIDATE' | 'DELETE'>;
+    operationHints: string[];
+}
+
+export interface MemoryTakeoverKnownEntityManifest {
+    version: 'takeover-known-entity-manifest.v1';
+    rules: string[];
+    targets: MemoryTakeoverKnownEntityManifestItem[];
+}
 
 /**
  * 功能：定义旧聊天批处理可复用的分类对象提示。
@@ -60,6 +80,7 @@ export interface MemoryTakeoverKnownContext {
     taskState: string[];
     worldState: string[];
     knownEntities: MemoryTakeoverKnownEntities;
+    knownEntityManifest: MemoryTakeoverKnownEntityManifest;
     updateHint: string;
 }
 
@@ -243,12 +264,33 @@ function normalizeBindings(value: unknown): MemoryTakeoverBindings {
     };
 }
 
+function normalizeKeySeed(value: unknown): MemoryKeySeed {
+    const record = toRecord(value);
+    return {
+        kind: String(record.kind ?? '').trim(),
+        title: String(record.title ?? '').trim(),
+        qualifier: String(record.qualifier ?? '').trim(),
+        participants: Array.isArray(record.participants)
+            ? record.participants.map((item: unknown): string => String(item ?? '').trim()).filter(Boolean)
+            : [],
+    };
+}
+
+function buildTargetRefMap(knownContext?: MemoryTakeoverKnownContext): Map<string, MemoryTakeoverKnownEntityManifestItem> {
+    return new Map((knownContext?.knownEntityManifest.targets ?? []).map((item) => [item.targetRef, item]));
+}
+
+const writablePathRegistry = new WritablePathRegistry();
+
 /**
  * 功能：归一化任务状态变更列表，补齐稳定标题、摘要和绑定信息。
  * @param transitions 原始任务变更列表。
  * @returns 归一化后的任务变更列表。
  */
-export function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransition[]): MemoryTakeoverTaskTransition[] {
+export function normalizeTaskTransitions(
+    transitions: MemoryTakeoverTaskTransition[],
+    targetRefMap: Map<string, MemoryTakeoverKnownEntityManifestItem> = new Map(),
+): MemoryTakeoverTaskTransition[] {
     const result: MemoryTakeoverTaskTransition[] = [];
     const seen = new Set<string>();
     for (const transition of transitions) {
@@ -256,28 +298,56 @@ export function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransiti
         if (!task) {
             continue;
         }
-        const title = String(transition.title ?? '').trim() || task;
-        const compareKey = String(transition.compareKey ?? '').trim() || buildTaskCompareKey(title);
+        const targetRef = String(transition.targetRef ?? '').trim();
+        const target = targetRefMap.get(targetRef);
+        const patch = toRecord(transition.patch);
+        const title = String(patch.title ?? transition.title ?? target?.title ?? '').trim() || task;
+        const keySeed = normalizeKeySeed(transition.keySeed);
+        const resolvedKeys = target
+            ? null
+            : resolveMemoryKeys({
+                targetKind: 'task',
+                keySeed: {
+                    ...keySeed,
+                    kind: keySeed.kind || 'task',
+                    title: keySeed.title || title,
+                },
+                newRecord: {
+                    ...toRecord(transition),
+                    ...patch,
+                    title,
+                    fields: patch,
+                },
+            });
+        const compareKey = (target?.entityKey ?? resolvedKeys?.compareKey ?? String(transition.compareKey ?? '').trim()) || buildTaskCompareKey(title);
         if (seen.has(compareKey)) {
             continue;
         }
         seen.add(compareKey);
-        const status = String(transition.status ?? transition.to ?? '').trim();
+        const status = String(patch.status ?? transition.status ?? transition.to ?? '').trim();
         result.push({
+            ...(targetRef ? { targetRef } : {}),
+            keySeed: {
+                kind: keySeed.kind || 'task',
+                title: keySeed.title || title,
+                qualifier: keySeed.qualifier,
+                participants: keySeed.participants,
+            },
+            patch,
             task,
             from: String(transition.from ?? '').trim(),
-            to: String(transition.to ?? '').trim(),
+            to: String(patch.to ?? transition.to ?? '').trim(),
             title,
-            summary: String(transition.summary ?? '').trim(),
-            description: String(transition.description ?? '').trim(),
-            goal: String(transition.goal ?? '').trim(),
+            summary: String(patch.summary ?? transition.summary ?? '').trim(),
+            description: String(patch.description ?? transition.description ?? '').trim(),
+            goal: String(patch.goal ?? transition.goal ?? '').trim(),
             status,
-            entityKey: String(transition.entityKey ?? '').trim() || `entity:task:${normalizeId(title)}`,
-            compareKey,
-            matchKeys: normalizeStringList(transition.matchKeys ?? buildMatchKeys('task', title, undefined, [task]), 12),
+            entityKey: (target?.entityKey ?? resolvedKeys?.entityKey ?? String(transition.entityKey ?? '').trim()) || `entity:task:${normalizeId(title)}`,
+            compareKey: target ? (String(transition.compareKey ?? '').trim() || buildTaskCompareKey(title)) : compareKey,
+            matchKeys: normalizeStringList(resolvedKeys?.matchKeys ?? transition.matchKeys ?? buildMatchKeys('task', title, undefined, [task]), 12),
             schemaVersion: String(transition.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
             canonicalName: String(transition.canonicalName ?? '').trim() || title,
-            bindings: normalizeBindings(transition.bindings),
+            bindings: normalizeBindings(patch.bindings ?? transition.bindings),
             reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
         });
     }
@@ -289,7 +359,10 @@ export function normalizeTaskTransitions(transitions: MemoryTakeoverTaskTransiti
  * @param changes 原始世界状态变更列表。
  * @returns 归一化后的世界状态变更列表。
  */
-export function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChange[]): MemoryTakeoverWorldStateChange[] {
+export function normalizeWorldStateChanges(
+    changes: MemoryTakeoverWorldStateChange[],
+    targetRefMap: Map<string, MemoryTakeoverKnownEntityManifestItem> = new Map(),
+): MemoryTakeoverWorldStateChange[] {
     const result: MemoryTakeoverWorldStateChange[] = [];
     const seen = new Set<string>();
     for (const change of changes) {
@@ -297,22 +370,50 @@ export function normalizeWorldStateChanges(changes: MemoryTakeoverWorldStateChan
         if (!key) {
             continue;
         }
-        const compareKey = String(change.compareKey ?? '').trim() || buildWorldStateCompareKey(key);
+        const targetRef = String(change.targetRef ?? '').trim();
+        const target = targetRefMap.get(targetRef);
+        const patch = toRecord(change.patch);
+        const keySeed = normalizeKeySeed(change.keySeed);
+        const resolvedKeys = target
+            ? null
+            : resolveMemoryKeys({
+                targetKind: 'world_global_state',
+                keySeed: {
+                    ...keySeed,
+                    kind: keySeed.kind || 'world_global_state',
+                    title: keySeed.title || key,
+                },
+                newRecord: {
+                    ...toRecord(change),
+                    ...patch,
+                    title: key,
+                    fields: patch,
+                },
+            });
+        const compareKey = (target?.entityKey ?? resolvedKeys?.compareKey ?? String(change.compareKey ?? '').trim()) || buildWorldStateCompareKey(key);
         if (seen.has(compareKey)) {
             continue;
         }
         seen.add(compareKey);
-        const value = String(change.value ?? '').trim();
+        const value = String(patch.value ?? change.value ?? '').trim();
         result.push({
+            ...(targetRef ? { targetRef } : {}),
+            keySeed: {
+                kind: keySeed.kind || 'world_global_state',
+                title: keySeed.title || key,
+                qualifier: keySeed.qualifier,
+                participants: keySeed.participants,
+            },
+            patch,
             key,
             value,
-            entityKey: String(change.entityKey ?? '').trim() || `entity:world_state:${normalizeId(key)}`,
-            summary: String(change.summary ?? '').trim() || `${key}：${value}`,
-            compareKey,
-            matchKeys: normalizeStringList(change.matchKeys ?? buildMatchKeys('world_global_state', key, undefined, ['global']), 12),
+            entityKey: (target?.entityKey ?? resolvedKeys?.entityKey ?? String(change.entityKey ?? '').trim()) || `entity:world_state:${normalizeId(key)}`,
+            summary: String(patch.summary ?? change.summary ?? '').trim() || `${key}：${value}`,
+            compareKey: target ? String(change.compareKey ?? '').trim() || buildWorldStateCompareKey(key) : compareKey,
+            matchKeys: normalizeStringList(resolvedKeys?.matchKeys ?? change.matchKeys ?? buildMatchKeys('world_global_state', key, undefined, ['global']), 12),
             schemaVersion: String(change.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
             canonicalName: String(change.canonicalName ?? '').trim() || key,
-            bindings: normalizeBindings(change.bindings),
+            bindings: normalizeBindings(patch.bindings ?? change.bindings),
             reasonCodes: normalizeStringList(change.reasonCodes ?? [], 12),
         });
     }
@@ -848,6 +949,7 @@ export function buildTakeoverKnownContext(
         }),
         8,
     );
+    const knownEntityManifest = buildTakeoverKnownEntityManifest(knownEntities);
 
     return {
         actorHints,
@@ -856,10 +958,64 @@ export function buildTakeoverKnownContext(
         taskState,
         worldState,
         knownEntities,
+        knownEntityManifest,
         updateHint: batchResults.length > 0
             ? '以下内容来自前面已经处理过的批次和当前聊天里已有的相关记忆，可用来判断本批是在补充新信息，还是在更新已有对象。'
             : '当前还没有前置批次结果，本批按首次识别处理即可。',
     };
+}
+
+export function buildTakeoverKnownEntityManifest(knownEntities: MemoryTakeoverKnownEntities): MemoryTakeoverKnownEntityManifest {
+    const references = new PromptReferenceService();
+    const targets: MemoryTakeoverKnownEntityManifestItem[] = [];
+    const pushTargets = (
+        entityType: MemoryTakeoverKnownEntityManifestItem['entityType'],
+        items: Array<{ entityKey: string; displayName: string }>,
+    ): void => {
+        for (const item of items) {
+            const entityKey = String(item.entityKey ?? '').trim();
+            if (!entityKey) {
+                continue;
+            }
+            const title = String(item.displayName ?? '').trim() || entityKey;
+            targets.push({
+                targetRef: references.encode('target', `${entityType}:${entityKey}`),
+                entityType,
+                entityKey,
+                title,
+                current: {
+                    title,
+                    entityKey,
+                },
+                editablePaths: resolveTakeoverEditablePaths(entityType),
+                allowedActions: ['UPDATE', 'MERGE', 'INVALIDATE', 'DELETE'],
+                operationHints: [`如果本批信息延续 ${title}，优先用该 targetRef 输出 patch。`],
+            });
+        }
+    };
+    pushTargets('organization', knownEntities.organizations);
+    pushTargets('city', knownEntities.cities);
+    pushTargets('nation', knownEntities.nations);
+    pushTargets('location', knownEntities.locations);
+    pushTargets('task', knownEntities.tasks);
+    pushTargets('world_global_state', knownEntities.worldStates);
+    return {
+        version: 'takeover-known-entity-manifest.v1',
+        rules: [
+            'UPDATE / MERGE / INVALIDATE / DELETE 已知对象时必须使用 targetRef。',
+            '不要编造 entityKey、compareKey 或真实 ID；ADD 使用 keySeed，由系统生成稳定键。',
+            'patch 只写发生变化且 editablePaths 允许的字段。',
+            '没有合适 targetRef 且信息值得保存时，才输出 ADD 或新卡片。',
+        ],
+        targets: targets.slice(0, 48),
+    };
+}
+
+function resolveTakeoverEditablePaths(entityType: MemoryTakeoverKnownEntityManifestItem['entityType']): string[] {
+    return writablePathRegistry.resolvePaths({
+        targetKind: entityType,
+        domain: 'takeover',
+    });
 }
 
 /**
@@ -1017,13 +1173,15 @@ export async function runTakeoverBatch(input: {
         extraSystemInstruction: [
             String(input.worldStrategyHintText ?? '').trim(),
             '如果输入里提供了 knownContext，请把它视为当前批次可复用的分类对象提示。',
+            'knownContext.knownEntityManifest 是本批允许更新的已知实体目标清单；更新、合并、失效或删除已有任务/世界状态/组织/城市/国家/地点时，只能选择其中的 targetRef，并在 patch 中写变化字段。',
+            '新增任务、世界状态或实体时不要编造 entityKey / compareKey；请输出 keySeed，系统会生成 entityKey、compareKey 与 matchKeys。',
             '你输出的是故事世界内部可读的记忆文本，不是系统日志、不是批处理说明、不是分析报告。',
             '所有自然语言字段中，凡是指代主角、玩家或当前用户，一律使用 `{{user}}`，禁止使用“用户”“主角”“你”“主人公”“对方”等写法。',
             '禁止在自然语言字段中出现“本批次”“本轮”“当前剧情”“当前场景”“当前设置地点”“当前设置”“首次识别到”“已触发”“已确认”“结构化”“绑定”“主链”“输出内容”“处理结果”“待补全”“需要进一步确认”等系统视角词。',
             '所有给人看的自然语言字段都必须写成小说设定集、角色小传、世界观摘要或悬念档案风格，不要解释你在做什么，只描述故事事实、人物关系、情绪推进与悬念。',
             '只有 story_narrative 与 story_dialogue 可作为正式抽取主源；meta 分析、说明、注释、tool 文本、think 风格文本不能直接产出正式角色与主链事实。',
             'knownContext.knownEntities.actors 代表当前聊天里已知且可更新的角色；knownContext.knownEntities.organizations 代表已知组织与势力；knownContext.knownEntities.cities 代表已知城市；knownContext.knownEntities.nations 代表已知国家；knownContext.knownEntities.locations 代表已知地点；knownContext.knownEntities.tasks 代表已知任务；knownContext.knownEntities.worldStates 代表已知世界状态。',
-            '其中 actors 使用 actorKey 作为稳定标识；organizations、cities、nations、locations、tasks、worldStates 使用 entityKey 作为稳定标识。判断是不是同一个对象时，优先参考这些 key，再参考显示名。',
+            '其中 actors 使用 actorKey 作为稳定标识；organizations、cities、nations、locations、tasks、worldStates 使用 knownEntityManifest.targetRef 选择已有目标，displayName 只作辅助识别。',
             '处理本批消息时，请优先判断当前信息应该归到哪一类对象上，而不是把所有新名词都当作角色。',
             '只有稳定、反复出现、并且明显是人物的对象，才允许写进 actorCards。',
             '正式角色仅限：在故事正文中实际出场并参与行动、对话、关系推进的人物；与 `{{user}}` 或其他已确认角色形成明确关系的人物；在本批剧情因果链中起关键作用的人物。',
@@ -1034,9 +1192,9 @@ export async function runTakeoverBatch(input: {
             '如果消息里出现“何盈（橙狗狗视角）”这类写法，relationships 里仍然要使用标准角色键，不要把视角说明塞进 actorKey。',
             '教派、组织、势力、国家、城市、地点、阵营、规则、物品这类非人物对象，不要写进 actorCards。',
             '当 stableFacts.type 为 event，且事件主体、结果或描述里明确指向已有角色时，请优先沿用已有 actorCards 中的角色身份理解该事件，不要把同一个角色拆成新的对象。',
-            '新增字段 entityCards 用于输出世界实体卡候选，entityType 可选 organization / city / nation / location。每张 entityCard 必须包含 entityType、entityKey、compareKey（格式为 ck:v2 协议）、title、aliases、summary、fields、confidence，并在能确认时补 matchKeys、schemaVersion、canonicalName。',
+            '新增字段 entityCards 用于输出世界实体卡候选，entityType 可选 organization / city / nation / location。新增卡片必须包含 entityType、title、aliases、summary、fields、confidence，并尽量提供 keySeed；entityKey、compareKey、matchKeys 可留空，由系统生成。',
             '新增字段 entityTransitions 用于输出世界实体变更，action 可选 ADD / UPDATE / MERGE / INVALIDATE / DELETE。',
-            '若已存在组织/城市/国家/地点（参考 knownEntities），请优先 UPDATE 而非 ADD。仅在无法匹配现有 entityKey / 别名时才 ADD。重名但属性一致时优先 MERGE。状态被新状态取代时优先 INVALIDATE + ADD/UPDATE。DELETE 仅用于明显垃圾或误建的记录。',
+            '若已存在组织/城市/国家/地点（参考 knownEntityManifest），请优先 UPDATE + targetRef + patch，而非 ADD。仅在无法匹配 targetRef / 别名时才 ADD。重名但属性一致时优先 MERGE。状态被新状态取代时优先 INVALIDATE + ADD/UPDATE。DELETE 仅用于明显垃圾或误建的记录。',
             '组织与势力优先写入 entityCards（entityType=organization）和 stableFacts（type=faction 或 type=organization）；地点请使用 entityCards（entityType=location）和 stableFacts（type=location）；城市请使用 entityCards（entityType=city）；国家请使用 entityCards（entityType=nation）；事件请使用 stableFacts（type=event）；物品或遗物请使用 stableFacts（type=artifact 或 type=item）；世界长期设定请使用 stableFacts（type=world）。',
             'relationTransitions 的 target 可以是角色，也可以是组织、势力、城市、国家或地点；只有明确是人物时，才应该同时出现在 actorCards 里。',
             '每条 relationTransitions 都要尽量填写 relationTag 和 targetType。relationTag 只能从 亲人、朋友、盟友、恋人、暧昧、师徒、上下级、竞争者、情敌、宿敌、陌生人 中选择；targetType 只能填写 actor、organization、city、nation、location、unknown。',
@@ -1053,6 +1211,7 @@ export async function runTakeoverBatch(input: {
         range: input.batch.range,
         result: structured,
         sourceSegments,
+        knownContext,
         worldProfileFieldPolicy: input.worldProfileFieldPolicy,
     });
     return runTakeoverRepairService({
@@ -1069,6 +1228,7 @@ export async function runTakeoverBatch(input: {
             range: input.batch.range,
             result: value,
             sourceSegments,
+            knownContext,
             worldProfileFieldPolicy: input.worldProfileFieldPolicy,
         }),
     });
@@ -1113,16 +1273,35 @@ export function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandid
         if (!title) {
             continue;
         }
-        const compareKey = String(card.compareKey ?? '').trim() || buildCompareKey(entityType, title, card.fields as Record<string, unknown>);
+        const keySeed = normalizeKeySeed(card.keySeed);
+        const resolvedKeys = resolveMemoryKeys({
+            targetKind: entityType,
+            keySeed: {
+                ...keySeed,
+                kind: keySeed.kind || entityType,
+                title: keySeed.title || title,
+            },
+            newRecord: {
+                title,
+                fields: card.fields,
+            },
+        });
+        const compareKey = resolvedKeys.compareKey || String(card.compareKey ?? '').trim() || buildCompareKey(entityType, title, card.fields as Record<string, unknown>);
         if (seen.has(compareKey)) {
             continue;
         }
         seen.add(compareKey);
         result.push({
+            keySeed: {
+                kind: keySeed.kind || entityType,
+                title: keySeed.title || title,
+                qualifier: keySeed.qualifier,
+                participants: keySeed.participants,
+            },
             entityType: entityType as MemoryTakeoverEntityCardCandidate['entityType'],
-            entityKey: String(card.entityKey ?? '').trim() || `entity:${entityType}:${normalizeId(title)}`,
+            entityKey: resolvedKeys.entityKey || String(card.entityKey ?? '').trim() || `entity:${entityType}:${normalizeId(title)}`,
             compareKey,
-            matchKeys: normalizeStringList(card.matchKeys ?? buildMatchKeys(entityType, title, card.aliases, Object.values(card.fields ?? {})), 12),
+            matchKeys: normalizeStringList(resolvedKeys.matchKeys ?? card.matchKeys ?? buildMatchKeys(entityType, title, card.aliases, Object.values(card.fields ?? {})), 12),
             schemaVersion: String(card.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
             canonicalName: String(card.canonicalName ?? '').trim() || title,
             legacyCompareKeys: normalizeStringList(card.legacyCompareKeys ?? [], 8),
@@ -1143,7 +1322,10 @@ export function normalizeEntityCards(entityCards: MemoryTakeoverEntityCardCandid
  * @param transitions 原始实体变更。
  * @returns 归一化后的实体变更。
  */
-export function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTransition[]): MemoryTakeoverEntityTransition[] {
+export function normalizeEntityTransitions(
+    transitions: MemoryTakeoverEntityTransition[],
+    targetRefMap: Map<string, MemoryTakeoverKnownEntityManifestItem> = new Map(),
+): MemoryTakeoverEntityTransition[] {
     const result: MemoryTakeoverEntityTransition[] = [];
     for (const transition of transitions) {
         const entityType = String(transition.entityType ?? '').trim().toLowerCase();
@@ -1154,23 +1336,55 @@ export function normalizeEntityTransitions(transitions: MemoryTakeoverEntityTran
         if (!VALID_ENTITY_ACTIONS.has(action)) {
             continue;
         }
-        const title = String(transition.title ?? '').trim();
+        const targetRef = String(transition.targetRef ?? '').trim();
+        const target = targetRefMap.get(targetRef);
+        const patch = toRecord(transition.patch);
+        const title = String(patch.title ?? transition.title ?? target?.title ?? '').trim();
         if (!title) {
             continue;
         }
+        const keySeed = normalizeKeySeed(transition.keySeed);
+        const resolvedKeys = action === 'ADD'
+            ? resolveMemoryKeys({
+                targetKind: entityType,
+                keySeed: {
+                    ...keySeed,
+                    kind: keySeed.kind || entityType,
+                    title: keySeed.title || title,
+                },
+                newRecord: {
+                    ...toRecord(transition.payload),
+                    ...patch,
+                    title,
+                    fields: patch.fields ?? patch,
+                },
+            })
+            : null;
+        const payload = {
+            ...toRecord(transition.payload),
+            ...patch,
+        };
         result.push({
+            ...(targetRef ? { targetRef } : {}),
+            keySeed: {
+                kind: keySeed.kind || entityType,
+                title: keySeed.title || title,
+                qualifier: keySeed.qualifier,
+                participants: keySeed.participants,
+            },
+            patch,
             entityType: entityType as MemoryTakeoverEntityTransition['entityType'],
-            entityKey: String(transition.entityKey ?? '').trim() || `entity:${entityType}:${normalizeId(title)}`,
-            compareKey: String(transition.compareKey ?? '').trim() || buildCompareKey(entityType, title, transition.payload as Record<string, unknown>),
-            matchKeys: normalizeStringList(transition.matchKeys ?? buildMatchKeys(entityType, title, undefined, Object.values((transition.payload as Record<string, unknown>) ?? {})), 12),
+            entityKey: (target?.entityKey ?? resolvedKeys?.entityKey ?? String(transition.entityKey ?? '').trim()) || `entity:${entityType}:${normalizeId(title)}`,
+            compareKey: (resolvedKeys?.compareKey ?? String(transition.compareKey ?? '').trim()) || buildCompareKey(entityType, title, payload),
+            matchKeys: normalizeStringList(resolvedKeys?.matchKeys ?? transition.matchKeys ?? buildMatchKeys(entityType, title, undefined, Object.values(payload)), 12),
             schemaVersion: String(transition.schemaVersion ?? '').trim() || COMPARE_KEY_SCHEMA_VERSION,
             canonicalName: String(transition.canonicalName ?? '').trim() || title,
             legacyCompareKeys: normalizeStringList(transition.legacyCompareKeys ?? [], 8),
             title,
             action: action as MemoryTakeoverEntityTransition['action'],
             reason: String(transition.reason ?? '').trim(),
-            payload: transition.payload && typeof transition.payload === 'object' ? transition.payload : {},
-            bindings: normalizeBindings(transition.bindings),
+            payload,
+            bindings: normalizeBindings(patch.bindings ?? transition.bindings),
             reasonCodes: normalizeStringList(transition.reasonCodes ?? [], 12),
         });
     }
@@ -1418,10 +1632,12 @@ export function normalizeTakeoverBatchResult(input: {
     range: MemoryTakeoverRange;
     result: MemoryTakeoverBatchResult;
     sourceSegments?: MemoryTakeoverBatchResult['sourceSegments'];
+    knownContext?: MemoryTakeoverKnownContext;
     worldProfileFieldPolicy?: WorldProfileFieldPolicy | null;
 }): MemoryTakeoverBatchResult {
     const userDisplayName = resolveCurrentNarrativeUserName();
     const structured = normalizeTakeoverUserPlaceholder(input.result, userDisplayName);
+    const targetRefMap = buildTargetRefMap(input.knownContext);
     const normalizedResult: MemoryTakeoverBatchResult = {
         ...input.fallback,
         ...structured,
@@ -1430,11 +1646,11 @@ export function normalizeTakeoverBatchResult(input: {
         rejectedMentions: structured.rejectedMentions ?? [],
         relationships: normalizeRelationshipCards(structured.relationships ?? []),
         entityCards: normalizeEntityCards(structured.entityCards ?? []),
-        entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? []),
+        entityTransitions: normalizeEntityTransitions(structured.entityTransitions ?? [], targetRefMap),
         stableFacts: normalizeStableFacts(structured.stableFacts ?? []),
         relationTransitions: normalizeRelationTransitions(structured.relationTransitions ?? []),
-        taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? []),
-        worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? []),
+        taskTransitions: normalizeTaskTransitions(structured.taskTransitions ?? [], targetRefMap),
+        worldStateChanges: normalizeWorldStateChanges(structured.worldStateChanges ?? [], targetRefMap),
         takeoverId: input.batch.takeoverId,
         batchId: input.batch.batchId,
         sourceRange: ensureRange(structured.sourceRange, input.range),

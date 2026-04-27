@@ -6,9 +6,22 @@ import type {
 } from '../pipeline/pipeline-types';
 import { runTakeoverStructuredTask } from './takeover-llm';
 import { resolveTakeoverConflictBucketsByRules } from './takeover-conflict-rule-resolver';
+import { PromptReferenceService } from '../services/prompt-reference-service';
 
 interface ConflictResolutionBatchDocument {
     patches: ConflictResolutionPatch[];
+}
+
+interface ConflictTargetManifest {
+    version: 'takeover-conflict-target-manifest.v1';
+    rules: string[];
+    targets: Array<{
+        targetRef: string;
+        recordKey: string;
+        domain: string;
+        current: Record<string, unknown>;
+        editablePaths: string[];
+    }>;
 }
 
 /**
@@ -156,6 +169,7 @@ async function resolveBucketChunkByLLM(input: {
     });
 
     try {
+        const targetManifest = buildConflictTargetManifest(input.buckets);
         const result = await runTakeoverStructuredTask<ConflictResolutionBatchDocument>({
             llm: input.llm,
             pluginId: input.pluginId,
@@ -167,6 +181,7 @@ async function resolveBucketChunkByLLM(input: {
             payload: {
                 domain: input.domain,
                 conflictType: input.conflictType,
+                targetManifest,
                 buckets: input.buckets.map((bucket: PipelineConflictBucketRecord) => ({
                     bucketId: bucket.bucketId,
                     domain: bucket.domain,
@@ -177,6 +192,8 @@ async function resolveBucketChunkByLLM(input: {
             extraSystemInstruction: [
                 '你当前处理的是一批同类冲突桶。',
                 '每个 bucket 必须独立裁决，不要跨 bucket 合并。',
+                '选择主记录或要修改的记录时优先使用 targetManifest.targets 中的 targetRef；fieldOverrides 只写变化字段，等价于 patch。',
+                '不要编造 primaryKey 或 secondaryKeys；如果不确定 targetRef，保守 keep_primary。',
                 '优先保守合并；拿不准就保留主记录。',
                 '只输出一个 JSON 根对象，且根对象只允许包含 patches 字段；不要回显 domain、conflictType、buckets 或额外说明。',
             ].join('\n'),
@@ -200,6 +217,36 @@ async function resolveBucketChunkByLLM(input: {
             fallbackUsed: true,
         };
     }
+}
+
+function buildConflictTargetManifest(buckets: PipelineConflictBucketRecord[]): ConflictTargetManifest {
+    const references = new PromptReferenceService();
+    const targets: ConflictTargetManifest['targets'] = [];
+    for (const bucket of buckets) {
+        for (const record of bucket.records) {
+            const normalizedRecord = record as Record<string, unknown>;
+            const recordKey = resolveRecordKey(normalizedRecord);
+            if (!recordKey) {
+                continue;
+            }
+            targets.push({
+                targetRef: references.encode('target', `${bucket.bucketId}:${recordKey}`),
+                recordKey,
+                domain: bucket.domain,
+                current: buildSelectedSnapshot(bucket.domain, normalizedRecord),
+                editablePaths: Object.keys(buildSelectedSnapshot(bucket.domain, normalizedRecord)),
+            });
+        }
+    }
+    return {
+        version: 'takeover-conflict-target-manifest.v1',
+        rules: [
+            '冲突裁决选择已有记录时使用 targetRef。',
+            'fieldOverrides/patch 只写变化字段。',
+            '不要编造 recordKey；targetRef 以 manifest 为准。',
+        ],
+        targets,
+    };
 }
 
 /**
@@ -285,8 +332,13 @@ function normalizePatch(
         domain: String(patch.domain ?? bucket.domain).trim() || bucket.domain,
         resolutions: resolutions.map((item) => {
             const primaryKey = String(item.primaryKey ?? fallback.resolutions[0]?.primaryKey ?? '').trim();
+            const targetRef = String(item.targetRef ?? '').trim();
             const primaryRecord = resolveBucketRecordByKey(bucket, primaryKey);
-            const fieldOverrides = item.fieldOverrides && typeof item.fieldOverrides === 'object' ? item.fieldOverrides : {};
+            const fieldOverrides = item.patch && typeof item.patch === 'object'
+                ? item.patch
+                : item.fieldOverrides && typeof item.fieldOverrides === 'object'
+                    ? item.fieldOverrides
+                    : {};
             const selectedSnapshot = item.selectedSnapshot && typeof item.selectedSnapshot === 'object'
                 ? item.selectedSnapshot
                 : buildMergedSelectedSnapshot(bucket.domain, primaryRecord, fieldOverrides);
@@ -295,6 +347,11 @@ function normalizePatch(
                 : Object.keys(fieldOverrides);
             return {
                 action: item.action,
+                ...(targetRef ? { targetRef } : {}),
+                sourceRefs: Array.isArray(item.sourceRefs)
+                    ? item.sourceRefs.map((ref: unknown): string => String(ref ?? '').trim()).filter(Boolean)
+                    : [],
+                patch: fieldOverrides,
                 primaryKey,
                 secondaryKeys: Array.isArray(item.secondaryKeys)
                     ? item.secondaryKeys.map((key: string): string => String(key ?? '').trim()).filter(Boolean)

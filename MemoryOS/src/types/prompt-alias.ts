@@ -1,4 +1,4 @@
-export type PromptReferenceKind = 'chat' | 'dream' | 'entry' | 'relationship' | 'node' | 'summary';
+export type PromptReferenceKind = 'chat' | 'dream' | 'entry' | 'relationship' | 'node' | 'summary' | 'target';
 
 export interface PromptAliasEntry {
     ref: string;
@@ -12,6 +12,7 @@ export interface PromptAliasSnapshot {
     relationship: PromptAliasEntry[];
     node: PromptAliasEntry[];
     summary: PromptAliasEntry[];
+    target: PromptAliasEntry[];
 }
 
 export interface PromptRecallHitDTO {
@@ -45,6 +46,18 @@ export interface PromptGraphSummaryItemDTO {
     ref: string;
     label: string;
     score?: number;
+}
+
+export interface PromptWritableTargetDTO {
+    targetRef: string;
+    targetKind: 'entry' | 'relationship';
+    entryRef?: string;
+    relationshipRef?: string;
+    title: string;
+    summary: string;
+    editablePaths: string[];
+    allowedActions: string[];
+    current: Record<string, unknown>;
 }
 
 export interface DreamPromptDTO {
@@ -83,4 +96,8 @@ export interface DreamPromptDTO {
         topTopics: PromptGraphSummaryItemDTO[];
         topEntries: PromptGraphSummaryItemDTO[];
     } | null;
+    writableTargets: {
+        rules: string[];
+        patchTargets: PromptWritableTargetDTO[];
+    };
 }

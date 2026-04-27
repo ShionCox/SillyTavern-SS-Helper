@@ -35,6 +35,16 @@ async function loadSummaryOrchestrator(mockedUserName: string) {
             getCurrentTavernUserNameEvent: vi.fn(() => mockedUserName),
         };
     });
+    vi.doMock('../../src/settings/store', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../../src/settings/store')>();
+        return {
+            ...actual,
+            readMemoryOSSettings: () => ({
+                ...actual.readMemoryOSSettings(),
+                summarySplitByActionType: false,
+            }),
+        };
+    });
     return import('../../src/memory-summary');
 }
 
@@ -122,7 +132,7 @@ function parseDotEnv(content: string): Record<string, string> {
     return result;
 }
 
-function createDeepSeekLLM(env: DeepSeekEnv): MemoryLLMApi {
+function createDeepSeekLLM(env: DeepSeekEnv, capture?: Array<{ taskKey: string; data: unknown }>): MemoryLLMApi {
     const baseUrl = env.deepseek_url.replace(/\/+$/u, '');
     return {
         registerConsumer: () => {},
@@ -138,8 +148,8 @@ function createDeepSeekLLM(env: DeepSeekEnv): MemoryLLMApi {
                     },
                     body: JSON.stringify({
                         model: env.deepseek_model,
-                        messages: buildDeepSeekJsonModeMessages(args.taskKey, args.input.messages),
-                        temperature: 0.1,
+                        messages: buildDeepSeekJsonModeMessages(args.taskKey, args.input.messages, args.schema),
+                        temperature: 0,
                         max_tokens: 4096,
                         response_format: { type: 'json_object' },
                     }),
@@ -157,9 +167,14 @@ function createDeepSeekLLM(env: DeepSeekEnv): MemoryLLMApi {
                     choices?: Array<{ message?: { content?: string } }>;
                 };
                 const content = payload.choices?.[0]?.message?.content ?? '';
+                const data = normalizeDeepSeekJsonKeys(parseJsonContent<T>(content), args.taskKey) as T;
+                capture?.push({
+                    taskKey: args.taskKey,
+                    data,
+                });
                 return {
                     ok: true,
-                    data: normalizeDeepSeekJsonKeys(parseJsonContent<T>(content), args.taskKey) as T,
+                    data,
                 };
             } catch (error) {
                 return {
@@ -177,6 +192,7 @@ function createDeepSeekLLM(env: DeepSeekEnv): MemoryLLMApi {
 function buildDeepSeekJsonModeMessages(
     taskKey: string,
     messages: Array<{ role: 'system' | 'user'; content: string }>,
+    schema?: unknown,
 ): Array<{ role: 'system' | 'user'; content: string }> {
     if (taskKey !== 'memory_summary_mutation') {
         return messages;
@@ -186,13 +202,33 @@ function buildDeepSeekJsonModeMessages(
             role: 'system',
             content: [
                 'DeepSeek JSON mode live test reminder:',
-                '如果 candidateRecords 中已有同一对象，必须优先输出 UPDATE 或 MERGE，不要输出 ADD。',
-                '本轮已有候选覆盖艾琳与{{user}}的关系变化，应输出 UPDATE relationship，并引用已有 candidateId。',
+                '如果 patchTargetManifest.patchTargets 中已有同一对象，必须优先输出 UPDATE 或 MERGE，不要输出 ADD。',
+                '根据 patchTargetManifest 选择 relationship、task、open_thread 等 targetKind；已有候选必须引用当前上下文提供的 targetRef。',
+                '只有完全没有合适 targetRef 的新对象才允许 ADD；ADD 必须包含 keySeed 和 newRecord，禁止输出 entityKey 或 compareKey。',
+                'UPDATE、MERGE、INVALIDATE 必须包含 targetRef 和 patch，不要输出 payload、candidateId、targetId、entryId。',
+                'patch 不能只包含 summary；必须包含当前类型可编辑字段里的实际变化，例如 task 使用 fields.status/fields.route/fields.nextStep，open_thread 使用 fields.status/fields.clue，relationship 使用 fields.relationTag/fields.state/trust。',
+                '如果无法给出包含有效可编辑字段的 patch，请输出 NOOP，不要输出空 patch 的 UPDATE。',
                 '每个非 NOOP action 必须包含 sourceEvidence、confidence、memoryValue、reasonCodes。',
+                'patch 必须是非空对象；UPDATE 如果没有实际 patch 字段就必须改成 NOOP。',
+                '合法 UPDATE 示例：{"action":"UPDATE","targetKind":"task","targetRef":"T1","confidence":0.82,"memoryValue":"high","sourceEvidence":{"type":"story_dialogue","brief":"艾琳确认任务从筹划进入执行。"},"patch":{"fields":{"status":"执行中","route":"旧水渠","nextStep":"第三声钟响后从北门旧水渠离城"}},"reasonCodes":["target_ref_selected","task_progressed"]}',
+                '合法 ADD 示例：{"action":"ADD","targetKind":"item","keySeed":{"kind":"item","title":"旧水渠检修门铜钥匙","qualifier":"今晚撤离","participants":["actor_erin","user"]},"confidence":0.78,"memoryValue":"medium","sourceEvidence":{"type":"story_dialogue","brief":"艾琳交给{{user}}一枚铜钥匙。"},"newRecord":{"title":"旧水渠检修门铜钥匙","summary":"艾琳把无纹章铜钥匙交给{{user}}，用于今晚打开旧水渠外侧检修门。","fields":{"holder":"user","owner":"actor_erin","usage":"打开旧水渠外侧检修门","validity":"仅限今晚撤离"}},"reasonCodes":["item_created","system_key_required"]}',
+                schema ? `必须符合以下 JSON Schema；尤其 UPDATE/MERGE/INVALIDATE 的 patch 不能缺失或为空：\n${JSON.stringify(schema)}` : '',
                 '只输出合法 JSON。',
             ].join('\n'),
         },
         ...messages,
+        {
+            role: 'user',
+            content: [
+                '输出最终 JSON 前逐条自检：',
+                '1. 所有 UPDATE / MERGE / INVALIDATE 都必须有 targetRef 和 patch 对象。',
+                '2. 所有 ADD 都必须有 keySeed 和 newRecord，不能有 entityKey / compareKey。',
+                '3. 所有非 NOOP 都必须有 sourceEvidence、confidence、memoryValue、reasonCodes。',
+                '4. 禁止输出 payload、candidateId、targetId、entryId 字段。',
+                '5. patch 不能只写 summary，必须写 fields/trust 等实际可编辑字段。',
+                '6. 如果某条动作无法满足以上字段，改为 NOOP。',
+            ].join('\n'),
+        },
     ];
 }
 
@@ -277,6 +313,9 @@ function normalizeDeepSeekJsonKeys(value: unknown, taskKey: string): unknown {
         target_id: 'targetId',
         source_ids: 'sourceIds',
         candidate_id: 'candidateId',
+        target_ref: 'targetRef',
+        source_refs: 'sourceRefs',
+        key_seed: 'keySeed',
         entity_key: 'entityKey',
         compare_key: 'compareKey',
         match_keys: 'matchKeys',
@@ -326,6 +365,63 @@ function buildExistingEntries(): MemoryEntry[] {
             createdAt: 1,
             updatedAt: 1,
         },
+        {
+            entryId: 'entry-task-escort',
+            chatKey: 'deepseek-live-chat',
+            title: '护送密使离开王都',
+            entryType: 'task',
+            category: '任务',
+            tags: ['task', '密使', '王都'],
+            summary: '护送密使离开王都仍处于筹划阶段，尚未确定可靠路线。',
+            detail: '',
+            detailSchemaVersion: 1,
+            detailPayload: {
+                entityKey: 'entity:task:escort_messenger',
+                compareKey: 'ck:v2:task:护送密使离开王都:王都',
+                bindings: {
+                    actors: ['user', 'actor_erin'],
+                    locations: ['entity:location:north_gate'],
+                    organizations: [],
+                },
+                fields: {
+                    objective: '护送密使离开王都',
+                    status: '筹划中',
+                    route: '未确认',
+                    nextStep: '等待艾琳确认离城路线',
+                },
+            },
+            sourceSummaryIds: [],
+            createdAt: 1,
+            updatedAt: 1,
+        },
+        {
+            entryId: 'entry-thread-traitor',
+            chatKey: 'deepseek-live-chat',
+            title: '内鬼身份尚未查明',
+            entryType: 'open_thread',
+            category: '未解决线索',
+            tags: ['open_thread', '内鬼'],
+            summary: '王都内存在泄密者，但身份和动机尚未确认。',
+            detail: '',
+            detailSchemaVersion: 1,
+            detailPayload: {
+                entityKey: 'entity:open_thread:royal_capital_traitor',
+                compareKey: 'ck:v2:open_thread:王都内鬼身份未明',
+                bindings: {
+                    actors: ['user', 'actor_erin'],
+                    locations: ['entity:location:royal_capital'],
+                    organizations: [],
+                },
+                fields: {
+                    question: '王都内鬼是谁',
+                    status: '未解决',
+                    clue: '有人向追兵泄露密使动向',
+                },
+            },
+            sourceSummaryIds: [],
+            createdAt: 1,
+            updatedAt: 1,
+        },
     ];
 }
 
@@ -338,7 +434,7 @@ describe('summary DeepSeek live integration', () => {
         vi.clearAllMocks();
     });
 
-    runIfConfigured('使用真实 DeepSeek 跑总结链路，并校验输出符合 P1/P2/P3 关键约束', async () => {
+    runIfConfigured('使用真实 DeepSeek 跑 Summary 主链路，并校验 targetRef / keySeed / patch path 新协议', async () => {
         const env = deepseekEnv;
         expect(env).not.toBeNull();
         if (!env) {
@@ -347,6 +443,7 @@ describe('summary DeepSeek live integration', () => {
         const { runSummaryOrchestrator } = await loadSummaryOrchestrator('林远');
         const history: Array<{ action: string; payload: Record<string, unknown> }> = [];
         const snapshotInputs: CapturedSnapshotInput[] = [];
+        const llmOutputs: Array<{ taskKey: string; data: unknown }> = [];
         const existingEntries = buildExistingEntries();
 
         await runEmbeddingPreflight(env);
@@ -378,25 +475,41 @@ describe('summary DeepSeek live integration', () => {
                 },
                 deleteEntry: async () => {},
             },
-            llm: createDeepSeekLLM(env),
+            llm: createDeepSeekLLM(env, llmOutputs),
             pluginId: 'MemoryOS',
             chatKey: `deepseek-live-${Date.now()}`,
             messages: [
                 {
                     role: 'user',
-                    content: '我是林远。次日清晨，艾琳承认过去一直在试探我，但现在愿意把真正的情报告诉我。',
+                    content: '我是林远。次日清晨，雨刚停，旧钟楼的钟声还没散。艾琳把我叫到药铺后巷，承认过去三天她一直在试探我，故意只给我半真半假的情报。',
                 },
                 {
                     role: 'assistant',
-                    content: '艾琳低声说：“我已经确认你不会背叛我。从今天起，我会把你当成可靠盟友，而不是临时同伴。”',
+                    content: '艾琳低声说：“昨夜你明明可以拿着密信离开，却还是回来救了那个受伤的传令兵。我已经确认你不会背叛我。从今天起，我会把你当成可靠盟友，而不是临时同伴。”',
                 },
                 {
                     role: 'user',
-                    content: '我答应她，之后重要行动会先和她互通情报，不再各自隐瞒。',
+                    content: '我没有追问她之前隐瞒了什么，只问护送密使的路线是否已经确定。我也承诺，之后涉及密使、北门和追兵的行动，会先和她互通情报，不再各自隐瞒。',
                 },
                 {
                     role: 'assistant',
-                    content: '她点头，并再次确认你们的关系已经从临时合作变为稳定盟友。',
+                    content: '她摊开一张潮湿的城防图，说北门第三声钟响后会短暂换岗，旧水渠的铁栅栏已经被她提前锯松。密使必须在当晚从旧水渠离城，所以护送任务从筹划改为当晚执行。',
+                },
+                {
+                    role: 'user',
+                    content: '我指出一个问题：追兵昨夜能提前堵住药铺，说明密使行踪已经泄露。知道水渠路线的人越少越好，因为王都里仍有内鬼。',
+                },
+                {
+                    role: 'assistant',
+                    content: '艾琳同意这个判断。她只能确认泄密者接触过北门守卫，还知道药铺后巷这个备用会合点，但内鬼身份仍未查明。她要求你护送结束后继续追踪这条线索。',
+                },
+                {
+                    role: 'user',
+                    content: '我答应她，如果密使成功出城，我会在黎明前回到石桥下，把北门守卫名单和药铺线索重新核对一遍。',
+                },
+                {
+                    role: 'assistant',
+                    content: '艾琳把一枚没有纹章的铜钥匙交给你，说它能打开旧水渠外侧的检修门；她强调钥匙只用于今晚撤离，不能暴露给其他人。',
                 },
             ],
             retrievalRulePack: 'hybrid',
@@ -408,6 +521,7 @@ describe('summary DeepSeek live integration', () => {
                 diagnostics: result.diagnostics,
                 failedHistory,
                 historyActions: history.map((item) => item.action),
+                llmOutputs,
             }, null, 2)}`);
         }
         expect(result.diagnostics.usedLLM).toBe(true);
@@ -415,13 +529,18 @@ describe('summary DeepSeek live integration', () => {
 
         const batchPayload = history.find((item) => item.action === 'summary_mutation_batch_resolved')?.payload;
         expect(batchPayload).toBeTruthy();
+        const rawDocument = batchPayload?.rawDocument as SummaryMutationDocument | undefined;
         const validatedDocument = batchPayload?.validatedDocument as SummaryMutationDocument | undefined;
         expect(validatedDocument?.schemaVersion).toBe('1.0.0');
         expect(validatedDocument?.actions.length).toBeGreaterThan(0);
 
         const nonNoopActions = validatedDocument?.actions.filter((action) => action.action !== 'NOOP') ?? [];
         expect(nonNoopActions.length).toBeGreaterThan(0);
-        expect(nonNoopActions.some((action) => ['relationship', 'task', 'open_thread', 'event'].includes(action.targetKind))).toBe(true);
+        const targetKinds = new Set(nonNoopActions.map((action) => action.targetKind));
+        const expectedCoveredKinds = ['relationship', 'task', 'open_thread'].filter((kind) => targetKinds.has(kind));
+        expect(expectedCoveredKinds.length).toBeGreaterThanOrEqual(2);
+        const targetRefActions = nonNoopActions.filter((action) => ['UPDATE', 'MERGE', 'INVALIDATE'].includes(action.action));
+        expect(targetRefActions.length).toBeGreaterThan(0);
 
         for (const action of nonNoopActions) {
             expect(action.confidence ?? 0).toBeGreaterThanOrEqual(0);
@@ -429,16 +548,29 @@ describe('summary DeepSeek live integration', () => {
             expect(action.memoryValue).toMatch(/^(low|medium|high)$/u);
             expect(action.sourceEvidence?.brief).toBeTruthy();
             expect(action.reasonCodes.length).toBeGreaterThan(0);
-            if (action.compareKey) {
-                expect(action.compareKey).toMatch(/^ck:v2:/u);
-            }
             if (action.action === 'ADD') {
                 expect(action.newRecord).toBeTruthy();
+                expect(action.keySeed).toBeTruthy();
+                expect(action.reasonCodes).toContain('system_key_resolved');
+                expect(action.entityKey).toMatch(/^entity:/u);
+                expect(action.compareKey).toMatch(/^ck:v2:/u);
             }
             if (['UPDATE', 'MERGE', 'INVALIDATE'].includes(action.action)) {
+                expect(action.targetRef).toMatch(/^T\d+$/u);
+                expect(action.targetId || action.candidateId).toBeTruthy();
+                expect(action.reasonCodes).toContain('target_ref_decoded');
                 expect(action.patch).toBeTruthy();
             }
         }
+        const rawExistingMutations = rawDocument?.actions.filter((action) => ['UPDATE', 'MERGE', 'INVALIDATE'].includes(action.action)) ?? [];
+        for (const action of rawExistingMutations) {
+            expect(action.targetRef).toMatch(/^T\d+$/u);
+            expect(action.candidateId).toBeUndefined();
+            expect(action.targetId).toBeUndefined();
+            expect(action.payload).toBeUndefined();
+        }
+        const appliedUpserts = snapshotInputs.flatMap((input) => input.entryUpserts ?? []) as Array<{ entryId?: string; detailPayload?: Record<string, unknown> }>;
+        expect(appliedUpserts.some((entry) => entry.entryId === 'entry-task-escort')).toBe(true);
 
         const rawDocumentText = JSON.stringify(batchPayload?.rawDocument ?? {});
         expect(rawDocumentText).toContain('{{user}}');

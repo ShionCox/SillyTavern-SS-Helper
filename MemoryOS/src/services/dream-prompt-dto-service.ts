@@ -13,10 +13,12 @@ import type {
     DreamSessionRecallRecord,
 } from './dream-types';
 import { PromptReferenceService } from './prompt-reference-service';
+import { WritablePathRegistry } from '../core/writable-path-registry';
 import type {
     DreamPromptDTO,
     PromptGraphSummaryItemDTO,
     PromptRecallHitDTO,
+    PromptWritableTargetDTO,
 } from '../types/prompt-alias';
 
 function normalizeText(value: unknown): string {
@@ -49,10 +51,14 @@ export interface DreamPromptDTOBuildResult {
     entryRefToEntryId: Map<string, string>;
     nodeRefToNodeKey: Map<string, string>;
     relationshipRefToRelationshipKey: Map<string, string>;
+    targetRefToEntryId: Map<string, string>;
+    targetRefToRelationshipId: Map<string, string>;
     candidateByEntryRef: Map<string, DreamRecallCandidate>;
 }
 
 export class DreamPromptDTOService {
+    private readonly pathRegistry = new WritablePathRegistry();
+
     build(input: {
         meta: DreamSessionMetaRecord;
         recall: DreamSessionRecallRecord;
@@ -67,6 +73,8 @@ export class DreamPromptDTOService {
         const entryRefToEntryId = new Map<string, string>();
         const nodeRefToNodeKey = new Map<string, string>();
         const relationshipRefToRelationshipKey = new Map<string, string>();
+        const targetRefToEntryId = new Map<string, string>();
+        const targetRefToRelationshipId = new Map<string, string>();
         const candidateByEntryRef = new Map<string, DreamRecallCandidate>();
         const nodeMap = new Map(
             (input.graphSnapshot?.activatedNodes ?? []).map((node: DreamNeuronNode): [string, DreamNeuronNode] => [node.nodeKey, node]),
@@ -89,6 +97,16 @@ export class DreamPromptDTOService {
         const encodeRelationshipRef = (relationshipKey: string): string => {
             const ref = references.encode('relationship', relationshipKey);
             relationshipRefToRelationshipKey.set(ref, relationshipKey);
+            return ref;
+        };
+        const encodeEntryTargetRef = (entryId: string): string => {
+            const ref = references.encode('target', `entry:${entryId}`);
+            targetRefToEntryId.set(ref, entryId);
+            return ref;
+        };
+        const encodeRelationshipTargetRef = (relationshipKey: string): string => {
+            const ref = references.encode('target', `relationship:${relationshipKey}`);
+            targetRefToRelationshipId.set(ref, relationshipKey);
             return ref;
         };
 
@@ -134,6 +152,13 @@ export class DreamPromptDTOService {
                     }),
             }
             : null;
+        const writableTargets = this.buildWritableTargets({
+            recall: input.recall,
+            encodeEntryRef,
+            encodeRelationshipRef,
+            encodeEntryTargetRef,
+            encodeRelationshipTargetRef,
+        });
 
         const dto: DreamPromptDTO = {
             runtime: {
@@ -164,6 +189,7 @@ export class DreamPromptDTOService {
             },
             diagnostics,
             graphSummary,
+            writableTargets,
         };
 
         return {
@@ -172,7 +198,82 @@ export class DreamPromptDTOService {
             entryRefToEntryId,
             nodeRefToNodeKey,
             relationshipRefToRelationshipKey,
+            targetRefToEntryId,
+            targetRefToRelationshipId,
             candidateByEntryRef,
+        };
+    }
+
+    private buildWritableTargets(input: {
+        recall: DreamSessionRecallRecord;
+        encodeEntryRef: (entryId: string) => string;
+        encodeRelationshipRef: (relationshipKey: string) => string;
+        encodeEntryTargetRef: (entryId: string) => string;
+        encodeRelationshipTargetRef: (relationshipKey: string) => string;
+    }): DreamPromptDTO['writableTargets'] {
+        const entryTargets = new Map<string, PromptWritableTargetDTO>();
+        const relationshipTargets = new Map<string, PromptWritableTargetDTO>();
+        const hits = [
+            ...input.recall.recentHits,
+            ...input.recall.midHits,
+            ...input.recall.deepHits,
+            ...input.recall.fusedHits,
+        ];
+        for (const hit of hits) {
+            const entryId = normalizeText(hit.entryId);
+            if (entryId && !entryTargets.has(entryId)) {
+                entryTargets.set(entryId, {
+                    targetRef: input.encodeEntryTargetRef(entryId),
+                    targetKind: 'entry',
+                    entryRef: input.encodeEntryRef(entryId),
+                    title: normalizeText(hit.title) || '未命名条目',
+                    summary: normalizeText(hit.summary),
+                    editablePaths: this.pathRegistry.resolvePaths({
+                        targetKind: 'other',
+                        domain: 'dream',
+                    }),
+                    allowedActions: ['entry_patch'],
+                    current: {
+                        title: normalizeText(hit.title),
+                        summary: normalizeText(hit.summary),
+                        tags: uniqueStrings(hit.tags ?? []).slice(0, 8),
+                        actors: uniqueStrings(hit.actorKeys ?? []).slice(0, 6),
+                    },
+                });
+            }
+            for (const relationshipKey of uniqueStrings(hit.relationKeys ?? [])) {
+                if (relationshipTargets.has(relationshipKey)) {
+                    continue;
+                }
+                relationshipTargets.set(relationshipKey, {
+                    targetRef: input.encodeRelationshipTargetRef(relationshipKey),
+                    targetKind: 'relationship',
+                    relationshipRef: input.encodeRelationshipRef(relationshipKey),
+                    title: relationshipKey,
+                    summary: '',
+                    editablePaths: this.pathRegistry.resolvePaths({
+                        targetKind: 'relationship',
+                        domain: 'relationship',
+                    }),
+                    allowedActions: ['relationship_patch'],
+                    current: {
+                        relationshipRef: input.encodeRelationshipRef(relationshipKey),
+                        relationshipKey,
+                    },
+                });
+            }
+        }
+        return {
+            rules: [
+                'entry_patch 和 relationship_patch 只能引用 patchTargets 中的 targetRef。',
+                '不要输出真实 entryId、relationshipId、compareKey 或 entityKey。',
+                'patch 只写发生变化且 editablePaths 允许的字段。',
+                'entry_create 使用 keySeed 和 newRecord，由系统生成稳定键。',
+            ],
+            patchTargets: [
+                ...Array.from(entryTargets.values()).slice(0, 24),
+                ...Array.from(relationshipTargets.values()).slice(0, 16),
+            ],
         };
     }
 

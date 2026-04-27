@@ -30,6 +30,8 @@ export interface DreamPromptBuildContext {
     entryRefToEntryId: Map<string, string>;
     nodeRefToNodeKey: Map<string, string>;
     relationshipRefToRelationshipKey: Map<string, string>;
+    targetRefToEntryId: Map<string, string>;
+    targetRefToRelationshipId: Map<string, string>;
     candidateByEntryRef: Map<string, DreamRecallCandidate>;
 }
 
@@ -94,6 +96,8 @@ export class DreamPromptService {
                 entryRefToEntryId: dtoBuildResult.entryRefToEntryId,
                 nodeRefToNodeKey: dtoBuildResult.nodeRefToNodeKey,
                 relationshipRefToRelationshipKey: dtoBuildResult.relationshipRefToRelationshipKey,
+                targetRefToEntryId: dtoBuildResult.targetRefToEntryId,
+                targetRefToRelationshipId: dtoBuildResult.targetRefToRelationshipId,
                 candidateByEntryRef: dtoBuildResult.candidateByEntryRef,
             },
         };
@@ -175,8 +179,9 @@ export class DreamPromptService {
             '3. 生成 proposedMutations，只保留高价值、低幻觉风险提案。',
             '4. mutation 与 explain 中只能使用别名引用，不要输出真实内部 ID。',
             '5. explain 必须明确来源 wave、entryRef、nodeRef 与推理链。',
-            '6. payload.fieldsJson 与 payload.detailPayloadJson 必须输出合法 JSON 对象字符串；若无内容请输出 {}。',
-            '7. 严格结构化模式下，payload 中不适用的字符串填空字符串，数组填空数组，数值填 0，布尔填 false。',
+            '6. entry_patch / relationship_patch 必须使用 writableTargets.patchTargets 中的 targetRef；patch 只写变化字段。',
+            '7. entry_create 不要编造 entryId、relationshipId、compareKey、entityKey；必须提供 keySeed 与 newRecord。',
+            '8. 严格结构化模式下，payload 中不适用的字符串填空字符串，数组填空数组，对象填空对象，数值填 0，布尔填 false。',
             '',
             ...autoLightLines,
             'Dream Prompt DTO:',

@@ -1160,6 +1160,26 @@ function renderFieldChips(label: string, values: string[]): string {
     `;
 }
 
+function renderMutationPatchPreview(payload: Record<string, unknown>): string {
+    const targetRef = String(payload.targetRef ?? '').trim();
+    const targetEntryId = String(payload.targetEntryId ?? '').trim();
+    const targetRelationshipId = String(payload.targetRelationshipId ?? '').trim();
+    const patch = toRecord(payload.patch);
+    const newRecord = toRecord(payload.newRecord);
+    const body = Object.keys(patch).length > 0
+        ? patch
+        : Object.keys(newRecord).length > 0
+            ? newRecord
+            : {};
+    const bodyText = Object.keys(body).length > 0
+        ? JSON.stringify(body, null, 2)
+        : '';
+    return `
+        ${renderFieldWithOptions('写入目标', targetRef || targetEntryId || targetRelationshipId, { truncate: true })}
+        ${bodyText ? `<pre class="stx-memory-dream-review__payload">${escapeHtml(bodyText)}</pre>` : ''}
+    `;
+}
+
 /**
  * 功能：渲染变更提案的结构化内容预览。
  * @param mutation 变更提案。
@@ -1176,16 +1196,17 @@ function renderMutationPayloadVisual(mutation: DreamMutationProposal, titleMap: 
                 ${renderFieldWithOptions('源角色', String(payload.sourceActorKey ?? '').trim(), { truncate: true })}
                 ${renderFieldWithOptions('目标角色', String(payload.targetActorKey ?? '').trim(), { truncate: true })}
                 ${renderField('状态', String(payload.state ?? '').trim())}
-                ${renderFieldWithOptions('关系标识', String(payload.relationshipId ?? '').trim(), { truncate: true })}
+                ${renderFieldWithOptions('关系标识', String(payload.targetRelationshipId ?? payload.relationshipId ?? '').trim(), { truncate: true })}
                 ${renderField('信任', String(payload.trust ?? '').trim())}
                 ${renderField('好感', String(payload.affection ?? '').trim())}
                 ${renderField('张力', String(payload.tension ?? '').trim())}
                 ${renderFieldChips('参与者', toStringArray(payload.participants))}
             </div>
+            ${renderMutationPatchPreview(payload)}
         `;
     }
     const detailPayload = toRecord(payload.detailPayload);
-    const payloadEntryId = String(payload.entryId ?? '').trim();
+    const payloadEntryId = String(payload.targetEntryId ?? payload.entryId ?? '').trim();
     const payloadEntryTitle = resolveDreamSourceEntryTitle(payloadEntryId, titleMap);
     return `
         <div class="stx-memory-dream-review__field-grid">
@@ -1202,6 +1223,7 @@ function renderMutationPayloadVisual(mutation: DreamMutationProposal, titleMap: 
             ${renderFieldChips('匹配键', toStringArray(payload.matchKeys))}
             ${renderFieldChips('详情字段', Object.keys(detailPayload))}
         </div>
+        ${renderMutationPatchPreview(payload)}
     `;
 }
 

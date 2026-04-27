@@ -31,6 +31,14 @@ export interface SummaryCandidateRecord {
     sourceHint?: string;
     parentRefs?: string[];
     hierarchyRefs?: string[];
+    current?: {
+        summary?: string;
+        fields?: Record<string, unknown>;
+        bindings?: Record<string, unknown>;
+        state?: string;
+        lifecycle?: Record<string, unknown>;
+    };
+    editablePaths?: string[];
 }
 
 /**
@@ -101,6 +109,7 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
             sourceHint: buildSourceHint(item.candidate),
             parentRefs: buildParentRefs(item.candidate),
             hierarchyRefs: buildHierarchyRefs(item.candidate),
+            current: buildCandidateCurrent(item.candidate),
         });
         consumedChars += nextCost;
     }
@@ -108,6 +117,22 @@ export async function resolveCandidateRecords(input: ResolveCandidateRecordsInpu
         providerId: retrieveResult.providerId,
         candidates,
         matchedEntryIds: candidates.map((item): string => item.recordId),
+    };
+}
+
+/**
+ * 功能：提取候选当前可写状态，避免把完整 detailPayload 暴露给模型。
+ * @param candidate 检索候选。
+ * @returns 精简后的当前状态。
+ */
+function buildCandidateCurrent(candidate: RetrievalCandidate): SummaryCandidateRecord['current'] {
+    const payload = toRecord((candidate as unknown as { detailPayload?: unknown }).detailPayload);
+    return {
+        summary: normalizeText(candidate.summary),
+        fields: toRecord(payload.fields),
+        bindings: toRecord(payload.bindings),
+        state: normalizeText(payload.state),
+        lifecycle: toRecord(payload.lifecycle),
     };
 }
 

@@ -54,9 +54,17 @@ export interface SummaryMutationAction {
     confidence?: number;
     memoryValue?: 'low' | 'medium' | 'high';
     sourceEvidence?: SummaryMutationSourceEvidence;
+    targetRef?: string;
+    sourceRefs?: string[];
     targetId?: string;
     sourceIds?: string[];
     candidateId?: string;
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
     entityKey?: string;
     compareKey?: string;
     matchKeys?: string[];

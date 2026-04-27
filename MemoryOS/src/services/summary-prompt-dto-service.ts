@@ -17,7 +17,9 @@ export interface SummaryPromptDTOBuildResult {
     candidates: SummaryPromptCandidateDTO[];
     references: PromptReferenceService;
     candidateRefToCandidateId: Map<string, string>;
+    candidateIdToCandidateRef: Map<string, string>;
     entryRefToEntryId: Map<string, string>;
+    entryIdToEntryRef: Map<string, string>;
 }
 
 /**
@@ -37,12 +39,15 @@ export class SummaryPromptDTOService {
     }): SummaryPromptDTOBuildResult {
         const references = new PromptReferenceService();
         const candidateRefToCandidateId = new Map<string, string>();
+        const candidateIdToCandidateRef = new Map<string, string>();
         const entryRefToEntryId = new Map<string, string>();
+        const entryIdToEntryRef = new Map<string, string>();
         const candidates = input.candidates.map((candidate, index): SummaryPromptCandidateDTO => ({
             candidateRef: (() => {
                 const candidateId = normalizeText(candidate.candidateId) || `summary_candidate_${index + 1}`;
                 const ref = references.encode('summary', candidateId);
                 candidateRefToCandidateId.set(ref, candidateId);
+                candidateIdToCandidateRef.set(candidateId, ref);
                 return ref;
             })(),
             entryRef: (() => {
@@ -52,6 +57,7 @@ export class SummaryPromptDTOService {
                 }
                 const ref = references.encode('entry', entryId);
                 entryRefToEntryId.set(ref, entryId);
+                entryIdToEntryRef.set(entryId, ref);
                 return ref;
             })(),
             targetKind: normalizeText(candidate.targetKind) || 'other',
@@ -63,7 +69,9 @@ export class SummaryPromptDTOService {
             candidates,
             references,
             candidateRefToCandidateId,
+            candidateIdToCandidateRef,
             entryRefToEntryId,
+            entryIdToEntryRef,
         };
     }
 }

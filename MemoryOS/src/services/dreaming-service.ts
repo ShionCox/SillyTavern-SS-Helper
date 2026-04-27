@@ -725,6 +725,8 @@ export class DreamingService {
             candidateMap: input.candidateMap,
             entryRefToEntryId: promptBuildResult.promptContext.entryRefToEntryId,
             nodeRefToNodeKey: promptBuildResult.promptContext.nodeRefToNodeKey,
+            targetRefToEntryId: promptBuildResult.promptContext.targetRefToEntryId,
+            targetRefToRelationshipId: promptBuildResult.promptContext.targetRefToRelationshipId,
             candidateByEntryRef: promptBuildResult.promptContext.candidateByEntryRef,
             worldProfileFieldPolicy,
         });
@@ -754,21 +756,19 @@ export class DreamingService {
             type: 'object',
             additionalProperties: false,
             required: [
-                'entryId',
+                'targetRef',
                 'title',
                 'entryType',
                 'summary',
                 'detail',
-                'fieldsJson',
-                'detailPayloadJson',
+                'patch',
+                'newRecord',
+                'keySeed',
                 'tags',
                 'reasonCodes',
-                'compareKey',
-                'entityKey',
                 'matchKeys',
                 'actorBindings',
                 'ongoing',
-                'relationshipId',
                 'sourceActorKey',
                 'targetActorKey',
                 'relationTag',
@@ -779,13 +779,33 @@ export class DreamingService {
                 'participants',
             ],
             properties: {
-                entryId: { type: 'string' },
+                targetRef: { type: 'string' },
                 title: { type: 'string' },
                 entryType: { type: 'string' },
                 summary: { type: 'string' },
                 detail: { type: 'string' },
-                fieldsJson: { type: 'string' },
-                detailPayloadJson: { type: 'string' },
+                patch: {
+                    type: 'object',
+                    additionalProperties: true,
+                },
+                newRecord: {
+                    type: 'object',
+                    additionalProperties: true,
+                },
+                keySeed: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['kind', 'title', 'qualifier', 'participants'],
+                    properties: {
+                        kind: { type: 'string' },
+                        title: { type: 'string' },
+                        qualifier: { type: 'string' },
+                        participants: {
+                            type: 'array',
+                            items: { type: 'string' },
+                        },
+                    },
+                },
                 tags: {
                     type: 'array',
                     items: { type: 'string' },
@@ -794,8 +814,6 @@ export class DreamingService {
                     type: 'array',
                     items: { type: 'string' },
                 },
-                compareKey: { type: 'string' },
-                entityKey: { type: 'string' },
                 matchKeys: {
                     type: 'array',
                     items: { type: 'string' },
@@ -805,7 +823,6 @@ export class DreamingService {
                     items: { type: 'string' },
                 },
                 ongoing: { type: 'boolean' },
-                relationshipId: { type: 'string' },
                 sourceActorKey: { type: 'string' },
                 targetActorKey: { type: 'string' },
                 relationTag: { type: 'string' },
@@ -831,6 +848,8 @@ export class DreamingService {
             candidateMap: Map<string, DreamRecallCandidate>;
             entryRefToEntryId: Map<string, string>;
             nodeRefToNodeKey: Map<string, string>;
+            targetRefToEntryId: Map<string, string>;
+            targetRefToRelationshipId: Map<string, string>;
             candidateByEntryRef: Map<string, DreamRecallCandidate>;
             worldProfileFieldPolicy: WorldProfileFieldPolicy | null;
         },
@@ -859,7 +878,17 @@ export class DreamingService {
                     this.toRecord(item.payload),
                     mutationType,
                     promptContext.worldProfileFieldPolicy,
+                    {
+                        targetRefToEntryId: promptContext.targetRefToEntryId,
+                        targetRefToRelationshipId: promptContext.targetRefToRelationshipId,
+                    },
                 );
+                if (
+                    (mutationType === 'entry_patch' && !this.normalizeText(normalizedPayload.targetEntryId))
+                    || (mutationType === 'relationship_patch' && !this.normalizeText(normalizedPayload.targetRelationshipId))
+                ) {
+                    return null;
+                }
                 return {
                     mutationId: String(item.mutationId ?? '').trim() || `dream_mutation_${index + 1}`,
                     mutationType,
@@ -894,6 +923,8 @@ export class DreamingService {
                 candidateMap: Map<string, DreamRecallCandidate>;
                 entryRefToEntryId: Map<string, string>;
                 nodeRefToNodeKey: Map<string, string>;
+                targetRefToEntryId?: Map<string, string>;
+                targetRefToRelationshipId?: Map<string, string>;
                 candidateByEntryRef: Map<string, DreamRecallCandidate>;
             };
         },
@@ -954,17 +985,42 @@ export class DreamingService {
         payload: Record<string, unknown>,
         mutationType: DreamMutationType,
         worldProfileFieldPolicy: WorldProfileFieldPolicy | null,
+        targetMaps?: {
+            targetRefToEntryId: Map<string, string>;
+            targetRefToRelationshipId: Map<string, string>;
+        },
     ): Record<string, unknown> {
+        const targetRef = this.normalizeText(payload.targetRef);
+        const patch = {
+            ...this.parseDreamJsonObjectField(payload.patchJson),
+            ...this.parseDreamJsonObjectField(payload.patch),
+        };
+        const newRecord = {
+            ...this.parseDreamJsonObjectField(payload.newRecordJson),
+            ...this.parseDreamJsonObjectField(payload.newRecord),
+        };
         const normalizedPayload: Record<string, unknown> = {
             ...payload,
-            fieldsJson: this.normalizeJsonObjectText(payload.fieldsJson),
-            detailPayloadJson: this.normalizeJsonObjectText(payload.detailPayloadJson),
+            targetRef,
+            patch,
+            newRecord,
+            keySeed: this.normalizeDreamKeySeed(payload.keySeed, payload, newRecord),
+            ...(targetRef && targetMaps?.targetRefToEntryId.get(targetRef)
+                ? { targetEntryId: targetMaps.targetRefToEntryId.get(targetRef) }
+                : {}),
+            ...(targetRef && targetMaps?.targetRefToRelationshipId.get(targetRef)
+                ? { targetRelationshipId: targetMaps.targetRefToRelationshipId.get(targetRef) }
+                : {}),
             fields: {
                 ...this.parseDreamJsonObjectField(payload.fieldsJson),
+                ...this.toRecord(newRecord.fields),
+                ...this.toRecord(patch.fields),
                 ...this.toRecord(payload.fields),
             },
             detailPayload: {
                 ...this.parseDreamJsonObjectField(payload.detailPayloadJson),
+                ...this.toRecord(newRecord.detailPayload),
+                ...this.toRecord(patch.detailPayload),
                 ...this.toRecord(payload.detailPayload),
             },
         };
@@ -1004,6 +1060,20 @@ export class DreamingService {
                     preferred: fieldPolicy.preferred,
                 },
             },
+        };
+    }
+
+    private normalizeDreamKeySeed(
+        value: unknown,
+        payload: Record<string, unknown>,
+        newRecord: Record<string, unknown>,
+    ): Record<string, unknown> {
+        const keySeed = this.toRecord(value);
+        return {
+            kind: this.normalizeText(keySeed.kind) || this.normalizeText(payload.entryType) || this.normalizeText(newRecord.entryType),
+            title: this.normalizeText(keySeed.title) || this.normalizeText(payload.title) || this.normalizeText(newRecord.title),
+            qualifier: this.normalizeText(keySeed.qualifier),
+            participants: this.normalizeStringArray(keySeed.participants),
         };
     }
 

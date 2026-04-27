@@ -1,4 +1,5 @@
 import type { DreamMutationProposal } from './dream-types';
+import { resolveMemoryKeys, type MemoryKeySeed } from '../core/memory-key-resolver';
 import type { UnifiedMemoryMutation } from '../types/unified-mutation';
 
 function normalizeText(value: unknown): string {
@@ -36,6 +37,14 @@ function parseJsonObjectText(value: unknown): Record<string, unknown> {
     }
 }
 
+function readObjectPatch(payload: Record<string, unknown>, primaryKey: string, legacyKey: string): Record<string, unknown> {
+    return {
+        ...parseJsonObjectText(payload[`${primaryKey}Json`]),
+        ...toRecord(payload[primaryKey]),
+        ...parseJsonObjectText(payload[legacyKey]),
+    };
+}
+
 /**
  * 功能：判断任一值是否包含有效文本。
  * @param values 候选值。
@@ -51,6 +60,17 @@ function hasAnyText(...values: unknown[]): boolean {
 }
 
 export class DreamMutationTranslator {
+    private readonly targetRefToEntryId: Map<string, string>;
+    private readonly targetRefToRelationshipId: Map<string, string>;
+
+    constructor(input?: {
+        targetRefToEntryId?: Map<string, string>;
+        targetRefToRelationshipId?: Map<string, string>;
+    }) {
+        this.targetRefToEntryId = input?.targetRefToEntryId ?? new Map();
+        this.targetRefToRelationshipId = input?.targetRefToRelationshipId ?? new Map();
+    }
+
     translateMutations(input: {
         dreamId: string;
         mutations: DreamMutationProposal[];
@@ -73,58 +93,87 @@ export class DreamMutationTranslator {
                 explain: mutation.explain ?? null,
             };
             if (mutation.mutationType === 'relationship_patch') {
+                const patch = readObjectPatch(payload, 'patch', 'detailPayloadJson');
+                const targetRelationshipId = this.resolveTargetRelationshipId(payload);
                 return {
                     targetKind: 'relationship',
                     action: 'UPDATE',
-                    title: normalizeText(payload.relationTag ?? mutation.preview) || 'relationship',
+                    title: normalizeText(patch.relationTag ?? payload.relationTag ?? mutation.preview) || 'relationship',
                     detailPayload: {
-                        relationshipId: normalizeText(payload.relationshipId),
-                        sourceActorKey: normalizeText(payload.sourceActorKey),
-                        targetActorKey: normalizeText(payload.targetActorKey),
-                        relationTag: normalizeText(payload.relationTag),
-                        participants: normalizeStringArray(payload.participants),
-                        state: normalizeText(payload.state),
-                        summary: normalizeText(payload.summary ?? mutation.reason),
-                        trust: Number(payload.trust ?? 0),
-                        affection: Number(payload.affection ?? 0),
-                        tension: Number(payload.tension ?? 0),
+                        relationshipId: targetRelationshipId,
+                        sourceActorKey: normalizeText(patch.sourceActorKey ?? payload.sourceActorKey),
+                        targetActorKey: normalizeText(patch.targetActorKey ?? payload.targetActorKey),
+                        relationTag: normalizeText(patch.relationTag ?? payload.relationTag),
+                        participants: normalizeStringArray(patch.participants ?? payload.participants),
+                        state: normalizeText(patch.state ?? payload.state),
+                        summary: normalizeText(patch.summary ?? payload.summary ?? mutation.reason),
+                        trust: Number(patch.trust ?? payload.trust ?? 0),
+                        affection: Number(patch.affection ?? payload.affection ?? 0),
+                        tension: Number(patch.tension ?? payload.tension ?? 0),
                         dreamMeta,
                     },
-                    summary: normalizeText(payload.summary ?? mutation.reason),
+                    summary: normalizeText(patch.summary ?? payload.summary ?? mutation.reason),
                     reasonCodes: this.buildReasonCodes(mutation),
                     sourceContext: {
                         ...dreamMeta,
-                        relationshipId: normalizeText(payload.relationshipId),
-                        sourceActorKey: normalizeText(payload.sourceActorKey),
-                        targetActorKey: normalizeText(payload.targetActorKey),
-                        relationTag: normalizeText(payload.relationTag),
+                        targetRef: normalizeText(payload.targetRef),
+                        relationshipId: targetRelationshipId,
+                        sourceActorKey: normalizeText(patch.sourceActorKey ?? payload.sourceActorKey),
+                        targetActorKey: normalizeText(patch.targetActorKey ?? payload.targetActorKey),
+                        relationTag: normalizeText(patch.relationTag ?? payload.relationTag),
                     },
                 };
             }
+            const patch = readObjectPatch(payload, 'patch', 'fieldsJson');
+            const newRecord = readObjectPatch(payload, 'newRecord', 'fieldsJson');
+            const record = mutation.mutationType === 'entry_create' ? newRecord : patch;
+            const targetEntryId = mutation.mutationType === 'entry_patch' ? this.resolveTargetEntryId(payload) : '';
+            const resolvedKeys = mutation.mutationType === 'entry_create'
+                ? resolveMemoryKeys({
+                    targetKind,
+                    keySeed: this.normalizeKeySeed(payload.keySeed),
+                    newRecord: {
+                        ...record,
+                        title: record.title ?? payload.title,
+                        summary: record.summary ?? payload.summary,
+                        fields: record.fields ?? payload.fields,
+                    },
+                })
+                : null;
+            const detailPayload = {
+                ...toRecord(payload.detailPayload),
+                ...toRecord(record.detailPayload),
+                fields: {
+                    ...toRecord(payload.fields),
+                    ...toRecord(record.fields),
+                },
+                dreamMeta,
+            };
             return {
                 targetKind,
                 action: mutation.mutationType === 'entry_create' ? 'ADD' : 'UPDATE',
-                title: normalizeText(payload.title ?? mutation.preview) || '未命名条目',
-                entryId: normalizeText(payload.entryId) || undefined,
-                summary: normalizeText(payload.summary ?? mutation.reason),
-                detail: normalizeText(payload.detail),
-                detailPayload: {
-                    ...toRecord(payload.detailPayload),
-                    dreamMeta,
-                },
-                tags: normalizeStringArray(payload.tags),
-                compareKey: normalizeText(payload.compareKey) || undefined,
-                entityKey: normalizeText(payload.entityKey) || undefined,
-                matchKeys: normalizeStringArray(payload.matchKeys),
-                actorBindings: normalizeStringArray(payload.actorBindings),
+                title: normalizeText(record.title ?? payload.title ?? mutation.preview) || '未命名条目',
+                entryId: targetEntryId || undefined,
+                summary: normalizeText(record.summary ?? payload.summary ?? mutation.reason),
+                detail: normalizeText(record.detail ?? payload.detail),
+                detailPayload,
+                tags: normalizeStringArray(record.tags ?? payload.tags),
+                compareKey: resolvedKeys?.compareKey,
+                entityKey: resolvedKeys?.entityKey,
+                matchKeys: resolvedKeys?.matchKeys ?? normalizeStringArray(payload.matchKeys),
+                actorBindings: normalizeStringArray(record.actorBindings ?? payload.actorBindings),
                 reasonCodes: this.buildReasonCodes(mutation),
-                sourceContext: dreamMeta,
-                ...(payload.timeContext ? { timeContext: payload.timeContext as UnifiedMemoryMutation['timeContext'] } : {}),
-                ...(payload.firstObservedAt ? { firstObservedAt: payload.firstObservedAt as UnifiedMemoryMutation['firstObservedAt'] } : {}),
-                ...(payload.lastObservedAt ? { lastObservedAt: payload.lastObservedAt as UnifiedMemoryMutation['lastObservedAt'] } : {}),
-                ...(payload.validFrom ? { validFrom: payload.validFrom as UnifiedMemoryMutation['validFrom'] } : {}),
-                ...(payload.validTo ? { validTo: payload.validTo as UnifiedMemoryMutation['validTo'] } : {}),
-                ...(typeof payload.ongoing === 'boolean' ? { ongoing: payload.ongoing } : {}),
+                sourceContext: {
+                    ...dreamMeta,
+                    targetRef: normalizeText(payload.targetRef),
+                    keySeed: mutation.mutationType === 'entry_create' ? this.normalizeKeySeed(payload.keySeed) : undefined,
+                },
+                ...(record.timeContext ?? payload.timeContext ? { timeContext: (record.timeContext ?? payload.timeContext) as UnifiedMemoryMutation['timeContext'] } : {}),
+                ...(record.firstObservedAt ?? payload.firstObservedAt ? { firstObservedAt: (record.firstObservedAt ?? payload.firstObservedAt) as UnifiedMemoryMutation['firstObservedAt'] } : {}),
+                ...(record.lastObservedAt ?? payload.lastObservedAt ? { lastObservedAt: (record.lastObservedAt ?? payload.lastObservedAt) as UnifiedMemoryMutation['lastObservedAt'] } : {}),
+                ...(record.validFrom ?? payload.validFrom ? { validFrom: (record.validFrom ?? payload.validFrom) as UnifiedMemoryMutation['validFrom'] } : {}),
+                ...(record.validTo ?? payload.validTo ? { validTo: (record.validTo ?? payload.validTo) as UnifiedMemoryMutation['validTo'] } : {}),
+                ...(typeof (record.ongoing ?? payload.ongoing) === 'boolean' ? { ongoing: (record.ongoing ?? payload.ongoing) as boolean } : {}),
             };
         })
             .filter((mutation: UnifiedMemoryMutation | null): mutation is UnifiedMemoryMutation => Boolean(mutation));
@@ -141,6 +190,14 @@ export class DreamMutationTranslator {
         if (explicitEntryType && explicitEntryType !== 'other') {
             return explicitEntryType;
         }
+        const newRecordEntryType = normalizeText(toRecord(payload.newRecord).entryType);
+        if (newRecordEntryType && newRecordEntryType !== 'other') {
+            return newRecordEntryType;
+        }
+        const patchEntryType = normalizeText(toRecord(payload.patch).entryType);
+        if (patchEntryType && patchEntryType !== 'other') {
+            return patchEntryType;
+        }
         return this.inferEntryType(payload);
     }
 
@@ -153,6 +210,8 @@ export class DreamMutationTranslator {
         const fields = {
             ...parseJsonObjectText(payload.fieldsJson),
             ...toRecord(payload.fields),
+            ...toRecord(toRecord(payload.patch).fields),
+            ...toRecord(toRecord(payload.newRecord).fields),
             ...toRecord(toRecord(payload.detailPayload).fields),
             ...parseJsonObjectText(toRecord(payload.detailPayload).fieldsJson),
         };
@@ -196,5 +255,33 @@ export class DreamMutationTranslator {
             ...normalizeStringArray(detailPayload.reasonCodes),
             ...(explain?.bridgeNodeKeys?.length ? ['bridge:present'] : []),
         ]));
+    }
+
+    private resolveTargetEntryId(payload: Record<string, unknown>): string {
+        const targetRef = normalizeText(payload.targetRef);
+        return normalizeText(
+            payload.targetEntryId
+            ?? (targetRef ? this.targetRefToEntryId.get(targetRef) : '')
+            ?? payload.entryId,
+        );
+    }
+
+    private resolveTargetRelationshipId(payload: Record<string, unknown>): string {
+        const targetRef = normalizeText(payload.targetRef);
+        return normalizeText(
+            payload.targetRelationshipId
+            ?? (targetRef ? this.targetRefToRelationshipId.get(targetRef) : '')
+            ?? payload.relationshipId,
+        );
+    }
+
+    private normalizeKeySeed(value: unknown): MemoryKeySeed {
+        const record = toRecord(value);
+        return {
+            kind: normalizeText(record.kind),
+            title: normalizeText(record.title),
+            qualifier: normalizeText(record.qualifier),
+            participants: normalizeStringArray(record.participants),
+        };
     }
 }

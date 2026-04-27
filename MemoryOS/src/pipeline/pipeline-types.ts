@@ -158,6 +158,9 @@ export interface ConflictResolutionPatch {
     domain: string;
     resolutions: Array<{
         action: 'merge' | 'keep_primary' | 'replace' | 'invalidate' | 'split';
+        targetRef?: string;
+        sourceRefs?: string[];
+        patch?: Record<string, unknown>;
         primaryKey?: string;
         secondaryKeys?: string[];
         fieldOverrides?: Record<string, unknown>;

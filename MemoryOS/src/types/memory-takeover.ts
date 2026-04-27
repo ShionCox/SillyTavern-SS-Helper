@@ -165,6 +165,15 @@ export interface MemoryTakeoverBatch {
  * 功能：定义稳定事实候选。
  */
 export interface MemoryTakeoverStableFact {
+    targetRef?: string;
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
+    patch?: Record<string, unknown>;
+    newRecord?: Record<string, unknown>;
     type: string;
     subject: string;
     predicate: string;
@@ -225,6 +234,14 @@ export interface MemoryTakeoverRelationTransition {
  * 功能：定义任务变化。
  */
 export interface MemoryTakeoverTaskTransition {
+    targetRef?: string;
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
+    patch?: Record<string, unknown>;
     task: string;
     from: string;
     to: string;
@@ -253,6 +270,14 @@ export interface MemoryTakeoverTaskTransition {
  * 功能：定义世界状态变化。
  */
 export interface MemoryTakeoverWorldStateChange {
+    targetRef?: string;
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
+    patch?: Record<string, unknown>;
     key: string;
     value: string;
     entityKey?: string;
@@ -342,6 +367,12 @@ export type MemoryTakeoverEntityType = 'organization' | 'city' | 'nation' | 'loc
  * 功能：定义世界实体卡候选。
  */
 export interface MemoryTakeoverEntityCardCandidate {
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
     entityType: MemoryTakeoverEntityType;
     entityKey?: string;
     compareKey: string;
@@ -368,6 +399,14 @@ export interface MemoryTakeoverEntityCardCandidate {
  * 功能：定义世界实体变化。
  */
 export interface MemoryTakeoverEntityTransition {
+    targetRef?: string;
+    keySeed?: {
+        kind?: string;
+        title?: string;
+        qualifier?: string;
+        participants?: string[];
+    };
+    patch?: Record<string, unknown>;
     entityType: MemoryTakeoverEntityType;
     entityKey?: string;
     compareKey: string;

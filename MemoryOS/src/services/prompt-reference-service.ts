@@ -11,6 +11,7 @@ const PROMPT_REF_PREFIX: Record<PromptReferenceKind, string> = {
     relationship: 'R',
     node: 'N',
     summary: 'S',
+    target: 'T',
 };
 
 function normalizeText(value: unknown): string {
@@ -25,6 +26,7 @@ export class PromptReferenceService {
         relationship: new Map(),
         node: new Map(),
         summary: new Map(),
+        target: new Map(),
     };
 
     private readonly reverseMaps: Record<PromptReferenceKind, Map<string, string>> = {
@@ -34,6 +36,7 @@ export class PromptReferenceService {
         relationship: new Map(),
         node: new Map(),
         summary: new Map(),
+        target: new Map(),
     };
 
     encode(kind: PromptReferenceKind, value: string): string {
@@ -80,6 +83,7 @@ export class PromptReferenceService {
             relationship: this.buildEntries('relationship'),
             node: this.buildEntries('node'),
             summary: this.buildEntries('summary'),
+            target: this.buildEntries('target'),
         };
     }
 

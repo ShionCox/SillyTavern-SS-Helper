@@ -32,6 +32,11 @@ import { explainBatchAssessment, logTimeDebug } from '../memory-time/time-debug'
 import { mergeStoryEventAnchors, resolveTimelineProfileEvolution } from '../memory-time/timeline-profile';
 import type { BatchTimeAssessment, MemoryTimeContext, MemoryTimelineProfile } from '../memory-time/time-types';
 import { SummaryPromptDTOService } from '../services/summary-prompt-dto-service';
+import {
+    WritableTargetManifestService,
+    type WritableTargetManifestBuildResult,
+} from '../services/writable-target-manifest-service';
+import { resolveMemoryKeys } from '../core/memory-key-resolver';
 
 /**
  * 功能：定义总结编排器依赖。
@@ -462,7 +467,10 @@ export async function runSummaryOrchestrator(input: RunSummaryOrchestratorInput)
             });
         }
 
-        const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap);
+        const validation = validateSummaryMutationDocument(trimmedDocument, editableFieldMap, {
+            targetEditablePaths: buildTargetEditablePathMap(mutationContextResult.targetManifest),
+            requireTargetRefForExistingMutations: false,
+        });
         if (!validation.valid || !validation.document) {
             summaryQualityErrors.push(...validation.errors);
             const reasonCode = `validation_failed:${validation.errors.join(',') || 'unknown'}`;
@@ -714,6 +722,7 @@ function buildSlimMutationContext(
 ): {
     payload: Record<string, unknown>;
     candidateRefToCandidateId: Map<string, string>;
+    targetManifest: WritableTargetManifestBuildResult;
 } {
     const focusTypes = plannerDecision.focus_types;
     const filteredTypeSchemas = focusTypes.length > 0
@@ -744,6 +753,13 @@ function buildSlimMutationContext(
         summary: candidate.summary,
         status: activeCandidates.find((item) => item.candidateId === candidatePromptResult.candidateRefToCandidateId.get(candidate.candidateRef))?.status ?? 'active',
     }));
+    const targetManifest = new WritableTargetManifestService().buildFromSummaryCandidates({
+        candidates: activeCandidates,
+        typeSchemas: activeTypeSchemas,
+        references: candidatePromptResult.references,
+        candidateIdToCandidateRef: candidatePromptResult.candidateIdToCandidateRef,
+        entryIdToEntryRef: candidatePromptResult.entryIdToEntryRef,
+    });
     const rollingDigest = context.recentSummaryDigest.length > 0
         ? context.recentSummaryDigest
             .map((digest) => `[${digest.title}] ${truncateTextForContext(digest.content, rollingDigestMaxChars)}`)
@@ -764,10 +780,18 @@ function buildSlimMutationContext(
             rollingDigest,
             typeSchemas: activeTypeSchemas,
             candidateRecords: slimCandidates,
+            patchTargetManifest: targetManifest.manifest,
+            newRecordPolicy: {
+                addRequiresKeySeed: true,
+                systemGeneratesEntityKey: true,
+                systemGeneratesCompareKey: true,
+                systemGeneratesMatchKeys: true,
+            },
             promptReferenceRules: {
                 candidateRefPrefix: 'S',
                 entryRefPrefix: 'E',
-                requirement: '引用已有候选时只使用 candidateId 中提供的短别名，不要输出真实 candidateId 或 entryId。',
+                targetRefPrefix: 'T',
+                requirement: '更新已有记忆时只使用 patchTargetManifest.patchTargets 中的 targetRef，不要输出真实 candidateId、targetId 或 entryId。',
             },
             rules: context.rules,
             patchMode: {
@@ -780,11 +804,12 @@ function buildSlimMutationContext(
                     '数组字段如需变更请输出完整新数组。',
                     '嵌套 fields 对象中只输出变化的子字段。',
                     '若无实质变更，使用 action=NOOP。',
-                    '若引用已有候选，candidateId 只能填写当前上下文中的短别名。',
+                    '若引用已有目标，必须填写 targetRef；candidateId 仅兼容旧输出，不推荐使用。',
                 ],
             },
         },
         candidateRefToCandidateId: candidatePromptResult.candidateRefToCandidateId,
+        targetManifest,
     };
 }
 
@@ -792,16 +817,75 @@ function decodeSummaryPromptDocument(
     document: SummaryMutationDocument,
     context: {
         candidateRefToCandidateId: Map<string, string>;
+        targetManifest?: WritableTargetManifestBuildResult;
     },
 ): SummaryMutationDocument {
     return {
         ...document,
         actions: Array.isArray(document.actions)
-            ? document.actions.map((action: SummaryMutationDocument['actions'][number]): SummaryMutationDocument['actions'][number] => ({
-                ...action,
-                candidateId: decodeSummaryCandidateRef(action.candidateId, context.candidateRefToCandidateId),
-            }))
+            ? document.actions.map((action: SummaryMutationDocument['actions'][number]): SummaryMutationDocument['actions'][number] => {
+                const decodedCandidateAction = {
+                    ...action,
+                    candidateId: decodeSummaryCandidateRef(action.candidateId, context.candidateRefToCandidateId),
+                };
+                return fillAddMemoryKeys(decodeWritableTargetAction(decodedCandidateAction, context.targetManifest));
+            })
             : [],
+    };
+}
+
+function fillAddMemoryKeys(action: SummaryMutationAction): SummaryMutationAction {
+    if (action.action !== 'ADD' || !action.newRecord) {
+        return action;
+    }
+    const resolvedKeys = resolveMemoryKeys({
+        targetKind: action.targetKind,
+        keySeed: action.keySeed,
+        newRecord: action.newRecord,
+    });
+    return {
+        ...action,
+        entityKey: resolvedKeys.entityKey,
+        compareKey: resolvedKeys.compareKey,
+        matchKeys: resolvedKeys.matchKeys,
+        reasonCodes: dedupeStrings([...(action.reasonCodes ?? []), 'system_key_resolved']),
+    };
+}
+
+function decodeWritableTargetAction(
+    action: SummaryMutationAction,
+    manifest: WritableTargetManifestBuildResult | undefined,
+): SummaryMutationAction {
+    const targetRef = String(action.targetRef ?? '').trim();
+    if (!targetRef || !manifest) {
+        return action;
+    }
+    const item = manifest.targetRefToItem.get(targetRef);
+    if (!item) {
+        return {
+            ...action,
+            action: 'NOOP',
+            patch: undefined,
+            newRecord: undefined,
+            payload: undefined,
+            reason: `无法解析 targetRef: ${targetRef}`,
+            reasonCodes: dedupeStrings([...(action.reasonCodes ?? []), 'target_ref_decode_failed']),
+        };
+    }
+    const sourceIds = action.sourceRefs && action.sourceRefs.length > 0
+        ? action.sourceRefs
+            .map((sourceRef: string): string => manifest.targetRefToEntryId.get(String(sourceRef ?? '').trim()) ?? '')
+            .filter(Boolean)
+        : action.sourceIds;
+    return {
+        ...action,
+        candidateId: action.candidateId ?? manifest.targetRefToCandidateId.get(targetRef),
+        targetId: action.targetId ?? manifest.targetRefToEntryId.get(targetRef) ?? manifest.targetRefToRelationshipId.get(targetRef),
+        sourceIds,
+        entityKey: action.entityKey ?? item.entityKey,
+        compareKey: action.compareKey ?? item.compareKey,
+        matchKeys: action.matchKeys && action.matchKeys.length > 0 ? action.matchKeys : item.matchKeys,
+        reasonCodes: dedupeStrings([...(action.reasonCodes ?? []), 'target_ref_decoded']),
     };
 }
 
@@ -814,6 +898,30 @@ function decodeSummaryCandidateRef(
         return undefined;
     }
     return candidateRefToCandidateId.get(normalized) ?? normalized;
+}
+
+function buildTargetEditablePathMap(
+    targetManifest: WritableTargetManifestBuildResult | undefined,
+): Map<string, Set<string>> {
+    const result = new Map<string, Set<string>>();
+    if (!targetManifest) {
+        return result;
+    }
+    for (const [targetRef, item] of targetManifest.targetRefToItem.entries()) {
+        result.set(targetRef, new Set(item.editablePaths));
+    }
+    return result;
+}
+
+function dedupeStrings(values: string[]): string[] {
+    const result: string[] = [];
+    for (const value of values) {
+        const normalized = String(value ?? '').trim();
+        if (normalized && !result.includes(normalized)) {
+            result.push(normalized);
+        }
+    }
+    return result;
 }
 
 /**
@@ -1151,8 +1259,26 @@ function buildStrictActionItemsSchema(
                 enum: targetKinds.length > 0 ? targetKinds : ['other'],
             },
             candidateId: { type: 'string' },
+            targetRef: { type: 'string' },
+            sourceRefs: {
+                type: 'array',
+                items: { type: 'string' },
+            },
             entityKey: { type: 'string' },
             compareKey: { type: 'string' },
+            keySeed: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    kind: { type: 'string' },
+                    title: { type: 'string' },
+                    qualifier: { type: 'string' },
+                    participants: {
+                        type: 'array',
+                        items: { type: 'string' },
+                    },
+                },
+            },
             confidence: { type: 'number' },
             memoryValue: {
                 type: 'string',
